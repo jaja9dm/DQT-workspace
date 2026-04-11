@@ -43,9 +43,9 @@ class Settings:
     # ── DB ───────────────────────────────────────────
     DB_PATH: str = os.getenv("DB_PATH", str(ROOT / "db" / "dqt.db"))
 
-    # ── 알림 ─────────────────────────────────────────
-    SLACK_WEBHOOK_URL: str = os.getenv("SLACK_WEBHOOK_URL", "")
-    KAKAO_ACCESS_TOKEN: str = os.getenv("KAKAO_ACCESS_TOKEN", "")
+    # ── 알림 (텔레그램) ──────────────────────────────
+    TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
     # ── 외부 API ──────────────────────────────────────
     FRED_API_KEY: str = os.getenv("FRED_API_KEY", "")

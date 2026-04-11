@@ -119,11 +119,17 @@
   - 당일 중복 매수 방지 (today_tickers 세트)
   - `trades` 테이블 저장, 종목별 감성 점수 참조
 
-### 10단계 — 리포트팀
-- `src/teams/report/engine.py`
-  - 장 마감 후 배치: trades + position_snapshot 기반 일일 성과 집계
-  - 팀별 기여도, 전략별 승률·손익비
-  - 카카오톡·Slack 알림 발송
+### 10단계 — 리포트팀 (커밋 다음)
+- `src/utils/notifier.py` ✅ (12단계 선행 구현)
+  - 텔레그램 Bot API 발송 모듈 (카카오톡/Slack 대체)
+  - `notify()`, `notify_trade()`, `notify_risk()`, `notify_daily_report()`, `notify_error()`
+  - HTML 포맷, 재시도 1회, 동시 발송 직렬화
+- `src/teams/report/engine.py` ✅
+  - 장 마감 후 배치 전용 엔진 (스케줄러 호출)
+  - trades + position_snapshot + risk_status DB 집계
+  - 당일 손익%·거래건수·승률·손익비·종목별 성과·Hot List 적중률
+  - 텔레그램 일일 리포트 발송
+  - `ReportEngine().run()` 단일 진입점
 
 ### 11단계 — 연구소
 - `src/teams/research/engine.py`
@@ -132,7 +138,7 @@
   - `active_strategies` 테이블 업데이트
 
 ### 12단계 — 알림 유틸리티
-- `src/utils/notifier.py` — 카카오톡 / Slack 공통 발송 모듈
+- `src/utils/notifier.py` ✅ 10단계에서 선행 구현 완료 (텔레그램)
 
 ### 13단계 — 스케줄러
 - `src/scheduler/` — 각 팀 엔진 기동 타이밍 통합 관리 (APScheduler 등)
@@ -187,7 +193,8 @@ DQT-workspace/
 │       │   └── engine.py
 │       ├── trading/                 ✅ 완료
 │       │   └── engine.py
-│       ├── report/                  ⏳ 10단계
+│       ├── report/                  ✅ 완료
+│       │   └── engine.py
 │       └── research/                ⏳ 11단계
 └── docs/
     └── planning/
