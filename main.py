@@ -52,15 +52,19 @@ def main() -> None:
     domestic_market = DomesticMarketEngine()
     domestic_market.start()
 
+    # 4-5. 국내 주식팀
+    from src.teams.domestic_stock.engine import DomesticStockEngine
+    domestic_stock = DomesticStockEngine()
+    domestic_stock.start()
+
     # TODO: 구현 완료 시 순서대로 추가
-    # from src.teams.domestic_stock.engine import DomesticStockEngine
     # from src.teams.risk.engine import RiskEngine
     # from src.teams.position_monitor.engine import PositionMonitorEngine
     # from src.teams.trading.engine import TradingEngine
     # from src.teams.report.engine import ReportEngine
     # from src.teams.research.engine import ResearchEngine
 
-    logger.info("시스템 가동 중 — 글로벌·국내 시황팀 활성")
+    logger.info("시스템 가동 중 — 글로벌·국내 시황팀·국내 주식팀 활성")
 
     # 메인 스레드 유지 (엔진들은 daemon 스레드로 실행 중)
     try:
@@ -71,6 +75,7 @@ def main() -> None:
         logger.info("시스템 종료 신호 수신")
         global_market.stop()
         domestic_market.stop()
+        domestic_stock.stop()
 
 
 if __name__ == "__main__":

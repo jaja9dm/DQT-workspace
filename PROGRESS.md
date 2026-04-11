@@ -65,24 +65,27 @@
   - `market_condition` 테이블 저장
   - 수집 뉴스 → SentimentCache 비동기 제출
 
+### 6단계 — 국내 주식팀 (커밋 다음)
+- `src/teams/domestic_stock/collector.py` ✅
+  - KIS API: 유니버스 ~450종목 실시간 현재가·등락률·거래량
+  - KIS 실패 시 FDR 폴백 없음 (현재가는 실시간만 의미있음)
+  - FinanceDataReader: 120일 OHLCV → RSI(14), MACD(12/26/9), 볼린저밴드(20/2), MA5/20/60
+  - pandas-ta 우선, 미설치 시 수동 계산 폴백
+  - 신호 플래그: is_volume_surge(3배↑), is_price_surge(3%↑), is_breakout(BB상단돌파)
+- `src/teams/domestic_stock/analyzer.py` ✅
+  - 후보 종목 최대 20개 배치 → Claude sonnet-4-6 Hot List 판단
+  - 과열 종목(RSI>70 + BB>0.9) 자동 제외
+  - Claude 실패 시 복합신호 종목 자동 선정
+- `src/teams/domestic_stock/engine.py` ✅
+  - 5분 주기, 즉시 트리거(거래량5배↑, 가격5%↑)
+  - market_condition·global_condition DB 참조
+  - `hot_list` 테이블 저장, `get_latest_hot_list()` 공개 API
+
 ---
 
 ## 구현 예정 (순서대로)
 
-### 6단계 — 국내 주식팀 (구 5단계)
-- `src/teams/domestic_market/collector.py`
-  - KIS API: KOSPI/KOSDAQ 지수, 외국인·기관 수급, 투자자별 매매동향
-  - FinanceDataReader: 과거 지수 데이터 (이동평균·추세)
-- `src/teams/domestic_market/analyzer.py` — Claude 시황 분석
-- `src/teams/domestic_market/engine.py` — 30분 주기 + 즉시 트리거
-
-### 6단계 — 국내 주식팀
-- `src/teams/domestic_stock/collector.py`
-  - KIS API: 실시간 현재가·거래량·호가 (유니버스 ~450종목 대상)
-  - FinanceDataReader: 60일 OHLCV (RSI, MACD, 볼린저밴드)
-  - pandas-ta: 기술적 지표 계산
-- `src/teams/domestic_stock/analyzer.py` — Claude Hot List 판단
-- `src/teams/domestic_stock/engine.py` — 5분 주기 + 급등 즉시 트리거
+### 7단계 — 위기 관리팀
 
 ### 7단계 — 위기 관리팀
 - `src/teams/risk/engine.py`
@@ -163,7 +166,10 @@ DQT-workspace/
 │       │   ├── collector.py
 │       │   ├── analyzer.py
 │       │   └── engine.py
-│       ├── domestic_stock/          ⏳ 6단계
+│       ├── domestic_stock/          ✅ 완료
+│       │   ├── collector.py
+│       │   ├── analyzer.py
+│       │   └── engine.py
 │       ├── risk/                    ⏳ 7단계
 │       ├── position_monitor/        ⏳ 8단계
 │       ├── trading/                 ⏳ 9단계
