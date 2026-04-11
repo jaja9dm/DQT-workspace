@@ -85,14 +85,15 @@
 
 ## 구현 예정 (순서대로)
 
-### 7단계 — 위기 관리팀
-
-### 7단계 — 위기 관리팀
-- `src/teams/risk/engine.py`
-  - DB에서 global_condition, market_condition, hot_list 읽기
-  - KIS API: 현재 포트폴리오 손익 조회
-  - 리스크 점수 산출 → 레벨 1~5 결정 → `risk_status` 저장
-  - 15분 주기 + 이벤트 즉시 트리거
+### 7단계 — 위기 관리팀 (커밋 다음)
+- `src/teams/risk/engine.py` ✅
+  - DB에서 global_condition, market_condition, hot_list 읽어 리스크 점수(0~100) 산출
+    - 글로벌 리스크 0~40pt + 국내시황 0~20pt + VIX 0~15pt + 포트폴리오 0~15pt + 과열 0~10pt
+  - KIS API: 보유 잔고·평가손익 조회 (모의 VTTC8434R / 실거래 TTTC8434R)
+  - 리스크 레벨 1~5 결정 → `risk_status` 저장
+  - 긴급 강제 상향: 글로벌≥8 또는 KOSPI-2% → Level 4, 포트폴리오-5% → Level 5
+  - 15분 주기
+  - `get_current_risk()`, `get_stop_loss_pct()` 공개 API (매매·포지션 감시팀 사용)
 
 ### 8단계 — 포지션 감시 서브엔진
 - `src/teams/position_monitor/engine.py`
@@ -170,7 +171,8 @@ DQT-workspace/
 │       │   ├── collector.py
 │       │   ├── analyzer.py
 │       │   └── engine.py
-│       ├── risk/                    ⏳ 7단계
+│       ├── risk/                    ✅ 완료
+│       │   └── engine.py
 │       ├── position_monitor/        ⏳ 8단계
 │       ├── trading/                 ⏳ 9단계
 │       ├── report/                  ⏳ 10단계

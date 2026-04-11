@@ -57,6 +57,11 @@ def main() -> None:
     domestic_stock = DomesticStockEngine()
     domestic_stock.start()
 
+    # 4-6. 위기 관리팀 (다른 팀보다 먼저 첫 평가 실행 필요 없음 — 시황팀 이후 기동)
+    from src.teams.risk.engine import RiskEngine
+    risk = RiskEngine()
+    risk.start()
+
     # TODO: 구현 완료 시 순서대로 추가
     # from src.teams.risk.engine import RiskEngine
     # from src.teams.position_monitor.engine import PositionMonitorEngine
@@ -64,7 +69,7 @@ def main() -> None:
     # from src.teams.report.engine import ReportEngine
     # from src.teams.research.engine import ResearchEngine
 
-    logger.info("시스템 가동 중 — 글로벌·국내 시황팀·국내 주식팀 활성")
+    logger.info("시스템 가동 중 — 글로벌·국내 시황팀·국내 주식팀·위기 관리팀 활성")
 
     # 메인 스레드 유지 (엔진들은 daemon 스레드로 실행 중)
     try:
@@ -76,6 +81,7 @@ def main() -> None:
         global_market.stop()
         domestic_market.stop()
         domestic_stock.stop()
+        risk.stop()
 
 
 if __name__ == "__main__":
