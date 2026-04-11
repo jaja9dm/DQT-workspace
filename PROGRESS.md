@@ -95,12 +95,16 @@
   - 15분 주기
   - `get_current_risk()`, `get_stop_loss_pct()` 공개 API (매매·포지션 감시팀 사용)
 
-### 8단계 — 포지션 감시 서브엔진
-- `src/teams/position_monitor/engine.py`
-  - KIS API: 보유 잔고·현재가 1~2분 주기 조회
-  - 손절 (기본 -5%, 레벨2 -3%, 레벨4 -1%), 분할 익절 (+5% 1/3, +10% 1/3)
-  - 타임컷 (5 영업일 초과), 레벨5 전량 청산
-  - `position_snapshot` 저장, 알림 발송
+### 8단계 — 포지션 감시 서브엔진 (커밋 다음)
+- `src/teams/position_monitor/engine.py` ✅
+  - KIS API: 보유 잔고·현재가 90초 주기 조회 (POSITION_MONITOR 최우선 큐)
+  - 손절: 리스크 레벨 연동 (L1~3=-5%, L2=-3%, L4~5=-1%)
+  - 분할 익절: +5% → 1/3 매도(1차), +10% → 1/3 추가 매도(2차)
+  - 타임컷: 5 영업일 초과 전량 청산
+  - Level 5 긴급 전량 청산
+  - `position_snapshot` 저장, `trades` 이력 기록
+  - `_calc_held_days()`: trades 최초 매수일 기준 영업일 계산
+  - `_count_partial_sells()`: 오늘 익절 횟수 추적 (2차 중복 방지)
 
 ### 9단계 — 매매팀
 - `src/teams/trading/engine.py`
@@ -173,7 +177,8 @@ DQT-workspace/
 │       │   └── engine.py
 │       ├── risk/                    ✅ 완료
 │       │   └── engine.py
-│       ├── position_monitor/        ⏳ 8단계
+│       ├── position_monitor/        ✅ 완료
+│       │   └── engine.py
 │       ├── trading/                 ⏳ 9단계
 │       ├── report/                  ⏳ 10단계
 │       └── research/                ⏳ 11단계

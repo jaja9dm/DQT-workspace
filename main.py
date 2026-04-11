@@ -62,6 +62,11 @@ def main() -> None:
     risk = RiskEngine()
     risk.start()
 
+    # 4-7. 포지션 감시 서브엔진 (위기 관리팀 이후 기동 — 리스크 레벨 의존)
+    from src.teams.position_monitor.engine import PositionMonitorEngine
+    position_monitor = PositionMonitorEngine()
+    position_monitor.start()
+
     # TODO: 구현 완료 시 순서대로 추가
     # from src.teams.risk.engine import RiskEngine
     # from src.teams.position_monitor.engine import PositionMonitorEngine
@@ -69,7 +74,7 @@ def main() -> None:
     # from src.teams.report.engine import ReportEngine
     # from src.teams.research.engine import ResearchEngine
 
-    logger.info("시스템 가동 중 — 글로벌·국내 시황팀·국내 주식팀·위기 관리팀 활성")
+    logger.info("시스템 가동 중 — 글로벌·국내 시황팀·국내 주식팀·위기 관리팀·포지션 감시 활성")
 
     # 메인 스레드 유지 (엔진들은 daemon 스레드로 실행 중)
     try:
@@ -82,6 +87,7 @@ def main() -> None:
         domestic_market.stop()
         domestic_stock.stop()
         risk.stop()
+        position_monitor.stop()
 
 
 if __name__ == "__main__":
