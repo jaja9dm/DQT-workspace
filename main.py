@@ -42,8 +42,12 @@ def main() -> None:
     global_market = GlobalMarketEngine()
     global_market.start()
 
+    # 4-3. 감성 분석 캐시 초기화 (만료 항목 정리)
+    from src.infra.sentiment_cache import SentimentCache
+    sentiment_cache = SentimentCache()
+    sentiment_cache.purge_expired()
+
     # TODO: 구현 완료 시 순서대로 추가
-    # from src.infra.sentiment_cache import SentimentCache
     # from src.teams.domestic_market.engine import DomesticMarketEngine
     # from src.teams.domestic_stock.engine import DomesticStockEngine
     # from src.teams.risk.engine import RiskEngine

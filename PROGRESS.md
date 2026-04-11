@@ -44,11 +44,11 @@
 
 ## 구현 예정 (순서대로)
 
-### 4단계 — 감성 분석 캐시
-- `src/infra/sentiment_cache.py`
+### 4단계 — 감성 분석 캐시 (커밋 다음)
+- `src/infra/sentiment_cache.py` ✅
   - URL SHA-256 해시 중복 제거
   - Claude `claude-haiku-4-5` 1회 분석 → DB 저장 → 전 팀 공유
-  - 24시간 만료 (`sentiment_cache` 테이블)
+  - 24시간 만료, `get_by_ticker()`, `avg_score_by_ticker()`, `purge_expired()` 제공
 
 ### 5단계 — 국내 시황팀
 - `src/teams/domestic_market/collector.py`
