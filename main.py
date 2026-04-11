@@ -29,12 +29,20 @@ def main() -> None:
     logger.info("KIS 게이트웨이 준비 완료")
 
     # 4. 팀 엔진 순차 기동
+
+    # 4-1. 종목 유니버스 확정 (가장 먼저 — 국내 팀 전체가 의존)
+    from src.infra.universe import UniverseManager
+    universe = UniverseManager()
+    universe.rebuild()
+    universe.start_disclosure_watcher()
+    logger.info(f"유니버스 확정: {universe.get_today_count()}종목")
+
+    # 4-2. 글로벌 시황팀
     from src.teams.global_market.engine import GlobalMarketEngine
     global_market = GlobalMarketEngine()
     global_market.start()
 
     # TODO: 구현 완료 시 순서대로 추가
-    # from src.infra.universe import UniverseManager
     # from src.infra.sentiment_cache import SentimentCache
     # from src.teams.domestic_market.engine import DomesticMarketEngine
     # from src.teams.domestic_stock.engine import DomesticStockEngine
