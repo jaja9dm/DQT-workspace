@@ -155,6 +155,41 @@
 
 ---
 
+## 다음 할일 — 모의투자 통합 테스트
+
+### Phase 1: 환경 설정 및 첫 실행
+1. `.env` 파일 생성 (`.env.example` 참고)
+   - `KIS_MODE=paper` (모의투자)
+   - `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_NO` 입력
+   - `ANTHROPIC_API_KEY` 입력
+   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` 입력 (텔레그램 봇 생성 필요)
+2. 패키지 설치: `pip install -r requirements.txt`
+3. 즉시 실행 테스트: `python main.py --now`
+
+### Phase 2: 팀별 단위 테스트 (실행 확인)
+- [ ] DB 초기화 확인 (`db/dqt.db` 생성, 9개 테이블)
+- [ ] KIS 게이트웨이 토큰 발급 확인 (로그 `KIS 게이트웨이 준비 완료`)
+- [ ] 유니버스 재구성 확인 (로그 `유니버스 확정: N종목`)
+- [ ] 글로벌 시황팀 1회 실행 확인 (`global_condition` 테이블 row 삽입)
+- [ ] 국내 시황팀 1회 실행 확인 (`market_condition` 테이블 row 삽입)
+- [ ] 국내 주식팀 스캔 확인 (후보 종목 로그)
+- [ ] 위기 관리팀 리스크 레벨 산출 확인 (`risk_status` 테이블)
+- [ ] 텔레그램 알림 수신 확인 (시스템 시작 메시지)
+
+### Phase 3: 매매 흐름 검증
+- [ ] Hot List 생성 확인 (`hot_list` 테이블)
+- [ ] 매매팀 게이트 로그 확인 (Gate 1~5 통과 여부)
+- [ ] 모의투자 매수 주문 체결 확인 (KIS 모의 계좌)
+- [ ] 포지션 감시 손절·익절 동작 확인
+- [ ] 장 마감 후 리포트 텔레그램 수신 확인
+
+### Phase 4: 안정화 (최소 1주일 모의 운용)
+- [ ] 오류 로그 (`logs/dqt.log`) 모니터링
+- [ ] 이상 동작 버그 수정
+- [ ] 실전 전환 여부 결정 (`KIS_MODE=live`)
+
+---
+
 ## 주요 설계 원칙 (변경 금지)
 
 | 항목 | 내용 |
