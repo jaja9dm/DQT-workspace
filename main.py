@@ -67,6 +67,11 @@ def main() -> None:
     position_monitor = PositionMonitorEngine()
     position_monitor.start()
 
+    # 4-8. 매매팀 (전 팀 기동 후 마지막 — 모든 팀 의존)
+    from src.teams.trading.engine import TradingEngine
+    trading = TradingEngine()
+    trading.start()
+
     # TODO: 구현 완료 시 순서대로 추가
     # from src.teams.risk.engine import RiskEngine
     # from src.teams.position_monitor.engine import PositionMonitorEngine
@@ -74,7 +79,7 @@ def main() -> None:
     # from src.teams.report.engine import ReportEngine
     # from src.teams.research.engine import ResearchEngine
 
-    logger.info("시스템 가동 중 — 글로벌·국내 시황팀·국내 주식팀·위기 관리팀·포지션 감시 활성")
+    logger.info("시스템 가동 중 — 전 팀 활성 (글로벌/국내 시황·주식·위기·포지션감시·매매)")
 
     # 메인 스레드 유지 (엔진들은 daemon 스레드로 실행 중)
     try:
@@ -83,11 +88,12 @@ def main() -> None:
             time.sleep(60)
     except KeyboardInterrupt:
         logger.info("시스템 종료 신호 수신")
-        global_market.stop()
-        domestic_market.stop()
+        trading.stop()
+        position_monitor.stop()
         domestic_stock.stop()
         risk.stop()
-        position_monitor.stop()
+        domestic_market.stop()
+        global_market.stop()
 
 
 if __name__ == "__main__":

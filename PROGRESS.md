@@ -106,12 +106,18 @@
   - `_calc_held_days()`: trades 최초 매수일 기준 영업일 계산
   - `_count_partial_sells()`: 오늘 익절 횟수 추적 (2차 중복 방지)
 
-### 9단계 — 매매팀
-- `src/teams/trading/engine.py`
-  - 게이트 구조: 리스크 레벨 → 시황 → 글로벌 → Hot List → 진입 판단
-  - Claude `claude-sonnet-4-6` 최종 매수·매도 결정
-  - 분할 매수 3회 (40% / 35% / 25%), KIS API 주문 실행
-  - `trades` 테이블 저장
+### 9단계 — 매매팀 (커밋 다음)
+- `src/teams/trading/engine.py` ✅
+  - 게이트 구조 (순서대로, 하나라도 실패 시 전체 차단):
+    - Gate 1: 리스크 레벨 ≥ 4 → 신규 진입 금지
+    - Gate 2: 글로벌 outlook == 'negative' → 진입 보류
+    - Gate 3: 국내 market_score < -0.3 → 진입 보류
+    - Gate 4: Hot List (최근 10분) 비어있으면 대기
+    - Gate 5: Claude sonnet-4-6 최종 매수 판단 (종목별)
+  - 분할 매수: 1차 40% 즉시 → 2·3차(35%/25%) 5분 후 -1% 추가 하락 시 진입
+  - KIS 예수금 × position_limit_pct × max_single_trade_pct로 투자 한도 계산
+  - 당일 중복 매수 방지 (today_tickers 세트)
+  - `trades` 테이블 저장, 종목별 감성 점수 참조
 
 ### 10단계 — 리포트팀
 - `src/teams/report/engine.py`
@@ -179,7 +185,8 @@ DQT-workspace/
 │       │   └── engine.py
 │       ├── position_monitor/        ✅ 완료
 │       │   └── engine.py
-│       ├── trading/                 ⏳ 9단계
+│       ├── trading/                 ✅ 완료
+│       │   └── engine.py
 │       ├── report/                  ⏳ 10단계
 │       └── research/                ⏳ 11단계
 └── docs/
