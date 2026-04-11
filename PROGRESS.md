@@ -131,17 +131,27 @@
   - 텔레그램 일일 리포트 발송
   - `ReportEngine().run()` 단일 진입점
 
-### 11단계 — 연구소
-- `src/teams/research/engine.py`
-  - 장 마감 후 배치: 전략별 성과 분석, 임계값 조정 판단
-  - FinanceDataReader 백테스트 (최소 6개월)
-  - `active_strategies` 테이블 업데이트
+### 11단계 — 연구소 (커밋 다음)
+- `src/teams/research/engine.py` ✅
+  - Claude opus-4-6 전략별 성과 분석 (30일 trades 기반 승률·손익비)
+  - `active_strategies` 파라미터 자동 조정 (keep|adjust|deprecate)
+  - 기본 전략 3종 자동 초기화: 거래량급등모멘텀·BB돌파·MACD모멘텀
+  - 6개월 FDR 백테스트 (deep=True, 주 1회)
+  - `ResearchEngine().run(deep=False|True)` 단일 진입점
 
 ### 12단계 — 알림 유틸리티
 - `src/utils/notifier.py` ✅ 10단계에서 선행 구현 완료 (텔레그램)
 
-### 13단계 — 스케줄러
-- `src/scheduler/` — 각 팀 엔진 기동 타이밍 통합 관리 (APScheduler 등)
+### 13단계 — 스케줄러 (커밋 다음)
+- `src/scheduler/scheduler.py` ✅
+  - APScheduler(BackgroundScheduler) 기반
+  - 장 전(08:50): 유니버스 재구성
+  - 장 시작(09:00): 전체 실시간 엔진 기동
+  - 장 마감(15:35): 실시간 엔진 역순 정지
+  - 배치(15:40~): 리포트팀 → 연구소 일일 → 연구소 심층(일요일)
+  - `trigger_now(job_id)` 수동 실행 지원
+- `main.py` 스케줄러 중심으로 리팩토링
+  - `python main.py --now`: 즉시 엔진 기동 (개발·테스트용)
 
 ---
 
@@ -195,7 +205,8 @@ DQT-workspace/
 │       │   └── engine.py
 │       ├── report/                  ✅ 완료
 │       │   └── engine.py
-│       └── research/                ⏳ 11단계
+│       └── research/                ✅ 완료
+│           └── engine.py
 └── docs/
     └── planning/
         ├── concept.md               ← 상세 설계 문서 (v0.2.1)
