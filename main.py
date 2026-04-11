@@ -28,10 +28,14 @@ def main() -> None:
     gateway = KISGateway()
     logger.info("KIS 게이트웨이 준비 완료")
 
-    # TODO: 각 팀 엔진 순차 기동 (팀 구현 완료 시 추가)
+    # 4. 팀 엔진 순차 기동
+    from src.teams.global_market.engine import GlobalMarketEngine
+    global_market = GlobalMarketEngine()
+    global_market.start()
+
+    # TODO: 구현 완료 시 순서대로 추가
     # from src.infra.universe import UniverseManager
     # from src.infra.sentiment_cache import SentimentCache
-    # from src.teams.global_market.engine import GlobalMarketEngine
     # from src.teams.domestic_market.engine import DomesticMarketEngine
     # from src.teams.domestic_stock.engine import DomesticStockEngine
     # from src.teams.risk.engine import RiskEngine
@@ -40,7 +44,16 @@ def main() -> None:
     # from src.teams.report.engine import ReportEngine
     # from src.teams.research.engine import ResearchEngine
 
-    logger.info("시스템 준비 완료 — 팀 엔진 기동 대기 중")
+    logger.info("시스템 가동 중 — 글로벌 시황팀 활성")
+
+    # 메인 스레드 유지 (엔진들은 daemon 스레드로 실행 중)
+    try:
+        import time
+        while True:
+            time.sleep(60)
+    except KeyboardInterrupt:
+        logger.info("시스템 종료 신호 수신")
+        global_market.stop()
 
 
 if __name__ == "__main__":
