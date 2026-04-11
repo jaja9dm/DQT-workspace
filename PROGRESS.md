@@ -40,17 +40,36 @@
   - KIND RSS 공시 감시 (2분 주기) → 공시 종목 즉시 편입
   - 싱글턴, `is_in_universe()`, `add_disclosure_ticker()` 제공
 
----
-
-## 구현 예정 (순서대로)
-
-### 4단계 — 감성 분석 캐시 (커밋 다음)
-- `src/infra/sentiment_cache.py` ✅
+### 4단계 — 감성 분석 캐시 (커밋 `24cfeee`)
+- `src/infra/sentiment_cache.py`
   - URL SHA-256 해시 중복 제거
   - Claude `claude-haiku-4-5` 1회 분석 → DB 저장 → 전 팀 공유
   - 24시간 만료, `get_by_ticker()`, `avg_score_by_ticker()`, `purge_expired()` 제공
 
-### 5단계 — 국내 시황팀
+### 5단계 — 국내 시황팀 (커밋 다음)
+- `src/infra/universe.py` 버그 수정
+  - `fdr.StockListing('KOSPI200')` → `fdr.StockListing('KOSPI')` Marcap 상위 200
+  - KIND RSS 404 → KIND 공시 페이지 HTML 파싱 (브라우저 헤더)
+- `src/teams/domestic_market/collector.py` ✅
+  - KIS API: KOSPI/KOSDAQ 지수 현재가·등락률 (`_KIS_INDEX_PATH`)
+  - KIS API: 투자자별 매매동향 외국인·기관·개인 (`_KIS_INVESTOR_PATH`)
+  - KIS 실패 시 FinanceDataReader(KS11/KQ11) 폴백
+  - FinanceDataReader: 60일 OHLCV → 5/20/60일 이동평균·추세
+  - 네이버금융: 국내 증시 뉴스 최대 10건 (regex 파싱, euc-kr)
+- `src/teams/domestic_market/analyzer.py` ✅
+  - Claude `claude-sonnet-4-6` (temperature=0) 시황 분석
+  - 시장 점수(-1~1), 방향(bullish/neutral/bearish), 주도 주체, 요약
+  - Claude 실패 시 지수 등락률 기반 폴백
+- `src/teams/domestic_market/engine.py` ✅
+  - 30분 주기 루프, 즉시 트리거 (KOSPI±1.5%, 외국인±2000억)
+  - `market_condition` 테이블 저장
+  - 수집 뉴스 → SentimentCache 비동기 제출
+
+---
+
+## 구현 예정 (순서대로)
+
+### 6단계 — 국내 주식팀 (구 5단계)
 - `src/teams/domestic_market/collector.py`
   - KIS API: KOSPI/KOSDAQ 지수, 외국인·기관 수급, 투자자별 매매동향
   - FinanceDataReader: 과거 지수 데이터 (이동평균·추세)
@@ -140,7 +159,10 @@ DQT-workspace/
 │       │   ├── collector.py
 │       │   ├── analyzer.py
 │       │   └── engine.py
-│       ├── domestic_market/         ⏳ 5단계
+│       ├── domestic_market/         ✅ 완료
+│       │   ├── collector.py
+│       │   ├── analyzer.py
+│       │   └── engine.py
 │       ├── domestic_stock/          ⏳ 6단계
 │       ├── risk/                    ⏳ 7단계
 │       ├── position_monitor/        ⏳ 8단계

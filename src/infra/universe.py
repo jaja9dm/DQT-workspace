@@ -21,9 +21,8 @@ from __future__ import annotations
 import re
 import threading
 import time
-import xml.etree.ElementTree as ET
 from datetime import date, datetime
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 import FinanceDataReader as fdr
 import pandas as pd
@@ -33,11 +32,26 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-# KIND RSS 공시 피드 URL
-_KIND_RSS_URL = "https://kind.krx.co.kr/disclosureinfo/todaydisclosure/main.do?method=searchTodayDisclosureInfo&currentPage=1&rowsPerPage=30&orderMode=0&orderStat=D&forward=todaydisclosure_rss_main"
+# KIND 공시 검색 API (JSON)
+_KIND_DISCLOSURE_URL = (
+    "https://kind.krx.co.kr/disclosureinfo/todaydisclosure/main.do"
+    "?method=searchTodayDisclosureInfo&currentPage=1&rowsPerPage=30"
+    "&orderMode=0&orderStat=D&forward=todaydisclosure_main"
+)
 
 # 종목 코드 6자리 추출용 정규식
 _TICKER_PATTERN = re.compile(r"\b(\d{6})\b")
+
+# 브라우저 헤더 (KIND 서버 User-Agent 차단 우회)
+_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept": "text/html,application/json,*/*",
+    "Referer": "https://kind.krx.co.kr/",
+}
 
 
 class UniverseManager:
@@ -198,30 +212,40 @@ class UniverseManager:
             self._stop_event.wait(timeout=interval_sec)
 
     def _fetch_and_add_disclosures(self) -> None:
-        """KIND RSS에서 최신 공시를 읽어 유니버스에 추가."""
-        with urlopen(_KIND_RSS_URL, timeout=10) as resp:
-            content = resp.read()
+        """KIND 공시 페이지에서 최신 공시를 파싱해 유니버스에 추가."""
+        try:
+            from html.parser import HTMLParser
 
-        root = ET.fromstring(content)
-        ns = {"atom": "http://www.w3.org/2005/Atom"}
+            req = Request(_KIND_DISCLOSURE_URL, headers=_HEADERS)
+            with urlopen(req, timeout=15) as resp:
+                raw = resp.read()
+            # KIND 응답은 EUC-KR 인코딩
+            html = raw.decode("euc-kr", errors="replace")
+        except Exception as e:
+            logger.warning(f"KIND 공시 페이지 요청 실패: {e}")
+            return
 
-        # RSS 항목 순회 (Atom 피드 또는 일반 RSS 모두 지원)
-        items = root.findall(".//item") or root.findall(".//atom:entry", ns)
-
-        for item in items:
-            link = _text(item, "link") or _text(item, "atom:link", ns) or ""
-            title = _text(item, "title") or ""
-
-            if link in self._seen_disclosures:
-                continue
-            self._seen_disclosures.add(link)
-
-            # 제목 또는 링크에서 종목 코드 추출 (6자리 숫자)
-            match = _TICKER_PATTERN.search(link) or _TICKER_PATTERN.search(title)
-            if match:
+        # HTML에서 종목 코드(6자리 숫자) + 종목명 추출
+        # KIND 페이지 패턴: isuCd=000000 또는 stockCd=000000
+        code_patterns = [
+            re.compile(r'isuCd=(\d{6})'),
+            re.compile(r'stockCd=(\d{6})'),
+            re.compile(r'종목코드[^0-9]*(\d{6})'),
+        ]
+        # 공시 항목 식별을 위한 고유 키: (ticker, title_hash)
+        entries_found = 0
+        for pattern in code_patterns:
+            for match in pattern.finditer(html):
                 ticker = match.group(1)
-                name = title.split("]")[0].lstrip("[") if "]" in title else ""
-                self.add_disclosure_ticker(ticker, name.strip())
+                key = ticker
+                if key in self._seen_disclosures:
+                    continue
+                self._seen_disclosures.add(key)
+                self.add_disclosure_ticker(ticker)
+                entries_found += 1
+
+        if entries_found:
+            logger.debug(f"KIND 공시 {entries_found}건 신규 종목 추가")
 
 
 # ──────────────────────────────────────────────
@@ -229,9 +253,14 @@ class UniverseManager:
 # ──────────────────────────────────────────────
 
 def _fetch_kospi200(today: date) -> list[tuple]:
-    """FinanceDataReader로 KOSPI 200 구성 종목 수집."""
+    """FinanceDataReader로 KOSPI 시가총액 상위 200 종목 수집."""
     try:
-        df = fdr.StockListing("KOSPI200")
+        df = fdr.StockListing("KOSPI")
+        # Marcap(시가총액) 내림차순 정렬 후 상위 200
+        sort_col = "Marcap" if "Marcap" in df.columns else ("MktCap" if "MktCap" in df.columns else None)
+        if sort_col:
+            df = df.sort_values(sort_col, ascending=False)
+        df = df.head(200)
         return [
             (str(row["Code"]).zfill(6), row.get("Name", ""), "KOSPI", "kospi200", str(today))
             for _, row in df.iterrows()
@@ -243,9 +272,13 @@ def _fetch_kospi200(today: date) -> list[tuple]:
 
 
 def _fetch_kosdaq150(today: date) -> list[tuple]:
-    """FinanceDataReader로 KOSDAQ 150 구성 종목 수집."""
+    """FinanceDataReader로 KOSDAQ 시가총액 상위 150 종목 수집."""
     try:
-        df = fdr.StockListing("KOSDAQ150")
+        df = fdr.StockListing("KOSDAQ")
+        sort_col = "Marcap" if "Marcap" in df.columns else ("MktCap" if "MktCap" in df.columns else None)
+        if sort_col:
+            df = df.sort_values(sort_col, ascending=False)
+        df = df.head(150)
         return [
             (str(row["Code"]).zfill(6), row.get("Name", ""), "KOSDAQ", "kosdaq150", str(today))
             for _, row in df.iterrows()
@@ -292,7 +325,3 @@ def _fetch_volume_top100(today: date, exclude: set[str]) -> list[tuple]:
         return []
 
 
-def _text(element: ET.Element, tag: str, ns: dict | None = None) -> str:
-    """XML 요소에서 텍스트 안전 추출."""
-    child = element.find(tag, ns) if ns else element.find(tag)
-    return (child.text or "").strip() if child is not None else ""

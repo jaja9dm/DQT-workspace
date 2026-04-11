@@ -47,8 +47,12 @@ def main() -> None:
     sentiment_cache = SentimentCache()
     sentiment_cache.purge_expired()
 
+    # 4-4. 국내 시황팀
+    from src.teams.domestic_market.engine import DomesticMarketEngine
+    domestic_market = DomesticMarketEngine()
+    domestic_market.start()
+
     # TODO: 구현 완료 시 순서대로 추가
-    # from src.teams.domestic_market.engine import DomesticMarketEngine
     # from src.teams.domestic_stock.engine import DomesticStockEngine
     # from src.teams.risk.engine import RiskEngine
     # from src.teams.position_monitor.engine import PositionMonitorEngine
@@ -56,7 +60,7 @@ def main() -> None:
     # from src.teams.report.engine import ReportEngine
     # from src.teams.research.engine import ResearchEngine
 
-    logger.info("시스템 가동 중 — 글로벌 시황팀 활성")
+    logger.info("시스템 가동 중 — 글로벌·국내 시황팀 활성")
 
     # 메인 스레드 유지 (엔진들은 daemon 스레드로 실행 중)
     try:
@@ -66,6 +70,7 @@ def main() -> None:
     except KeyboardInterrupt:
         logger.info("시스템 종료 신호 수신")
         global_market.stop()
+        domestic_market.stop()
 
 
 if __name__ == "__main__":
