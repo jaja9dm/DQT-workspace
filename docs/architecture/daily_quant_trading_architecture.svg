@@ -1,0 +1,242 @@
+<svg width="100%" viewBox="0 0 780 1060" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>DQT 멀티팀 자동매매 시스템 아키텍처 v0.2.1</title>
+  <desc>KIS 게이트웨이·감성 분석 캐시·종목 유니버스·포지션 감시를 포함한 10개 엔진 DQT 멀티팀 퀀트 자동매매 시스템</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+
+  <!-- ── 배경 ── -->
+  <rect width="780" height="1060" fill="#0e0e0c"/>
+
+  <!-- ══════════════════════════════════════════
+       공통 인프라 (0층)
+  ══════════════════════════════════════════ -->
+  <text x="24" y="20" font-size="10" fill="#9c9a92" opacity=".6">공통 인프라</text>
+
+  <!-- 종목 유니버스 -->
+  <rect x="16" y="28" width="364" height="60" rx="8" fill="#1a2a3a" stroke="#7aafc0" stroke-width="0.7"/>
+  <text x="198" y="52" text-anchor="middle" fill="#a8d0e0" font-size="12" font-weight="600">종목 유니버스 관리</text>
+  <text x="198" y="70" text-anchor="middle" fill="#7aafc0" font-size="10">KOSPI 200 + KOSDAQ 150 + 거래량 Top 100 ≈ 450종목</text>
+
+  <!-- 감성 분석 캐시 -->
+  <rect x="392" y="28" width="372" height="60" rx="8" fill="#0a2a2a" stroke="#4dc4b0" stroke-width="0.7"/>
+  <text x="578" y="52" text-anchor="middle" fill="#8ee0d8" font-size="12" font-weight="600">감성 분석 캐시</text>
+  <text x="578" y="70" text-anchor="middle" fill="#4dc4b0" font-size="10">URL SHA-256 중복 제거 · 1회 Claude 분석 → DB 전 팀 공유</text>
+
+  <!-- 종목 유니버스 → 수집팀들 (점선) -->
+  <line x1="135" y1="88" x2="120" y2="136" stroke="#7aafc0" stroke-width="0.8" stroke-dasharray="3 2" opacity=".5" marker-end="url(#arrow)"/>
+  <line x1="198" y1="88" x2="365" y2="136" stroke="#7aafc0" stroke-width="0.8" stroke-dasharray="3 2" opacity=".5" marker-end="url(#arrow)"/>
+
+  <!-- 수집팀 → 감성 분석 캐시 (점선, 역방향) -->
+  <line x1="578" y1="88" x2="578" y2="136" stroke="#4dc4b0" stroke-width="0.8" stroke-dasharray="3 2" opacity=".5" marker-end="url(#arrow)"/>
+
+
+  <!-- ══════════════════════════════════════════
+       LAYER 1: 데이터 수집부
+  ══════════════════════════════════════════ -->
+  <text x="24" y="130" font-size="10" fill="#9c9a92" opacity=".6">① 데이터 수집부</text>
+  <rect x="16" y="138" width="748" height="94" rx="10" fill="none" stroke="#5dcaa5" stroke-width="0.4" opacity=".2"/>
+
+  <!-- 국내 주식팀 -->
+  <rect x="28" y="150" width="224" height="74" rx="8" fill="#085041" stroke="#5dcaa5" stroke-width="0.5"/>
+  <text x="140" y="174" text-anchor="middle" fill="#9fe1cb" font-size="12" font-weight="600">국내 주식팀</text>
+  <text x="140" y="192" text-anchor="middle" fill="#5dcaa5" font-size="10">주도주 · 섹터 포착 · KIS 5분 스캔</text>
+  <text x="140" y="208" text-anchor="middle" fill="#5dcaa5" font-size="9" opacity=".7">장중 상시 / 5분 + 급등 즉시</text>
+
+  <!-- 국내 시황팀 -->
+  <rect x="272" y="150" width="222" height="74" rx="8" fill="#085041" stroke="#5dcaa5" stroke-width="0.5"/>
+  <text x="383" y="174" text-anchor="middle" fill="#9fe1cb" font-size="12" font-weight="600">국내 시황팀</text>
+  <text x="383" y="192" text-anchor="middle" fill="#5dcaa5" font-size="10">KOSPI · 수급 · 공시 · 시장 방향</text>
+  <text x="383" y="208" text-anchor="middle" fill="#5dcaa5" font-size="9" opacity=".7">30분 주기 + 공시 즉시</text>
+
+  <!-- 글로벌 시황팀 -->
+  <rect x="514" y="150" width="238" height="74" rx="8" fill="#0b4a3a" stroke="#5dcaa5" stroke-width="0.5"/>
+  <text x="633" y="174" text-anchor="middle" fill="#9fe1cb" font-size="12" font-weight="600">글로벌 시황팀</text>
+  <text x="633" y="192" text-anchor="middle" fill="#5dcaa5" font-size="10">S&amp;P · VIX · WTI · 환율 · FRED</text>
+  <text x="633" y="208" text-anchor="middle" fill="#5dcaa5" font-size="9" opacity=".7">24/7 상시 / 1시간 주기</text>
+
+  <!-- 수집부 → 위기관리팀 화살표 -->
+  <line x1="140" y1="224" x2="140" y2="264" stroke="#9c9a92" stroke-width="1" opacity=".3" marker-end="url(#arrow)"/>
+  <line x1="383" y1="224" x2="383" y2="264" stroke="#9c9a92" stroke-width="1" opacity=".3" marker-end="url(#arrow)"/>
+  <line x1="633" y1="224" x2="633" y2="264" stroke="#9c9a92" stroke-width="1" opacity=".3" marker-end="url(#arrow)"/>
+  <path d="M140 250 L383 250" fill="none" stroke="#9c9a92" stroke-width="0.5" opacity=".15"/>
+  <path d="M633 250 L383 250" fill="none" stroke="#9c9a92" stroke-width="0.5" opacity=".15"/>
+
+
+  <!-- ══════════════════════════════════════════
+       LAYER 2: 위기 관리팀
+  ══════════════════════════════════════════ -->
+  <text x="24" y="262" font-size="10" fill="#9c9a92" opacity=".6">② 위기 관리팀</text>
+  <rect x="140" y="270" width="492" height="72" rx="10" fill="#3a1a5c" stroke="#b07ee0" stroke-width="0.5"/>
+  <text x="386" y="296" text-anchor="middle" fill="#d4aaff" font-size="13" font-weight="600">위기 관리팀</text>
+  <text x="386" y="314" text-anchor="middle" fill="#b07ee0" font-size="10">전체 데이터 종합 · 리스크 레벨 (1~5) 산출 · 팀별 포지션 한도 결정</text>
+  <text x="386" y="330" text-anchor="middle" fill="#b07ee0" font-size="9" opacity=".7">15분 주기 + 이벤트 즉시 트리거</text>
+
+  <!-- 위기관리 → 각팀 -->
+  <line x1="386" y1="342" x2="386" y2="382" stroke="#9c9a92" stroke-width="1.5" opacity=".4" marker-end="url(#arrow)"/>
+  <path d="M220 342 L220 368 L128 368 L128 382" fill="none" stroke="#9c9a92" stroke-width="1" opacity=".25" marker-end="url(#arrow)"/>
+  <path d="M556 342 L556 368 L652 368 L652 382" fill="none" stroke="#9c9a92" stroke-width="1" opacity=".25" marker-end="url(#arrow)"/>
+
+
+  <!-- ══════════════════════════════════════════
+       LAYER 3: 핵심 운영팀
+  ══════════════════════════════════════════ -->
+  <text x="24" y="380" font-size="10" fill="#9c9a92" opacity=".6">③ 핵심 운영팀</text>
+
+  <!-- 연구소 -->
+  <rect x="16" y="388" width="212" height="90" rx="8" fill="#1a2a1a" stroke="#6ab04c" stroke-width="0.5"/>
+  <text x="122" y="412" text-anchor="middle" fill="#a8d98a" font-size="11" font-weight="600">로직/알고리즘 연구소</text>
+  <text x="122" y="430" text-anchor="middle" fill="#6ab04c" font-size="10">전략 연구 · 백테스트</text>
+  <text x="122" y="448" text-anchor="middle" fill="#6ab04c" font-size="10">임계값 개선</text>
+  <text x="122" y="466" text-anchor="middle" fill="#6ab04c" font-size="9" opacity=".6">장마감 후 + 주간</text>
+
+  <!-- 매매팀 -->
+  <rect x="248" y="388" width="272" height="90" rx="10" fill="#0c447c" stroke="#85b7eb" stroke-width="0.5"/>
+  <text x="384" y="412" text-anchor="middle" fill="#b5d4f4" font-size="13" font-weight="600">매매팀</text>
+  <text x="384" y="432" text-anchor="middle" fill="#85b7eb" font-size="10">신호 종합 · 분할 매수·매도 결정</text>
+  <text x="384" y="450" text-anchor="middle" fill="#85b7eb" font-size="10">claude-sonnet-4-6 · temperature=0</text>
+  <text x="384" y="468" text-anchor="middle" fill="#85b7eb" font-size="9" opacity=".7">장중 상시 + 신호 즉시 트리거</text>
+
+  <!-- 리포트팀 -->
+  <rect x="540" y="388" width="224" height="90" rx="8" fill="#2a1a0a" stroke="#e6a817" stroke-width="0.5"/>
+  <text x="652" y="412" text-anchor="middle" fill="#f5d070" font-size="11" font-weight="600">리포트팀</text>
+  <text x="652" y="430" text-anchor="middle" fill="#e6a817" font-size="10">성과 집계 · 팀별 피드백</text>
+  <text x="652" y="448" text-anchor="middle" fill="#e6a817" font-size="10">일일·주간 리포트 생성</text>
+  <text x="652" y="466" text-anchor="middle" fill="#e6a817" font-size="9" opacity=".6">장마감 후 + 주간</text>
+
+  <!-- 연구소 → 매매팀 -->
+  <line x1="228" y1="433" x2="248" y2="433" stroke="#6ab04c" stroke-width="1" opacity=".5" marker-end="url(#arrow)"/>
+
+  <!-- 매매팀 → 포지션 감시 -->
+  <line x1="384" y1="478" x2="384" y2="510" stroke="#85b7eb" stroke-width="1.2" opacity=".5" marker-end="url(#arrow)"/>
+
+
+  <!-- ══════════════════════════════════════════
+       포지션 감시 서브엔진
+  ══════════════════════════════════════════ -->
+  <text x="256" y="508" font-size="9" fill="#9c9a92" opacity=".5">③-1 포지션 감시 서브엔진</text>
+  <rect x="248" y="516" width="272" height="66" rx="8" fill="#082040" stroke="#5a90c8" stroke-width="0.7"/>
+  <text x="384" y="538" text-anchor="middle" fill="#8ab8e0" font-size="12" font-weight="600">포지션 감시</text>
+  <text x="384" y="556" text-anchor="middle" fill="#5a90c8" font-size="10">손절 · 익절 · 타임컷 자동 감시</text>
+  <text x="384" y="572" text-anchor="middle" fill="#5a90c8" font-size="9" opacity=".7">1~2분 주기 · 보유 종목 전수 실시간 점검</text>
+
+  <!-- 포지션 감시 → KIS 게이트웨이 -->
+  <line x1="384" y1="582" x2="384" y2="614" stroke="#5a90c8" stroke-width="1.2" opacity=".5" marker-end="url(#arrow)"/>
+
+
+  <!-- ══════════════════════════════════════════
+       LAYER 4: 주문 실행 (게이트웨이 + KIS API)
+  ══════════════════════════════════════════ -->
+  <text x="24" y="612" font-size="10" fill="#9c9a92" opacity=".6">④ 주문 실행</text>
+
+  <!-- KIS 게이트웨이 -->
+  <rect x="140" y="620" width="492" height="54" rx="8" fill="#1a2832" stroke="#6a9aac" stroke-width="0.7"/>
+  <text x="386" y="643" text-anchor="middle" fill="#a8c8d8" font-size="12" font-weight="600">KIS 게이트웨이</text>
+  <text x="386" y="661" text-anchor="middle" fill="#6a9aac" font-size="10">토큰 관리 · Rate Limit 큐잉 · 우선순위: 포지션 감시 › 매매팀 › 수집팀</text>
+
+  <!-- 게이트웨이 → KIS API -->
+  <line x1="386" y1="674" x2="386" y2="700" stroke="#9c9a92" stroke-width="1.5" opacity=".4" marker-end="url(#arrow)"/>
+
+  <!-- KIS API -->
+  <rect x="140" y="700" width="492" height="54" rx="8" fill="#0c447c" stroke="#85b7eb" stroke-width="0.5"/>
+  <text x="386" y="723" text-anchor="middle" fill="#b5d4f4" font-size="13" font-weight="600">한국투자증권 KIS API</text>
+  <text x="386" y="741" text-anchor="middle" fill="#85b7eb" font-size="10">REST · OAuth 2.0 · 실계좌 / 모의계좌 전환 · 분할 주문 자동 실행</text>
+
+  <!-- KIS API → 체결 분기 -->
+  <path d="M386 754 L386 778 L140 778 L140 800" fill="none" stroke="#9c9a92" stroke-width="1" opacity=".3" marker-end="url(#arrow)"/>
+  <line x1="386" y1="778" x2="386" y2="800" stroke="#9c9a92" stroke-width="1.5" opacity=".4" marker-end="url(#arrow)"/>
+  <path d="M386 778 L646 778 L646 800" fill="none" stroke="#9c9a92" stroke-width="1" opacity=".3" marker-end="url(#arrow)"/>
+
+
+  <!-- ══════════════════════════════════════════
+       LAYER 5: 체결 및 피드백
+  ══════════════════════════════════════════ -->
+  <text x="24" y="798" font-size="10" fill="#9c9a92" opacity=".6">⑤ 체결 및 피드백</text>
+
+  <!-- 주문 체결 -->
+  <rect x="16" y="806" width="238" height="72" rx="8" fill="#27500a" stroke="#97c459" stroke-width="0.5"/>
+  <text x="135" y="830" text-anchor="middle" fill="#c0dd97" font-size="12" font-weight="600">주문 체결</text>
+  <text x="135" y="848" text-anchor="middle" fill="#97c459" font-size="10">KRX 실시간 체결</text>
+  <text x="135" y="864" text-anchor="middle" fill="#97c459" font-size="10">분할 체결 관리</text>
+
+  <!-- 수익률 로그 -->
+  <rect x="274" y="806" width="220" height="72" rx="8" fill="#27500a" stroke="#97c459" stroke-width="0.5"/>
+  <text x="384" y="830" text-anchor="middle" fill="#c0dd97" font-size="12" font-weight="600">수익률 로그</text>
+  <text x="384" y="848" text-anchor="middle" fill="#97c459" font-size="10">DB 저장 · 팀별 기여 분석</text>
+  <text x="384" y="864" text-anchor="middle" fill="#97c459" font-size="10">전략 성과 추적</text>
+
+  <!-- 알림 발송 -->
+  <rect x="514" y="806" width="250" height="72" rx="8" fill="#27500a" stroke="#97c459" stroke-width="0.5"/>
+  <text x="639" y="830" text-anchor="middle" fill="#c0dd97" font-size="12" font-weight="600">알림 발송</text>
+  <text x="639" y="848" text-anchor="middle" fill="#97c459" font-size="10">체결·손절·리포트</text>
+  <text x="639" y="864" text-anchor="middle" fill="#97c459" font-size="10">카카오톡 / Slack</text>
+
+  <!-- 피드백 루프 (좌측 — 전체 피드백) -->
+  <path d="M16 842 Q6 842 6 440 Q6 56 28 56" fill="none" stroke="#9c9a92" stroke-width="0.8" stroke-dasharray="3 3" opacity=".2" marker-end="url(#arrow)"/>
+  <text x="18" y="440" font-size="8" fill="#9c9a92" opacity=".35" transform="rotate(-90 18 440)">피드백 루프</text>
+
+  <!-- 리포트팀 피드백 (우측 — 성과 → 리포트) -->
+  <path d="M764 842 Q774 842 774 640 Q774 478 764 478" fill="none" stroke="#e6a817" stroke-width="0.8" stroke-dasharray="4 3" opacity=".3" marker-end="url(#arrow)"/>
+
+
+  <!-- ══════════════════════════════════════════
+       공유 DB (오른쪽 사이드바)
+  ══════════════════════════════════════════ -->
+  <rect x="754" y="268" width="14" height="482" rx="4" fill="#1e1e1c" stroke="#444441" stroke-width="0.5"/>
+  <text x="761" y="512" text-anchor="middle" font-size="9" fill="#6b6b68" transform="rotate(-90 761 512)">공유 DB (SQLite)</text>
+
+  <!-- DB 연결선 -->
+  <line x1="754" y1="312" x2="632" y2="312" stroke="#444441" stroke-width="0.5" stroke-dasharray="3 3" opacity=".35"/>
+  <line x1="754" y1="433" x2="520" y2="433" stroke="#444441" stroke-width="0.5" stroke-dasharray="3 3" opacity=".35"/>
+  <line x1="754" y1="549" x2="520" y2="549" stroke="#444441" stroke-width="0.5" stroke-dasharray="3 3" opacity=".35"/>
+  <line x1="754" y1="647" x2="632" y2="647" stroke="#444441" stroke-width="0.5" stroke-dasharray="3 3" opacity=".3"/>
+  <line x1="754" y1="720" x2="632" y2="720" stroke="#444441" stroke-width="0.5" stroke-dasharray="3 3" opacity=".3"/>
+
+
+  <!-- ══════════════════════════════════════════
+       범례
+  ══════════════════════════════════════════ -->
+  <rect x="16" y="900" width="748" height="140" rx="8" fill="#161614" stroke="rgba(222,220,209,0.08)" stroke-width="0.5"/>
+  <text x="390" y="920" text-anchor="middle" fill="#9c9a92" font-size="10" opacity=".6">엔진 타입 · 실행 주기</text>
+
+  <!-- 왼쪽 범례 (엔진 타입) -->
+  <rect x="32" y="930" width="10" height="10" rx="2" fill="#1a2a3a" stroke="#7aafc0" stroke-width="0.5"/>
+  <text x="48" y="940" fill="#9c9a92" font-size="10">공통 인프라 (유니버스 · 캐시 · 게이트웨이)</text>
+
+  <rect x="32" y="950" width="10" height="10" rx="2" fill="#085041" stroke="#5dcaa5" stroke-width="0.5"/>
+  <text x="48" y="960" fill="#9c9a92" font-size="10">데이터 수집 엔진</text>
+
+  <rect x="32" y="970" width="10" height="10" rx="2" fill="#3a1a5c" stroke="#b07ee0" stroke-width="0.5"/>
+  <text x="48" y="980" fill="#9c9a92" font-size="10">리스크 엔진</text>
+
+  <rect x="32" y="990" width="10" height="10" rx="2" fill="#082040" stroke="#5a90c8" stroke-width="0.5"/>
+  <text x="48" y="1000" fill="#9c9a92" font-size="10">포지션 감시 엔진</text>
+
+  <rect x="32" y="1010" width="10" height="10" rx="2" fill="#0c447c" stroke="#85b7eb" stroke-width="0.5"/>
+  <text x="48" y="1020" fill="#9c9a92" font-size="10">매매 / 실행 엔진</text>
+
+  <!-- 중간 범례 (실행 주기 표) -->
+  <text x="290" y="940" fill="#9c9a92" font-size="10">국내 주식팀</text><text x="440" y="940" fill="#5dcaa5" font-size="10">장중 5분</text>
+  <text x="290" y="960" fill="#9c9a92" font-size="10">국내 시황팀</text><text x="440" y="960" fill="#5dcaa5" font-size="10">30분 주기</text>
+  <text x="290" y="980" fill="#9c9a92" font-size="10">글로벌 시황팀</text><text x="440" y="980" fill="#5dcaa5" font-size="10">24/7 1시간</text>
+  <text x="290" y="1000" fill="#9c9a92" font-size="10">위기 관리팀</text><text x="440" y="1000" fill="#b07ee0" font-size="10">15분 + 즉시</text>
+  <text x="290" y="1020" fill="#9c9a92" font-size="10">매매팀 · 포지션 감시</text><text x="440" y="1020" fill="#85b7eb" font-size="10">신호 즉시 · 1~2분</text>
+
+  <!-- 오른쪽 범례 -->
+  <rect x="546" y="930" width="10" height="10" rx="2" fill="#1a2a1a" stroke="#6ab04c" stroke-width="0.5"/>
+  <text x="562" y="940" fill="#9c9a92" font-size="10">연구 엔진 (배치)</text>
+
+  <rect x="546" y="950" width="10" height="10" rx="2" fill="#2a1a0a" stroke="#e6a817" stroke-width="0.5"/>
+  <text x="562" y="960" fill="#9c9a92" font-size="10">리포트 엔진 (배치)</text>
+
+  <rect x="546" y="970" width="10" height="10" rx="2" fill="#27500a" stroke="#97c459" stroke-width="0.5"/>
+  <text x="562" y="980" fill="#9c9a92" font-size="10">피드백 엔진</text>
+
+  <text x="546" y="1000" fill="#9c9a92" font-size="10">KIS 게이트웨이</text><text x="688" y="1000" fill="#6a9aac" font-size="10">상시 대기</text>
+  <text x="546" y="1020" fill="#9c9a92" font-size="10">공유 DB</text><text x="688" y="1020" fill="#6b6b68" font-size="10">SQLite · 전 팀 공유</text>
+
+  <!-- 하단 타이틀 -->
+  <text x="390" y="1052" text-anchor="middle" fill="#9c9a92" font-size="10" opacity=".4">DQT-workspace v0.2.1 — 10개 엔진 멀티팀 퀀트 자동매매 시스템</text>
+</svg>
