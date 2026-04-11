@@ -1,4 +1,19 @@
 .DS_Store
 __pycache__/
+**/__pycache__/
 .env
 *.pyc
+*.pyo
+
+# DB
+db/*.db
+db/*.db-wal
+db/*.db-shm
+
+# 로그
+logs/
+
+# 가상환경
+.venv/
+venv/
+env/

@@ -1,0 +1,47 @@
+"""
+main.py
+DQT-workspace 시스템 진입점.
+KIS 게이트웨이 기동 → DB 초기화 → 각 팀 엔진 순차 시작.
+"""
+
+from src.config.settings import settings
+from src.infra.database import init_db
+from src.infra.kis_gateway import KISGateway
+from src.utils.logger import get_logger
+
+logger = get_logger("main")
+
+
+def main() -> None:
+    logger.info("=" * 60)
+    logger.info("DQT-workspace 시스템 시작")
+    logger.info(f"KIS 모드: {settings.KIS_MODE.upper()}")
+    logger.info("=" * 60)
+
+    # 1. 환경 변수 검증
+    settings.validate()
+
+    # 2. DB 초기화 (스키마 적용)
+    init_db()
+
+    # 3. KIS 게이트웨이 기동 (싱글턴 — 가장 먼저)
+    gateway = KISGateway()
+    logger.info("KIS 게이트웨이 준비 완료")
+
+    # TODO: 각 팀 엔진 순차 기동 (팀 구현 완료 시 추가)
+    # from src.infra.universe import UniverseManager
+    # from src.infra.sentiment_cache import SentimentCache
+    # from src.teams.global_market.engine import GlobalMarketEngine
+    # from src.teams.domestic_market.engine import DomesticMarketEngine
+    # from src.teams.domestic_stock.engine import DomesticStockEngine
+    # from src.teams.risk.engine import RiskEngine
+    # from src.teams.position_monitor.engine import PositionMonitorEngine
+    # from src.teams.trading.engine import TradingEngine
+    # from src.teams.report.engine import ReportEngine
+    # from src.teams.research.engine import ResearchEngine
+
+    logger.info("시스템 준비 완료 — 팀 엔진 기동 대기 중")
+
+
+if __name__ == "__main__":
+    main()
