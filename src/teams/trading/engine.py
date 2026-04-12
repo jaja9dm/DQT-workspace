@@ -6,11 +6,18 @@ engine.py — 매매팀 메인 엔진
   Claude에 최종 매수 판단을 요청하고 KIS API로 주문을 실행한다.
 
 게이트 구조 (순서대로, 하나라도 실패 시 진입 차단):
+  Gate 0. 장 시작 오프닝 게이트 — 9:00 즉시 매수 vs 9:10 대기 판단 (Claude)
   Gate 1. 리스크 레벨 — Level 4↑이면 신규 진입 제한
   Gate 2. 글로벌 시황 — korea_market_outlook == 'negative'이면 차단
   Gate 3. 국내 시황 — market_score < -0.3이면 차단
   Gate 4. Hot List — DB에서 최신 Hot List 읽기
   Gate 5. Claude 최종 판단 — 매수 여부 + 예상 목표가·손절가
+
+오프닝 게이트 (Gate 0):
+  9:00 직후 첫 사이클에서 Claude가 시황을 평가.
+  "진짜 좋다" → 즉시 매수 허용.
+  "관망 필요" → 9:10까지 신규 매수 차단, 텔레그램 알림.
+  9:10 이후에는 시황 무관하게 매수 재개 (스케줄러가 강제 트리거).
 
 분할 매수 (3회):
   1차: 40% 즉시 실행
@@ -65,6 +72,10 @@ class TradingEngine:
         self._today_tickers: set[str] = set()   # 당일 이미 매수한 종목 (중복 방지)
         self._macd_reentry_ok: set[str] = set()  # MACD 조기손절 후 재진입 허용 종목
 
+        # 오프닝 게이트 관련
+        self._opening_gate_checked: bool = False  # 당일 오프닝 게이트 판단 완료 여부
+        self._buy_allowed_from: datetime | None = None  # 매수 허용 시작 시각 (None=즉시)
+
     def start(self) -> None:
         logger.info("매매팀 엔진 시작")
         self._thread.start()
@@ -86,6 +97,8 @@ class TradingEngine:
                     self._today_str = date.today().isoformat()
                     self._today_tickers.clear()
                     self._macd_reentry_ok.clear()
+                    self._opening_gate_checked = False
+                    self._buy_allowed_from = None
 
                 self.run_once()
             except Exception as e:
@@ -99,6 +112,22 @@ class TradingEngine:
         Returns:
             실행된 주문 목록
         """
+        # ── Gate 0: 오프닝 게이트 ───────────────
+        now = datetime.now()
+        if not self._opening_gate_checked:
+            # 첫 사이클에서 시황 평가 후 즉시 매수 or 9:10 대기 결정
+            self._opening_gate_checked = True
+            immediate = self._check_opening_gate()
+            if not immediate:
+                # 9:10 (09:10:00) 이후부터 매수 허용
+                self._buy_allowed_from = now.replace(hour=9, minute=10, second=0, microsecond=0)
+                logger.info(f"오프닝 게이트: 관망 — {self._buy_allowed_from.strftime('%H:%M')}부터 매수 허용")
+                return []
+
+        if self._buy_allowed_from and now < self._buy_allowed_from:
+            logger.debug(f"오프닝 게이트 대기 중 — {self._buy_allowed_from.strftime('%H:%M')}까지 신규 매수 차단")
+            return []
+
         # ── Gate 1: 리스크 레벨 ─────────────────
         risk = get_current_risk()
         level = risk.get("risk_level", 1)
@@ -208,6 +237,82 @@ class TradingEngine:
                 )
 
         return orders
+
+    # ──────────────────────────────────────────
+    # 오프닝 게이트 (Gate 0)
+    # ──────────────────────────────────────────
+
+    def _check_opening_gate(self) -> bool:
+        """
+        장 시작 직후 시황을 평가하여 즉시 매수 가능 여부를 반환.
+
+        Claude에게 현재 글로벌·국내 시황, 리스크 레벨을 종합하여 판단 요청.
+
+        Returns:
+            True  → 즉시 매수 허용 (시장이 진짜 좋음)
+            False → 9:10까지 관망 권고
+        """
+        from src.utils.notifier import notify
+
+        global_ctx  = _load_global_context()
+        market_ctx  = _load_market_context()
+        risk        = get_current_risk()
+        risk_level  = risk.get("risk_level", 3)
+        market_score = market_ctx.get("market_score", 0.0)
+        global_risk  = global_ctx.get("global_risk_score", 5)
+        outlook      = global_ctx.get("korea_market_outlook", "neutral")
+
+        prompt = f"""당신은 국내 주식 퀀트 트레이더입니다.
+오전 9시 장 시작 직후입니다. 지금 즉시 매수를 진행할지, 아니면 9시 10분까지 관망할지 판단하세요.
+
+## 현재 시황
+- 리스크 레벨: {risk_level}/5 (5가 최대 위험)
+- 글로벌 리스크 점수: {global_risk}/10
+- 한국 시장 전망: {outlook}
+- 국내 시황 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)
+
+## 즉시 매수 기준 (모두 충족 시 권고)
+- 리스크 레벨 ≤ 2
+- 글로벌 리스크 점수 ≤ 3
+- 국내 시황 점수 ≥ +0.3
+- 한국 시장 전망 positive
+
+## 주의
+9시 직후는 변동성이 크므로, 조건이 애매하면 관망(false)을 선택하세요.
+
+JSON만 응답:
+{{"immediate": <true|false>, "reason": "<근거 30자 이내>"}}"""
+
+        try:
+            response = _client.messages.create(
+                model=settings.CLAUDE_MODEL_MAIN,
+                max_tokens=128,
+                temperature=0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            raw = response.content[0].text.strip()
+            if "```" in raw:
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+            result = json.loads(raw)
+            immediate = bool(result.get("immediate", False))
+            reason    = result.get("reason", "")
+
+            if immediate:
+                msg = f"✅ <b>[오프닝 게이트]</b> 즉시 매수 허용\n{reason}"
+                logger.info(f"오프닝 게이트: 즉시 매수 — {reason}")
+            else:
+                msg = f"⏳ <b>[오프닝 게이트]</b> 9:10까지 관망\n{reason}\n(9:10 이후 자동 재개)"
+                logger.info(f"오프닝 게이트: 관망 — {reason}")
+
+            notify(msg)
+            return immediate
+
+        except Exception as e:
+            logger.warning(f"오프닝 게이트 Claude 판단 실패: {e} — 기본값 관망")
+            notify("⏳ <b>[오프닝 게이트]</b> Claude 판단 불가 — 9:10까지 관망 (기본값)")
+            return False
 
     # ──────────────────────────────────────────
     # Claude 매수 판단

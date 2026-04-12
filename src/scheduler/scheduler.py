@@ -127,6 +127,16 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=9, minute=0, timezone="Asia/Seoul"
         ), id="start_engines", name="실시간 엔진 기동")
 
+        # 9:10 — 장 시작 10분 재점검 (Hot List 강제 트리거 + 매매 재개)
+        s.add_job(self._market_open_recheck, CronTrigger(
+            day_of_week="mon-fri", hour=9, minute=10, timezone="Asia/Seoul"
+        ), id="open_recheck", name="9:10 장 시작 재점검")
+
+        # 15:10 — 오버나잇 보유 판단
+        s.add_job(self._overnight_judge, CronTrigger(
+            day_of_week="mon-fri", hour=15, minute=10, timezone="Asia/Seoul"
+        ), id="overnight_judge", name="15:10 오버나잇 판단")
+
         # 장 마감 — 실시간 엔진 정지
         s.add_job(self._stop_realtime_engines, CronTrigger(
             day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
@@ -206,6 +216,38 @@ class DQTScheduler:
             notify("📈 <b>장 시작</b> — 전체 엔진 활성화")
         except Exception as e:
             logger.error(f"실시간 엔진 기동 오류: {e}", exc_info=True)
+
+    def _market_open_recheck(self) -> None:
+        """09:10 — 장 시작 10분 재점검. 오프닝 관망 해제 + Hot List 재스캔."""
+        logger.info("09:10 장 시작 재점검 실행")
+        try:
+            # 오프닝 게이트 해제 (이제 무조건 매수 허용)
+            if self._trading is not None:
+                self._trading._buy_allowed_from = None
+                logger.info("오프닝 게이트 해제 — 매수 재개")
+
+            # 국내 주식팀 즉시 스캔 (Hot List 갱신)
+            if self._domestic_stock is not None:
+                self._domestic_stock.run_once()
+                logger.info("09:10 Hot List 재스캔 완료")
+
+            # 매매팀 즉시 1회 실행 (갱신된 Hot List 기반 매수 판단)
+            if self._trading is not None:
+                self._trading.run_once()
+                logger.info("09:10 매매팀 재실행 완료")
+
+            notify("🔄 <b>[09:10 재점검]</b> Hot List 재스캔 + 매수 재개")
+        except Exception as e:
+            logger.error(f"09:10 재점검 오류: {e}", exc_info=True)
+
+    def _overnight_judge(self) -> None:
+        """15:10 — 오버나잇 보유 판단."""
+        logger.info("15:10 오버나잇 판단 실행")
+        try:
+            from src.teams.trading.overnight import evaluate_overnight
+            evaluate_overnight()
+        except Exception as e:
+            logger.error(f"오버나잇 판단 오류: {e}", exc_info=True)
 
     def _stop_realtime_engines(self) -> None:
         """15:35 — 실시간 엔진 정지 (역순)."""
