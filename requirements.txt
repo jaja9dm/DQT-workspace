@@ -10,7 +10,8 @@ python-dotenv>=1.0
 # ── 국내 데이터 ──────────────────────────────────
 FinanceDataReader>=0.9
 pandas>=2.2
-pandas-ta>=0.3
+# pandas-ta: Python 3.10+ 필요. 미설치 시 수동 계산 폴백 자동 적용
+# pandas-ta>=0.3
 
 # ── 글로벌 데이터 ─────────────────────────────────
 yfinance>=0.2

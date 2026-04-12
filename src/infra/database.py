@@ -3,6 +3,7 @@ database.py
 공유 DB (SQLite) 연결 및 초기화 모듈.
 모든 팀이 이 모듈을 통해 DB에 접근한다.
 """
+from __future__ import annotations
 
 import sqlite3
 from contextlib import contextmanager

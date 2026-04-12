@@ -8,6 +8,7 @@ KIS(한국투자증권) API 게이트웨이 — 싱글턴 서비스.
 - 우선순위: 포지션 감시 > 매매팀 > 수집팀
 - 모의/실전 전환: KIS_MODE 환경변수 1개로 전환
 """
+from __future__ import annotations
 
 import json
 import threading
@@ -30,6 +31,10 @@ class Priority(IntEnum):
     POSITION_MONITOR = 1  # 포지션 감시 (가장 우선)
     TRADING = 2           # 매매팀
     DATA_COLLECTION = 3   # 수집팀
+
+
+# 하위 호환 alias
+RequestPriority = Priority
 
 
 @dataclass(order=True)
@@ -79,7 +84,7 @@ class KISGateway:
         self._mode = settings.KIS_MODE
 
         self._access_token: str = ""
-        self._token_expires_at: datetime = datetime.min
+        self._token_expires_at: datetime = datetime(2000, 1, 1)  # 항상 만료 상태로 초기화
         self._token_lock = threading.Lock()
 
         # 우선순위 요청 큐
@@ -109,6 +114,25 @@ class KISGateway:
     # ──────────────────────────────────────────
     # 공개 API
     # ──────────────────────────────────────────
+
+    def request(
+        self,
+        method: str,
+        path: str,
+        tr_id: str,
+        params: dict | None = None,
+        body: dict | None = None,
+        priority: Priority = Priority.DATA_COLLECTION,
+    ) -> dict:
+        """공개 요청 메서드 — 커스텀 API 경로 직접 호출."""
+        return self._request(
+            method=method,
+            path=path,
+            tr_id=tr_id,
+            params=params,
+            body=body,
+            priority=priority,
+        )
 
     def get_price(self, ticker: str, priority: Priority = Priority.DATA_COLLECTION) -> dict:
         """
@@ -274,7 +298,11 @@ class KISGateway:
                 result = self._call_api(req, token)
                 req.result = result
             except Exception as e:
-                logger.error(f"KIS API 오류: {e}")
+                msg = str(e)
+                if "500" in msg or "장외시간" in msg:
+                    logger.debug(f"KIS API 서버 오류 (장외시간): {e}")
+                else:
+                    logger.error(f"KIS API 오류: {e}")
                 req.error = e
             finally:
                 req.event.set()
@@ -303,12 +331,17 @@ class KISGateway:
         }
         url = self._base_url + req.path
 
-        for attempt in range(3):
+        max_retries = 3
+        for attempt in range(max_retries):
             try:
                 if req.method == "GET":
                     resp = requests.get(url, headers=headers, params=req.params, timeout=10)
                 else:
                     resp = requests.post(url, headers=headers, json=req.body, timeout=10)
+
+                # 500 서버 오류 — 장외시간 등으로 재시도 의미 없음 → 즉시 실패
+                if resp.status_code == 500:
+                    raise RuntimeError(f"KIS API 서버 오류 (500) — 장외시간 가능성")
 
                 resp.raise_for_status()
                 data = resp.json()
@@ -318,12 +351,14 @@ class KISGateway:
 
                 return data
 
+            except RuntimeError:
+                raise  # 500 오류 및 rt_cd 오류는 즉시 전파
             except requests.exceptions.RequestException as e:
-                if attempt < 2:
-                    logger.warning(f"KIS API 재시도 {attempt + 1}/3: {e}")
+                if attempt < max_retries - 1:
+                    logger.warning(f"KIS API 재시도 {attempt + 1}/{max_retries}: {e}")
                     time.sleep(1 * (attempt + 1))
                 else:
-                    raise RuntimeError(f"KIS API 3회 실패: {e}") from e
+                    raise RuntimeError(f"KIS API {max_retries}회 실패: {e}") from e
 
         return {}  # unreachable
 
