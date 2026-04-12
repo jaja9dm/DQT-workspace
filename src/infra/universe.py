@@ -29,6 +29,7 @@ import pandas as pd
 
 from src.infra.database import execute, fetch_all, get_conn
 from src.utils.logger import get_logger
+from src.utils.retry import retry_call
 
 logger = get_logger(__name__)
 
@@ -253,9 +254,9 @@ class UniverseManager:
 # ──────────────────────────────────────────────
 
 def _fetch_kospi200(today: date) -> list[tuple]:
-    """FinanceDataReader로 KOSPI 시가총액 상위 200 종목 수집."""
+    """FinanceDataReader로 KOSPI 시가총액 상위 200 종목 수집 (재시도 포함)."""
     try:
-        df = fdr.StockListing("KOSPI")
+        df = retry_call(fdr.StockListing, "KOSPI", max_attempts=3, base_delay=3.0)
         # Marcap(시가총액) 내림차순 정렬 후 상위 200
         sort_col = "Marcap" if "Marcap" in df.columns else ("MktCap" if "MktCap" in df.columns else None)
         if sort_col:
@@ -272,9 +273,9 @@ def _fetch_kospi200(today: date) -> list[tuple]:
 
 
 def _fetch_kosdaq150(today: date) -> list[tuple]:
-    """FinanceDataReader로 KOSDAQ 시가총액 상위 150 종목 수집."""
+    """FinanceDataReader로 KOSDAQ 시가총액 상위 150 종목 수집 (재시도 포함)."""
     try:
-        df = fdr.StockListing("KOSDAQ")
+        df = retry_call(fdr.StockListing, "KOSDAQ", max_attempts=3, base_delay=3.0)
         sort_col = "Marcap" if "Marcap" in df.columns else ("MktCap" if "MktCap" in df.columns else None)
         if sort_col:
             df = df.sort_values(sort_col, ascending=False)
@@ -297,7 +298,7 @@ def _fetch_volume_top100(today: date, exclude: set[str]) -> list[tuple]:
     try:
         rows = []
         for market in ("KOSPI", "KOSDAQ"):
-            df = fdr.StockListing(market)
+            df = retry_call(fdr.StockListing, market, max_attempts=3, base_delay=3.0)
             if "Amount" not in df.columns:
                 # 거래대금 컬럼 없을 경우 Volume 대체
                 sort_col = "Volume" if "Volume" in df.columns else None

@@ -21,6 +21,7 @@ import FinanceDataReader as fdr
 import pandas as pd
 
 from src.infra.kis_gateway import KISGateway, RequestPriority
+from src.utils.retry import retry_call, with_retry
 from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -145,10 +146,13 @@ def _fetch_index_from_kis(market: str) -> IndexData:
 
 
 def _fetch_index_fallback(market: str) -> IndexData:
-    """KIS API 실패 시 FinanceDataReader로 전일 종가 대체."""
+    """KIS API 실패 시 FinanceDataReader로 전일 종가 대체 (재시도 포함)."""
     try:
         symbol = "KS11" if market == "KOSPI" else "KQ11"
-        df = fdr.DataReader(symbol, datetime.now().date() - timedelta(days=5))
+        df = retry_call(
+            fdr.DataReader, symbol, datetime.now().date() - timedelta(days=5),
+            max_attempts=3, base_delay=3.0,
+        )
         if df.empty:
             return IndexData(name=market)
         last = df.iloc[-1]
@@ -211,14 +215,14 @@ def _fetch_investor_flow(market: str) -> InvestorFlow:
 
 def _fetch_trend(market: str, current_price: float) -> TrendData:
     """
-    FinanceDataReader로 60일 지수 데이터 조회 → 이동평균·추세 계산.
+    FinanceDataReader로 60일 지수 데이터 조회 → 이동평균·추세 계산 (재시도 포함).
     market: 'KOSPI' | 'KOSDAQ'
     """
     symbol = "KS11" if market == "KOSPI" else "KQ11"
     try:
         end = datetime.now().date()
         start = end - timedelta(days=100)  # 60일 MA 계산용 여유분
-        df = fdr.DataReader(symbol, start, end)
+        df = retry_call(fdr.DataReader, symbol, start, end, max_attempts=3, base_delay=3.0)
         if df.empty or len(df) < 5:
             return TrendData()
 
@@ -251,11 +255,15 @@ def _fetch_trend(market: str, current_price: float) -> TrendData:
 # ── 네이버금융 뉴스 수집 ──────────────────────────────────────
 
 def _fetch_naver_market_news(max_items: int = 10) -> list[MarketNews]:
-    """네이버금융 국내 증시 뉴스 최신 목록 수집 (BeautifulSoup 없이 regex)."""
-    try:
+    """네이버금융 국내 증시 뉴스 최신 목록 수집 (BeautifulSoup 없이 regex). 재시도 포함."""
+    @with_retry(max_attempts=3, base_delay=3.0, max_delay=15.0)
+    def _download() -> bytes:
         req = Request(_NAVER_MARKET_NEWS_URL, headers=_HEADERS)
         with urlopen(req, timeout=10) as resp:
-            raw = resp.read()
+            return resp.read()
+
+    try:
+        raw = _download()
         html = raw.decode("euc-kr", errors="replace")
 
         # 뉴스 링크·제목 추출 패턴

@@ -12,6 +12,7 @@ KIS API는 반드시 KISGateway 경유.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -21,8 +22,15 @@ import pandas as pd
 from src.infra.kis_gateway import KISGateway, RequestPriority
 from src.infra.universe import UniverseManager
 from src.utils.logger import get_logger
+from src.utils.retry import retry_call
 
 logger = get_logger(__name__)
+
+# 사이클 ID: 현재 시각을 5분 단위로 내림한 문자열 (재시작 후 이어받기 기준)
+def _cycle_id() -> str:
+    now = datetime.now()
+    minute_floor = (now.minute // 5) * 5
+    return now.strftime(f"%Y%m%d%H{minute_floor:02d}")
 
 # KIS API 경로
 _KIS_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
@@ -148,7 +156,8 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
     try:
         end = datetime.now().date()
         start = end - timedelta(days=120)  # 60일 지표 계산용 여유분
-        df = fdr.DataReader(ticker, start, end)
+        # FDR 조회 실패 시 최대 3회 재시도
+        df = retry_call(fdr.DataReader, ticker, start, end, max_attempts=3, base_delay=2.0)
         if df.empty or len(df) < 20:
             return _default
 
@@ -311,18 +320,53 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     return snap
 
 
-# ── 통합 수집 ─────────────────────────────────────────────────
+# ── 재시도 포함 단일 종목 스캔 ──────────────────────────────
+
+def _scan_ticker_safe(ticker: str, name: str, max_attempts: int = 3) -> StockSnapshot:
+    """
+    재시도 포함 단일 종목 스캔.
+    네트워크 오류 시 지수 백오프로 최대 max_attempts회 시도.
+    최종 실패 시 error 필드를 채운 빈 스냅샷 반환 (예외 전파 안 함).
+    """
+    delay = 2.0
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _scan_ticker(ticker, name)
+        except Exception as e:
+            if attempt == max_attempts:
+                logger.warning(f"종목 스캔 최종 실패 [{ticker}]: {e}")
+                snap = StockSnapshot(ticker=ticker, name=name)
+                snap.error = str(e)[:200]
+                return snap
+            logger.warning(
+                f"종목 스캔 재시도 [{ticker}] ({attempt}/{max_attempts}), "
+                f"{delay:.1f}초 후: {e}"
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 15.0)
+    return StockSnapshot(ticker=ticker, name=name)
+
+
+# ── 통합 수집 (체크포인트 + 재시도) ──────────────────────────
 
 def collect(max_workers: int = 10) -> UniverseScan:
     """
     유니버스 전체 스캔.
 
+    체크포인트 기반 중단 재개:
+      - 5분 단위 cycle_id로 현재 사이클을 식별
+      - 이미 완료된 종목은 DB fetch_checkpoint에서 확인해 건너뜀
+      - 각 종목 완료 후 즉시 DB에 기록 → 재시작 시 이어받기 가능
+
     KIS API 레이트 리밋(10 req/s) 안에서 순차 처리.
-    max_workers 설정은 향후 병렬화 시 사용.
 
     Returns:
         UniverseScan 인스턴스
     """
+    from datetime import date as _date
+    from src.infra.database import execute as db_exec, fetch_all
+
+    cycle = _cycle_id()
     um = UniverseManager()
     tickers = um.get_today()
 
@@ -335,20 +379,46 @@ def collect(max_workers: int = 10) -> UniverseScan:
         logger.warning("유니버스가 비어 있음 — 스캔 건너뜀")
         return scan
 
-    logger.info(f"종목 스캔 시작 — {len(tickers)}종목")
+    # 이번 사이클에서 이미 완료된 종목 확인 (중단 후 재시작 시 이어받기)
+    done_rows = fetch_all(
+        "SELECT item_key FROM fetch_checkpoint "
+        "WHERE cycle_id = ? AND scan_type = 'domestic_stock' AND status = 'done'",
+        (cycle,),
+    )
+    done_set = {r["item_key"] for r in done_rows}
 
-    # 유니버스에서 이름 가져오기
-    from src.infra.database import fetch_all
-    from datetime import date
+    # 이름 맵
     rows = fetch_all(
         "SELECT ticker, name FROM universe WHERE active_date = ?",
-        (str(date.today()),),
+        (str(_date.today()),),
     )
     name_map = {r["ticker"]: r["name"] for r in rows}
 
-    for ticker in tickers:
-        snap = _scan_ticker(ticker, name_map.get(ticker, ""))
+    remaining = [t for t in tickers if t not in done_set]
+    if done_set:
+        logger.info(
+            f"[체크포인트 복원] 사이클 {cycle} — "
+            f"완료 {len(done_set)}개 건너뜀, 남은 {len(remaining)}개 재개"
+        )
+    logger.info(f"종목 스캔 시작 — {len(remaining)}종목")
+
+    for ticker in remaining:
+        snap = _scan_ticker_safe(ticker, name_map.get(ticker, ""))
         scan.snapshots.append(snap)
+
+        # 체크포인트 기록 (종목 완료마다 즉시 저장)
+        status = "error" if snap.error else "done"
+        try:
+            db_exec(
+                """
+                INSERT OR REPLACE INTO fetch_checkpoint
+                    (cycle_id, scan_type, item_key, status, error_msg, fetched_at)
+                VALUES (?, 'domestic_stock', ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (cycle, ticker, status, snap.error[:200] if snap.error else None),
+            )
+        except Exception as e:
+            logger.debug(f"체크포인트 저장 실패 [{ticker}]: {e}")
 
     # 후보 필터: 신호가 하나라도 있는 종목
     scan.candidates = [
@@ -363,4 +433,15 @@ def collect(max_workers: int = 10) -> UniverseScan:
         f"가격급등 {sum(1 for s in scan.snapshots if s.is_price_surge)}개, "
         f"BB돌파 {sum(1 for s in scan.snapshots if s.is_breakout)}개)"
     )
+
+    # 오래된 체크포인트 정리 (오늘 이전 것 삭제, DB 비대화 방지)
+    try:
+        today_prefix = datetime.now().strftime("%Y%m%d")
+        db_exec(
+            "DELETE FROM fetch_checkpoint WHERE cycle_id < ? AND scan_type = 'domestic_stock'",
+            (today_prefix,),
+        )
+    except Exception:
+        pass
+
     return scan

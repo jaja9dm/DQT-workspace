@@ -188,8 +188,25 @@ CREATE TABLE IF NOT EXISTS intraday_macd_signal (
 );
 
 -- ────────────────────────────────────────
+-- 데이터 수집 체크포인트
+-- 450종목 스캔 중단 시 재시작 후 이어서 진행
+-- cycle_id: 5분 단위 타임스탬프 (YYYYMMDDHHMM)
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS fetch_checkpoint (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    cycle_id   TEXT NOT NULL,           -- 사이클 ID (YYYYMMDDHHMM 5분 단위)
+    scan_type  TEXT NOT NULL,           -- domestic_stock | universe | global_market
+    item_key   TEXT NOT NULL,           -- 종목코드 또는 심볼
+    status     TEXT NOT NULL DEFAULT 'done',  -- done | error
+    error_msg  TEXT,
+    fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(cycle_id, scan_type, item_key)
+);
+
+-- ────────────────────────────────────────
 -- 인덱스
 -- ────────────────────────────────────────
+CREATE INDEX IF NOT EXISTS idx_checkpoint_cycle   ON fetch_checkpoint(cycle_id, scan_type);
 CREATE INDEX IF NOT EXISTS idx_hot_list_created   ON hot_list(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_trades_date        ON trades(date DESC);
 CREATE INDEX IF NOT EXISTS idx_trades_ticker      ON trades(ticker);

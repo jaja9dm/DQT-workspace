@@ -23,6 +23,7 @@ import yfinance as yf
 
 from src.config.settings import settings
 from src.utils.logger import get_logger
+from src.utils.retry import with_retry
 
 logger = get_logger(__name__)
 
@@ -109,19 +110,24 @@ class GlobalMarketData:
 def _fetch_change_pct(ticker: str) -> tuple[float, float]:
     """
     yfinance로 현재가와 전일 대비 등락률(%) 반환.
+    네트워크 오류 시 최대 3회 재시도.
 
     Returns:
         (current_price, change_pct)
     """
-    try:
+    @with_retry(max_attempts=3, base_delay=3.0, max_delay=15.0)
+    def _inner() -> tuple[float, float]:
         t = yf.Ticker(ticker)
         info = t.fast_info
         price = float(info.last_price or 0)
         prev_close = float(info.previous_close or price)
         change_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
         return round(price, 4), round(change_pct, 3)
+
+    try:
+        return _inner()
     except Exception as e:
-        logger.warning(f"yfinance 오류 [{ticker}]: {e}")
+        logger.warning(f"yfinance 최종 실패 [{ticker}]: {e}")
         return 0.0, 0.0
 
 
