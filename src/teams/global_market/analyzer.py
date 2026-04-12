@@ -123,6 +123,8 @@ def analyze(data: GlobalMarketData) -> dict:
         return _fallback_from_vix(data.vix)
     except Exception as e:
         logger.error(f"Claude API 오류: {e}")
+        from src.utils.notifier import check_claude_error
+        check_claude_error(e, "글로벌 시황")
         return _fallback_from_vix(data.vix)
 
 

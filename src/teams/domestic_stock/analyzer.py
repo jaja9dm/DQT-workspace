@@ -148,6 +148,8 @@ def analyze(
         return _fallback_hot_list(candidates_sorted)
     except Exception as e:
         logger.error(f"Claude API 오류: {e}")
+        from src.utils.notifier import check_claude_error
+        check_claude_error(e, "국내 주식 Hot List")
         return _fallback_hot_list(candidates_sorted)
 
 

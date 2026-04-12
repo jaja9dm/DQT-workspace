@@ -124,6 +124,8 @@ def analyze(data: DomesticMarketData, global_risk_score: int = 5) -> dict:
         return _fallback_from_index(data)
     except Exception as e:
         logger.error(f"Claude API 오류: {e}")
+        from src.utils.notifier import check_claude_error
+        check_claude_error(e, "국내 시황")
         return _fallback_from_index(data)
 
 

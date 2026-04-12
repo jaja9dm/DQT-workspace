@@ -170,6 +170,36 @@ def notify_error(source: str, message: str) -> bool:
     return notify(text)
 
 
+def check_claude_error(e: Exception, source: str) -> None:
+    """
+    Claude API 예외를 분석하여 잔액 부족 등 치명적 오류는 텔레그램으로 즉시 알림.
+
+    Usage:
+        except Exception as e:
+            check_claude_error(e, "글로벌 시황")
+            return fallback()
+    """
+    msg = str(e).lower()
+
+    # 잔액 부족 (402 / credit balance)
+    if any(kw in msg for kw in ("credit", "billing", "402", "payment", "insufficient")):
+        notify(
+            f"💳 <b>[Claude 잔액 부족]</b>\n"
+            f"Anthropic API 크레딧이 소진되었습니다.\n"
+            f"출처: {source}\n"
+            f"→ console.anthropic.com 에서 충전 필요\n"
+            f"<i>{datetime.now().strftime('%H:%M:%S')}</i>"
+        )
+    # 인증 오류 (401 / invalid key)
+    elif any(kw in msg for kw in ("401", "authentication", "invalid api key", "permission")):
+        notify(
+            f"🔑 <b>[Claude 인증 오류]</b>\n"
+            f"API 키가 유효하지 않습니다.\n"
+            f"출처: {source}\n"
+            f"<i>{datetime.now().strftime('%H:%M:%S')}</i>"
+        )
+
+
 # ── 내부 발송 ─────────────────────────────────────────────────
 
 def _send(payload: dict) -> bool:

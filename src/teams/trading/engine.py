@@ -260,6 +260,8 @@ class TradingEngine:
             return json.loads(raw)
         except Exception as e:
             logger.error(f"Claude 매수 판단 오류 [{ticker}]: {e}")
+            from src.utils.notifier import check_claude_error
+            check_claude_error(e, f"매매팀 [{ticker}]")
             return {"buy": False, "reason": "Claude 오류", "target_pct": 5.0, "stop_pct": 5.0}
 
     # ──────────────────────────────────────────
