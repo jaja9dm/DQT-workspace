@@ -78,6 +78,10 @@ class StockSnapshot:
     is_breakout: bool = False      # 볼린저밴드 상단 돌파
     above_ma20: bool = False
 
+    # MACD 일봉 상태
+    macd_hist_prev: float = 0.0   # 직전 봉 히스토그램 (Pre-Cross 감지용)
+    daily_macd_ok: bool = False   # 일봉 MACD 강세 여부 (True → 매매 허용)
+
     error: str = ""               # 수집 오류 메시지
 
 
@@ -135,6 +139,7 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
     """
     _default = {
         "rsi": 50.0, "macd": 0.0, "macd_signal": 0.0, "macd_hist": 0.0,
+        "macd_hist_prev": 0.0,
         "bb_upper": 0.0, "bb_mid": 0.0, "bb_lower": 0.0, "bb_position": 0.5,
         "ma5": 0.0, "ma20": 0.0, "ma60": 0.0,
         "volume_ratio": 0.0, "is_breakout": False, "above_ma20": False,
@@ -174,8 +179,9 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
                 macd = float(macd_df.iloc[-1, 0])           # MACD
                 macd_signal = float(macd_df.iloc[-1, 2])    # Signal
                 macd_hist = float(macd_df.iloc[-1, 1])      # Histogram
+                macd_hist_prev = float(macd_df.iloc[-2, 1]) if len(macd_df) >= 2 else macd_hist
             else:
-                macd = macd_signal = macd_hist = 0.0
+                macd = macd_signal = macd_hist = macd_hist_prev = 0.0
 
             # 볼린저밴드
             bb_df = ta.bbands(df_ta["close"], length=_BB_PERIOD, std=_BB_STD)
@@ -189,7 +195,7 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
         except ImportError:
             # pandas-ta 미설치 — 수동 계산
             rsi = _calc_rsi_manual(close)
-            macd, macd_signal, macd_hist = _calc_macd_manual(close)
+            macd, macd_signal, macd_hist, macd_hist_prev = _calc_macd_manual(close)
             bb_upper, bb_mid, bb_lower = _calc_bb_manual(close)
 
         # BB 위치 (0~1)
@@ -203,6 +209,7 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
             "macd": round(macd, 4) if not _isnan(macd) else 0.0,
             "macd_signal": round(macd_signal, 4) if not _isnan(macd_signal) else 0.0,
             "macd_hist": round(macd_hist, 4) if not _isnan(macd_hist) else 0.0,
+            "macd_hist_prev": round(macd_hist_prev, 4) if not _isnan(macd_hist_prev) else 0.0,
             "bb_upper": round(bb_upper, 2) if not _isnan(bb_upper) else 0.0,
             "bb_mid": round(bb_mid, 2) if not _isnan(bb_mid) else 0.0,
             "bb_lower": round(bb_lower, 2) if not _isnan(bb_lower) else 0.0,
@@ -232,13 +239,14 @@ def _calc_rsi_manual(close: pd.Series) -> float:
     return float(val) if not _isnan(val) else 50.0
 
 
-def _calc_macd_manual(close: pd.Series) -> tuple[float, float, float]:
+def _calc_macd_manual(close: pd.Series) -> tuple[float, float, float, float]:
     ema_fast = close.ewm(span=_MACD_FAST, adjust=False).mean()
     ema_slow = close.ewm(span=_MACD_SLOW, adjust=False).mean()
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=_MACD_SIGNAL, adjust=False).mean()
     hist = macd_line - signal_line
-    return float(macd_line.iloc[-1]), float(signal_line.iloc[-1]), float(hist.iloc[-1])
+    hist_prev = float(hist.iloc[-2]) if len(hist) >= 2 else float(hist.iloc[-1])
+    return float(macd_line.iloc[-1]), float(signal_line.iloc[-1]), float(hist.iloc[-1]), hist_prev
 
 
 def _calc_bb_manual(close: pd.Series) -> tuple[float, float, float]:
@@ -275,6 +283,7 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.macd = ind["macd"]
     snap.macd_signal = ind["macd_signal"]
     snap.macd_hist = ind["macd_hist"]
+    snap.macd_hist_prev = ind["macd_hist_prev"]
     snap.bb_upper = ind["bb_upper"]
     snap.bb_mid = ind["bb_mid"]
     snap.bb_lower = ind["bb_lower"]
@@ -285,6 +294,15 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.volume_ratio = ind["volume_ratio"]
     snap.is_breakout = ind["is_breakout"]
     snap.above_ma20 = ind["above_ma20"]
+
+    # 일봉 MACD 강세 여부 (is_daily_macd_bullish 유틸 사용)
+    from src.utils.macd import is_daily_macd_bullish
+    snap.daily_macd_ok = is_daily_macd_bullish(
+        macd_val=snap.macd,
+        signal_val=snap.macd_signal,
+        hist_val=snap.macd_hist,
+        prev_hist_val=snap.macd_hist_prev,
+    )
 
     # 3. 신호 플래그
     snap.is_volume_surge = snap.volume_ratio >= VOLUME_SURGE_RATIO

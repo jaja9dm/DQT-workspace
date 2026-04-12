@@ -152,6 +152,31 @@ class PositionMonitorEngine:
         avg_price = pos["avg_price"]
         partial_sold = pos.get("partial_sold", 0)
 
+        # ── MACD 조기 손절 (최우선) ─────────────
+        if settings.MACD_EARLY_EXIT_ENABLED:
+            from src.teams.intraday_macd.engine import get_latest_macd_signal
+            macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
+            min_loss = settings.MACD_EARLY_EXIT_MIN_LOSS_PCT
+            if macd_sig == "sell_pre" and pnl_pct <= -min_loss:
+                logger.warning(
+                    f"[MACD 조기손절] {ticker} | MACD 역행 + 손익 {pnl_pct:+.2f}% | "
+                    f"기준 -{min_loss:.1f}% | {quantity}주 전량 청산"
+                )
+                _delete_trailing_stop(ticker)
+                from src.utils.notifier import notify
+                notify(
+                    f"⚡ <b>[MACD 조기손절]</b> {ticker}\n"
+                    f"분봉 MACD 역행 감지 + 손익 {pnl_pct:+.2f}%\n"
+                    f"{quantity}주 즉시 청산"
+                )
+                return self._place_sell(
+                    ticker=ticker,
+                    quantity=quantity,
+                    current_price=current_price,
+                    action="stop_loss",
+                    reason=f"MACD 조기손절 (sell_pre, 손익 {pnl_pct:+.2f}%)",
+                )
+
         # ── 트레일링 스톱 ────────────────────────
         ts = _load_trailing_stop(ticker)
         if ts:

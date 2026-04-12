@@ -170,6 +170,24 @@ CREATE TABLE IF NOT EXISTS trailing_stop (
 );
 
 -- ────────────────────────────────────────
+-- 장중 MACD 신호: 분봉 MACD Pre-Cross 감지 결과
+-- IntradayMACDEngine이 3분 주기로 기록
+-- TradingEngine·PositionMonitor가 참조
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS intraday_macd_signal (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    ticker     TEXT NOT NULL,
+    signal     TEXT NOT NULL,   -- buy_pre | sell_pre | hold
+    hist_3m    REAL,            -- 3분봉 마지막 히스토그램
+    hist_5m    REAL,            -- 5분봉 마지막 히스토그램
+    macd_3m    REAL,
+    signal_3m  REAL,
+    macd_5m    REAL,
+    signal_5m  REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
 -- 인덱스
 -- ────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_hot_list_created   ON hot_list(created_at DESC);

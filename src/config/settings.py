@@ -60,8 +60,8 @@ class Settings:
     POSITION_MAX_HOLD_DAYS: int = int(os.getenv("POSITION_MAX_HOLD_DAYS", "5"))
 
     # ── 트레일링 스톱 ─────────────────────────────
-    # 초기 손절선: 매수가 대비 -N% (손절 하한)
-    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "10.0"))
+    # 초기 손절선: 매수가 대비 -N% (.env에서 조정 가능 — 권장 5~10%)
+    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "5.0"))
     # 손절선 올리기 시작 조건: 매수가 대비 +N% 이상 수익 시
     TRAILING_TRIGGER_PCT: float = float(os.getenv("TRAILING_TRIGGER_PCT", "10.0"))
     # 손절선 위치: 현재가 대비 -N% (트레일링 간격)
@@ -70,6 +70,16 @@ class Settings:
     LADDER_TRIGGER_PCT: float = float(os.getenv("LADDER_TRIGGER_PCT", "20.0"))
     # 사다리 매수 수량 비율 (기존 보유 수량의 N배)
     LADDER_QTY_RATIO: float = float(os.getenv("LADDER_QTY_RATIO", "1.0"))
+
+    # ── MACD 전략 파라미터 ─────────────────────────
+    # 일봉 MACD 필터: True이면 일봉 MACD 비강세 종목 Hot List 제외
+    MACD_DAILY_FILTER: bool = os.getenv("MACD_DAILY_FILTER", "true").lower() == "true"
+    # Pre-Cross 감지: 히스토그램이 N봉 연속 수렴 시 예측 신호 발생
+    MACD_HIST_CONV_BARS: int = int(os.getenv("MACD_HIST_CONV_BARS", "2"))
+    # MACD 조기 손절: True이면 포지션 진입 후 MACD 역행 시 즉시 청산
+    MACD_EARLY_EXIT_ENABLED: bool = os.getenv("MACD_EARLY_EXIT_ENABLED", "true").lower() == "true"
+    # MACD 조기 손절 발동 최소 손실률 (이 이상 손실 + MACD 역행 시 청산)
+    MACD_EARLY_EXIT_MIN_LOSS_PCT: float = float(os.getenv("MACD_EARLY_EXIT_MIN_LOSS_PCT", "0.5"))
 
     def validate(self) -> None:
         """필수 환경 변수 누락 시 경고."""

@@ -170,9 +170,37 @@
 - `.env.example` ✅ — 트레일링 스톱 파라미터 주석 추가
 - `docs/planning/concept.md` ✅ — v0.2.3 포지션 감시 섹션 업데이트
 
+### 15단계 — MACD Pre-Cross 전략 + 장중 다회 매매 (2026-04-12)
+- **전략 변경 핵심**
+  - 일봉 MACD 필터: MACD 비강세 종목 Hot List 원천 제외
+  - 분봉 Pre-Cross 진입: 완전 크로스 전 히스토그램 수렴 시 선제 진입
+  - 손절 유동화: `TRAILING_INITIAL_STOP_PCT` 기본값 10% → 5% (`.env`에서 자유 조정)
+  - MACD 조기손절: 진입 후 분봉 MACD 역행 시 손절선 무관 즉시 청산
+  - 장중 재매수: MACD 조기손절 후 신호 복귀 시 동일 종목 재진입 허용
+- `src/utils/macd.py` ✅ (신규) — MACD 계산 + Pre-Cross 감지 유틸
+  - `calc_macd()`, `get_signal()`, `is_daily_macd_bullish()`, `aggregate_candles()`
+- `db/schema.sql` ✅ — `intraday_macd_signal` 테이블 추가
+- `src/infra/kis_gateway.py` ✅ — `get_minute_candles()` 추가 (KIS 분봉 API)
+- `src/teams/domestic_stock/collector.py` ✅
+  - `StockSnapshot.daily_macd_ok`, `macd_hist_prev` 필드 추가
+  - `_calc_macd_manual()` → 직전 히스토그램 함께 반환
+- `src/teams/domestic_stock/analyzer.py` ✅ — 일봉 MACD 필터 하드게이트 추가
+- `src/teams/intraday_macd/engine.py` ✅ (신규 팀) — 장중 MACD 모니터링
+  - 3분 주기, Hot List + 보유 포지션 대상
+  - 1분봉 → 3분봉·5분봉 집계 → Pre-Cross 감지 → DB 기록
+  - `get_latest_macd_signal(ticker)` — position_monitor·trading 팀 공용
+- `src/teams/position_monitor/engine.py` ✅ — MACD 조기손절 로직 추가 (최우선 체크)
+- `src/teams/trading/engine.py` ✅ — 재매수 로직 추가
+  - `_macd_reentry_ok` set으로 재진입 허용 종목 관리
+  - buy_pre 신호 복귀 + 포지션 없음 확인 후 재매수
+- `src/config/settings.py` ✅ — MACD 파라미터 4종 추가
+  - MACD_DAILY_FILTER, MACD_HIST_CONV_BARS, MACD_EARLY_EXIT_ENABLED, MACD_EARLY_EXIT_MIN_LOSS_PCT
+- `src/scheduler/scheduler.py` ✅ — IntradayMACDEngine 등록
+- `.env.example` ✅ — MACD 파라미터 주석 추가
+
 ---
 
-## 다음 할일 — 모의투자 통합 테스트
+## 다음 할일 — MACD 기반 통합 테스트
 
 ### Phase 1: 환경 설정 및 첫 실행
 1. `.env` 파일 생성 (`.env.example` 참고)
@@ -255,10 +283,16 @@ DQT-workspace/
 │       │   └── engine.py
 │       ├── trading/                 ✅ 완료
 │       │   └── engine.py
+│       ├── intraday_macd/           ✅ 완료 (15단계)
+│       │   └── engine.py
 │       ├── report/                  ✅ 완료
 │       │   └── engine.py
 │       └── research/                ✅ 완료
 │           └── engine.py
+│   └── utils/
+│       ├── logger.py
+│       ├── notifier.py
+│       └── macd.py                  ✅ 완료 (15단계)
 └── docs/
     └── planning/
         ├── concept.md               ← 상세 설계 문서 (v0.2.1)

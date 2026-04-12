@@ -63,6 +63,7 @@ class TradingEngine:
             name="trading-engine",
         )
         self._today_tickers: set[str] = set()   # 당일 이미 매수한 종목 (중복 방지)
+        self._macd_reentry_ok: set[str] = set()  # MACD 조기손절 후 재진입 허용 종목
 
     def start(self) -> None:
         logger.info("매매팀 엔진 시작")
@@ -84,6 +85,7 @@ class TradingEngine:
                 if date.today().isoformat() not in getattr(self, "_today_str", ""):
                     self._today_str = date.today().isoformat()
                     self._today_tickers.clear()
+                    self._macd_reentry_ok.clear()
 
                 self.run_once()
             except Exception as e:
@@ -127,7 +129,22 @@ class TradingEngine:
             return []
 
         # 이미 당일 매수한 종목 제외
-        candidates = [h for h in hot_list if h["ticker"] not in self._today_tickers]
+        # 단, MACD 조기손절 후 재진입 허용 종목(buy_pre 신호 복귀)은 재진입 가능
+        from src.teams.intraday_macd.engine import get_latest_macd_signal
+        candidates = []
+        for h in hot_list:
+            ticker = h["ticker"]
+            if ticker not in self._today_tickers:
+                candidates.append(h)
+            elif ticker in self._macd_reentry_ok:
+                # 재진입 허용 종목: MACD buy_pre 신호 확인 후 진입
+                macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
+                if macd_sig == "buy_pre" and not _has_open_position(ticker):
+                    logger.info(f"[MACD 재진입] {ticker} — MACD buy_pre 복귀, 재매수 허용")
+                    self._today_tickers.discard(ticker)   # 재진입 허용
+                    self._macd_reentry_ok.discard(ticker)
+                    candidates.append(h)
+
         if not candidates:
             return []
 
@@ -179,6 +196,7 @@ class TradingEngine:
             if result:
                 orders.append(result)
                 self._today_tickers.add(ticker)
+                self._macd_reentry_ok.add(ticker)  # 이 종목은 MACD 손절 후 재진입 허용
 
                 # 2차·3차 분할 매수 예약 (별도 스레드로 지연 실행)
                 self._schedule_tranches(
@@ -499,6 +517,12 @@ def _fetch_current_price(ticker: str) -> float:
         return float(resp.get("output", {}).get("stck_prpr", 0) or 0)
     except Exception:
         return 0.0
+
+
+def _has_open_position(ticker: str) -> bool:
+    """trailing_stop 테이블에 해당 종목 레코드가 있으면 보유 중으로 간주."""
+    row = fetch_one("SELECT ticker FROM trailing_stop WHERE ticker = ?", (ticker,))
+    return row is not None
 
 
 def _init_trailing_stop(ticker: str, entry_price: float) -> None:

@@ -73,6 +73,7 @@ class DQTScheduler:
         self._risk = None
         self._position_monitor = None
         self._trading = None
+        self._intraday_macd = None
 
     # ──────────────────────────────────────────
     # 스케줄러 기동
@@ -183,6 +184,7 @@ class DQTScheduler:
             from src.teams.risk.engine import RiskEngine
             from src.teams.position_monitor.engine import PositionMonitorEngine
             from src.teams.trading.engine import TradingEngine
+            from src.teams.intraday_macd.engine import IntradayMACDEngine
 
             self._global_market = GlobalMarketEngine()
             self._domestic_market = DomesticMarketEngine()
@@ -190,6 +192,7 @@ class DQTScheduler:
             self._risk = RiskEngine()
             self._position_monitor = PositionMonitorEngine()
             self._trading = TradingEngine()
+            self._intraday_macd = IntradayMACDEngine()
 
             self._global_market.start()
             self._domestic_market.start()
@@ -197,6 +200,7 @@ class DQTScheduler:
             self._risk.start()
             self._position_monitor.start()
             self._trading.start()
+            self._intraday_macd.start()
 
             logger.info("전체 실시간 엔진 기동 완료")
             notify("📈 <b>장 시작</b> — 전체 엔진 활성화")
@@ -207,6 +211,7 @@ class DQTScheduler:
         """15:35 — 실시간 엔진 정지 (역순)."""
         logger.info("실시간 엔진 정지 시작")
         for engine, name in [
+            (self._intraday_macd, "장중 MACD 모니터"),
             (self._trading, "매매팀"),
             (self._position_monitor, "포지션 감시"),
             (self._domestic_stock, "국내 주식팀"),
@@ -223,7 +228,7 @@ class DQTScheduler:
 
         # 참조 해제
         self._global_market = self._domestic_market = self._domestic_stock = None
-        self._risk = self._position_monitor = self._trading = None
+        self._risk = self._position_monitor = self._trading = self._intraday_macd = None
 
         notify("📉 <b>장 마감</b> — 실시간 엔진 정지")
 

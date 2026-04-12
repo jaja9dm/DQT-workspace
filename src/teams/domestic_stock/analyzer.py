@@ -55,18 +55,19 @@ def _build_prompt(
 
     return f"""당신은 국내 주식 퀀트 전략가입니다.
 아래 후보 종목들을 검토하여 당일 매매 관심 목록(Hot List)을 선정하세요.
+※ 이미 일봉 MACD 필터(MACD 강세 또는 골든크로스 임박)를 통과한 종목들입니다.
 
 ## 시장 컨텍스트
 - 국내 시장 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)
 - 글로벌 리스크 점수: {global_risk_score}/10 (10이 최대 위험)
 
-## 후보 종목 ({len(candidates)}개)
+## 후보 종목 ({len(candidates)}개) — 일봉 MACD 필터 통과
 {stock_block}
 
 ## 선정 기준
 1. 거래량 급증 (평균 대비 3배↑) + 가격 상승 동반: 강력 매수 신호
 2. 볼린저밴드 상단 돌파 + RSI 60↑: 모멘텀 돌파 신호
-3. MACD 히스토그램 양전환: 추세 전환 신호
+3. MACD 히스토그램 수렴 중 (음수이지만 증가): 골든크로스 임박
 4. 글로벌 리스크 7 이상 시 보수적으로 선정
 5. RSI 70 초과 + BB위치 0.9 이상이면 과열 — 제외
 
@@ -104,6 +105,17 @@ def analyze(
     if not candidates:
         logger.info("후보 종목 없음 — Hot List 비어있음")
         return []
+
+    # ── 일봉 MACD 필터 ──────────────────────────────────────
+    if settings.MACD_DAILY_FILTER:
+        before = len(candidates)
+        candidates = [s for s in candidates if s.daily_macd_ok]
+        filtered = before - len(candidates)
+        if filtered:
+            logger.info(f"일봉 MACD 필터: {filtered}종목 제외 (MACD 비강세) — 잔여 {len(candidates)}종목")
+        if not candidates:
+            logger.info("일봉 MACD 필터 후 후보 없음 — Hot List 비어있음")
+            return []
 
     # 후보가 많으면 배치 분할 (신호 강도 우선: 거래량 급등 > 가격 급등 > BB돌파)
     candidates_sorted = sorted(

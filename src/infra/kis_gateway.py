@@ -154,6 +154,53 @@ class KISGateway:
             priority=priority,
         )
 
+    def get_minute_candles(
+        self,
+        ticker: str,
+        priority: Priority = Priority.DATA_COLLECTION,
+    ) -> list[dict]:
+        """
+        1분봉 데이터 조회 (최근 30봉).
+
+        KIS FHKST03010200 — 주식 당일 분봉 조회.
+        반환 리스트는 최신순(내림차순)이므로 시간순 사용 시 reversed() 필요.
+
+        Returns:
+            [{"time": "HHmmss", "open": .., "high": .., "low": .., "close": .., "volume": ..}, ...]
+        """
+        from datetime import datetime as _dt
+        try:
+            resp = self._request(
+                method="GET",
+                path="/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice",
+                tr_id="FHKST03010200",
+                params={
+                    "FID_ETC_CLS_CODE": "",
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": ticker,
+                    "FID_INPUT_HOUR_1": _dt.now().strftime("%H%M%S"),
+                    "FID_PW_DATA_INCU_YN": "N",
+                },
+                priority=priority,
+            )
+            candles: list[dict] = []
+            for item in resp.get("output2", []):
+                try:
+                    candles.append({
+                        "time":   item.get("stck_cntg_hour", ""),
+                        "open":   float(item.get("stck_oprc", 0) or 0),
+                        "high":   float(item.get("stck_hgpr", 0) or 0),
+                        "low":    float(item.get("stck_lwpr", 0) or 0),
+                        "close":  float(item.get("stck_prpr", 0) or 0),
+                        "volume": int(item.get("cntg_vol", 0) or 0),
+                    })
+                except (ValueError, TypeError):
+                    continue
+            return candles  # 최신순 반환
+        except Exception as e:
+            logger.debug(f"분봉 조회 실패 [{ticker}]: {e}")
+            return []
+
     def get_balance(self, priority: Priority = Priority.TRADING) -> dict:
         """잔고 및 보유 포지션 조회."""
         acc, prod = self._account_no.split("-")
