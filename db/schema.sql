@@ -157,6 +157,19 @@ CREATE TABLE IF NOT EXISTS position_snapshot (
 );
 
 -- ────────────────────────────────────────
+-- 포지션 감시: 트레일링 스톱 상태
+-- 매수 시 생성, 포지션 청산 시 삭제
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trailing_stop (
+    ticker         TEXT PRIMARY KEY,
+    entry_price    REAL NOT NULL,        -- 최초 매수 평균 단가
+    trailing_floor REAL NOT NULL,        -- 현재 손절선 (단방향 상승만 허용)
+    highest_price  REAL NOT NULL,        -- 진입 후 최고가
+    ladder_bought  INTEGER NOT NULL DEFAULT 0,  -- 사다리 매수 실행 횟수
+    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
 -- 인덱스
 -- ────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_hot_list_created   ON hot_list(created_at DESC);

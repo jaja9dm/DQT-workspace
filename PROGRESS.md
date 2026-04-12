@@ -153,6 +153,23 @@
 - `main.py` 스케줄러 중심으로 리팩토링
   - `python main.py --now`: 즉시 엔진 기동 (개발·테스트용)
 
+### 14단계 — 트레일링 스톱 + 사다리 매수 (2026-04-12)
+- `db/schema.sql` ✅ — `trailing_stop` 테이블 추가
+  - ticker, entry_price, trailing_floor, highest_price, ladder_bought
+- `src/config/settings.py` ✅ — 트레일링 스톱 파라미터 5종 추가
+  - TRAILING_INITIAL_STOP_PCT(10%), TRAILING_TRIGGER_PCT(10%), TRAILING_FLOOR_PCT(5%)
+  - LADDER_TRIGGER_PCT(20%), LADDER_QTY_RATIO(1.0)
+- `src/teams/trading/engine.py` ✅ — 매수 시 `_init_trailing_stop()` 자동 호출
+- `src/teams/position_monitor/engine.py` ✅ — 트레일링 스톱 로직 전면 교체
+  - 90초 주기로 손절선 업데이트 (단방향 상승)
+  - 수익 +10% 이상 시 손절선 = max(현재, 현재가×0.95)
+  - 현재가 ≤ 손절선 → 전량 매도 + 텔레그램 알림
+  - 하락 -20% 시 사다리 매수 (보유량 ×1배 추가 매수)
+  - 기존 고정 손절은 트레일링 미등록 포지션에만 적용
+- `src/utils/notifier.py` ✅ — 트레일링 스톱 발동 즉시 알림 (inline)
+- `.env.example` ✅ — 트레일링 스톱 파라미터 주석 추가
+- `docs/planning/concept.md` ✅ — v0.2.3 포지션 감시 섹션 업데이트
+
 ---
 
 ## 다음 할일 — 모의투자 통합 테스트

@@ -59,6 +59,18 @@ class Settings:
     TAKE_PROFIT_2_PCT: float = float(os.getenv("TAKE_PROFIT_2_PCT", "10.0"))
     POSITION_MAX_HOLD_DAYS: int = int(os.getenv("POSITION_MAX_HOLD_DAYS", "5"))
 
+    # ── 트레일링 스톱 ─────────────────────────────
+    # 초기 손절선: 매수가 대비 -N% (손절 하한)
+    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "10.0"))
+    # 손절선 올리기 시작 조건: 매수가 대비 +N% 이상 수익 시
+    TRAILING_TRIGGER_PCT: float = float(os.getenv("TRAILING_TRIGGER_PCT", "10.0"))
+    # 손절선 위치: 현재가 대비 -N% (트레일링 간격)
+    TRAILING_FLOOR_PCT: float = float(os.getenv("TRAILING_FLOOR_PCT", "5.0"))
+    # 사다리 매수 발동 조건: 매수가 대비 -N% 하락 시
+    LADDER_TRIGGER_PCT: float = float(os.getenv("LADDER_TRIGGER_PCT", "20.0"))
+    # 사다리 매수 수량 비율 (기존 보유 수량의 N배)
+    LADDER_QTY_RATIO: float = float(os.getenv("LADDER_QTY_RATIO", "1.0"))
+
     def validate(self) -> None:
         """필수 환경 변수 누락 시 경고."""
         missing = []

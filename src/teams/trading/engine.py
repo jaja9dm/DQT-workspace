@@ -387,6 +387,11 @@ class TradingEngine:
                 f"매수 주문 완료 [{tranche}차] {ticker}({name}) "
                 f"{quantity}주 @ {current_price:,.0f}원 | 주문번호 {order_no}"
             )
+
+            # 1차 매수 시 트레일링 스톱 초기화
+            if tranche == 1:
+                _init_trailing_stop(ticker, current_price)
+
             return {
                 "ticker": ticker,
                 "name": name,
@@ -494,3 +499,37 @@ def _fetch_current_price(ticker: str) -> float:
         return float(resp.get("output", {}).get("stck_prpr", 0) or 0)
     except Exception:
         return 0.0
+
+
+def _init_trailing_stop(ticker: str, entry_price: float) -> None:
+    """
+    매수 시 트레일링 스톱 레코드 초기화.
+    이미 존재하면 entry_price가 더 낮은 경우(평단 하락)에만 갱신.
+    """
+    initial_floor = entry_price * (1 - settings.TRAILING_INITIAL_STOP_PCT / 100)
+    existing = fetch_one("SELECT * FROM trailing_stop WHERE ticker = ?", (ticker,))
+    if existing:
+        # 사다리 매수 등으로 평단이 변동된 경우: floor는 내리지 않음
+        new_floor = max(float(existing["trailing_floor"]), initial_floor)
+        execute(
+            """
+            UPDATE trailing_stop
+            SET entry_price = ?, highest_price = MAX(highest_price, ?),
+                trailing_floor = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE ticker = ?
+            """,
+            (entry_price, entry_price, new_floor, ticker),
+        )
+    else:
+        execute(
+            """
+            INSERT INTO trailing_stop
+                (ticker, entry_price, trailing_floor, highest_price, ladder_bought)
+            VALUES (?, ?, ?, ?, 0)
+            """,
+            (ticker, entry_price, initial_floor, entry_price),
+        )
+    logger.info(
+        f"트레일링 스톱 초기화 [{ticker}] 매수가={entry_price:,.0f} "
+        f"초기손절선={initial_floor:,.0f} ({settings.TRAILING_INITIAL_STOP_PCT:.0f}%)"
+    )
