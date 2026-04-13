@@ -227,6 +227,18 @@
 - `db/schema.sql` ✅ — `fetch_checkpoint` 테이블 추가
   - cycle_id, scan_type, item_key, status, error_msg, fetched_at
 
+### 22단계 — 재부팅 시 자동 시작 + 종료 버그 수정 (2026-04-13)
+- **cron @reboot**: 노트북 재부팅 후 로그인 시 DQT 자동 기동
+  - `crontab -e` → `@reboot /bin/bash /path/to/run.sh >> dqt.log 2>&1`
+  - macOS 15 Sequoia BTM(Background Task Management) 제한으로 launchd 대신 cron 사용
+    - launchd LaunchAgent는 System Settings 승인 없이 `EX_CONFIG(78)` 반환
+    - cron은 BTM 우회, 최소 환경에서도 정상 실행 확인
+  - `run.sh` — PYTHONPATH 명시 설정으로 venv 패키지 로딩 보장
+  - `~/Library/LaunchAgents/com.dqt.trader.plist` — 크래시 자동 재시작용 백업 (System Settings 승인 후 활성화 가능)
+- **SchedulerNotRunningError 수정** (`src/scheduler/scheduler.py`)
+  - SIGTERM → `stop()` → `sys.exit(0)` → SystemExit → `stop()` 이중 호출 버그
+  - `_stopping` 플래그로 중복 호출 방지 + `shutdown()` 예외 무시
+
 ### 21단계 — KIS WebSocket 실시간 손절 (2026-04-13)
 - **핵심**: 보유 종목을 KIS WebSocket(H0STCNT0)으로 실시간 구독 → tick마다 손절선 비교
   - 폴링 갭(90초) 완전 제거 — 손절선 돌파 즉시 시장가 매도

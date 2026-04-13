@@ -4,6 +4,22 @@
 
 ---
 
+## [v1.0.4] - 2026-04-13
+
+### Added (재부팅 자동 시작)
+- `run.sh` — launchd/cron 실행 래퍼
+  - 시스템 Python3.9 직접 지정, venv PYTHONPATH 명시 설정
+- `~/Library/LaunchAgents/com.dqt.trader.plist` — launchd 자동 시작 설정
+  - macOS 15 Sequoia BTM 제한으로 현재 cron 방식 병행
+- `crontab @reboot` — 로그인 후 자동 기동 (cron이 primary)
+
+### Fixed
+- `src/scheduler/scheduler.py`
+  - SIGTERM 수신 시 `stop()` 이중 호출로 `SchedulerNotRunningError` 발생 버그 수정
+  - `_stopping` 플래그 추가, `shutdown()` 예외 무시
+
+---
+
 ## [v1.0.3] - 2026-04-13
 
 ### Added (WebSocket 실시간 손절)

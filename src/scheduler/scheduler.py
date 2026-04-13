@@ -88,9 +88,15 @@ class DQTScheduler:
         notify("🚀 <b>DQT 시스템 시작</b>\n스케줄러 기동 완료")
 
     def stop(self) -> None:
+        if getattr(self, "_stopping", False):
+            return
+        self._stopping = True
         self._stop_event.set()
         self._stop_realtime_engines()
-        self._scheduler.shutdown(wait=False)
+        try:
+            self._scheduler.shutdown(wait=False)
+        except Exception:
+            pass
         logger.info("DQT 스케줄러 종료")
         notify("🛑 <b>DQT 시스템 종료</b>")
 
