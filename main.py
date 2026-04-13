@@ -9,6 +9,8 @@ DQT-workspace 시스템 진입점.
   python main.py --now
 """
 
+import atexit
+import os
 import sys
 
 from src.config.settings import settings
@@ -18,8 +20,29 @@ from src.utils.logger import get_logger
 
 logger = get_logger("main")
 
+_PID_FILE = os.path.join(os.path.dirname(__file__), "dqt.pid")
+
+
+def _acquire_pid_lock() -> None:
+    """이미 실행 중인 인스턴스가 있으면 즉시 종료."""
+    if os.path.exists(_PID_FILE):
+        try:
+            pid = int(open(_PID_FILE).read().strip())
+            os.kill(pid, 0)          # 프로세스 존재 여부 확인 (0 = no-op signal)
+            logger.error(f"이미 실행 중 (PID {pid}). 중복 실행 방지로 종료.")
+            sys.exit(1)
+        except (ProcessLookupError, PermissionError):
+            pass                     # 기존 PID가 죽어있으면 덮어씀
+        except ValueError:
+            pass                     # PID 파일 내용 이상 → 덮어씀
+    with open(_PID_FILE, "w") as f:
+        f.write(str(os.getpid()))
+    atexit.register(lambda: os.path.exists(_PID_FILE) and os.remove(_PID_FILE))
+
 
 def main() -> None:
+    _acquire_pid_lock()
+
     logger.info("=" * 60)
     logger.info("DQT-workspace 시스템 시작")
     logger.info(f"KIS 모드: {settings.KIS_MODE.upper()}")

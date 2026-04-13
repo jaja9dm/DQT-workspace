@@ -92,7 +92,7 @@ class DQTScheduler:
             return
         self._stopping = True
         self._stop_event.set()
-        self._stop_realtime_engines()
+        self._stop_realtime_engines(notify_market_close=False)  # 장 마감 알림 없이 엔진만 정지
         try:
             self._scheduler.shutdown(wait=False)
         except Exception:
@@ -255,8 +255,12 @@ class DQTScheduler:
         except Exception as e:
             logger.error(f"오버나잇 판단 오류: {e}", exc_info=True)
 
-    def _stop_realtime_engines(self) -> None:
-        """15:35 — 실시간 엔진 정지 (역순)."""
+    def _stop_realtime_engines(self, notify_market_close: bool = True) -> None:
+        """실시간 엔진 정지 (역순).
+
+        notify_market_close=True  → 15:35 스케줄 정지 (장 마감 알림 발송)
+        notify_market_close=False → 시스템 종료 시 호출 (알림 없이 엔진만 정지)
+        """
         logger.info("실시간 엔진 정지 시작")
         for engine, name in [
             (self._intraday_macd, "장중 MACD 모니터"),
@@ -278,7 +282,8 @@ class DQTScheduler:
         self._global_market = self._domestic_market = self._domestic_stock = None
         self._risk = self._position_monitor = self._trading = self._intraday_macd = None
 
-        notify("📉 <b>장 마감</b> — 실시간 엔진 정지")
+        if notify_market_close:
+            notify("📉 <b>장 마감</b> — 실시간 엔진 정지")
 
     def _run_report(self) -> None:
         """15:40 — 일일 리포트 생성."""
