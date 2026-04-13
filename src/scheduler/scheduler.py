@@ -187,6 +187,8 @@ class DQTScheduler:
             from src.infra.sentiment_cache import SentimentCache
             deleted = SentimentCache().purge_expired()
             logger.info(f"감성 캐시 정리: {deleted}건 삭제")
+
+            notify(f"🌅 <b>장 전 준비 완료</b>\n유니버스 {count}종목 | 감성 캐시 {deleted}건 정리")
         except Exception as e:
             logger.error(f"장 전 준비 오류: {e}", exc_info=True)
 
