@@ -4,6 +4,24 @@
 
 ---
 
+## [v1.0.2] - 2026-04-13
+
+### Added (거래소 사전 손절 주문 안전망)
+- `src/infra/stop_order_manager.py` (신규)
+  - KIS 지정가 매도 주문 제출·취소·갱신 단일 모듈
+  - `place_stop_order()` / `cancel_stop_order()` / `update_stop_order()`
+  - 취소 API: `/uapi/domestic-stock/v1/trading/order-rvsecncl`
+- `db/schema.sql` — `stop_orders` 테이블 추가
+
+### Changed
+- `src/teams/trading/engine.py`
+  - 매수 1차 체결 직후 `place_stop_order()` 호출 → 초기 손절가 즉시 거래소 제출
+- `src/teams/position_monitor/engine.py`
+  - `_place_sell()` 진입 즉시 `cancel_stop_order()` 호출 (이중 매도 방지)
+  - `_update_trailing_floor()` — `quantity` 파라미터 추가, 손절선 상향 시 `update_stop_order()` 자동 호출
+
+---
+
 ## [v1.0.1] - 2026-04-13
 
 ### Changed (API 비용 최적화)

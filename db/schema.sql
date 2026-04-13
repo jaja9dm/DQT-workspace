@@ -204,6 +204,24 @@ CREATE TABLE IF NOT EXISTS fetch_checkpoint (
 );
 
 -- ────────────────────────────────────────
+-- 거래소 사전 손절 주문 (KIS 지정가 매도)
+-- 매수 직후 제출 → 트레일링 스톱 상향 시 취소 후 재제출
+-- 시스템 다운 시에도 거래소 서버에서 자동 체결되는 안전망
+--
+-- 주의: 지정가 주문이므로 stop_price 이상에서만 체결됨
+--       갭 하락 시에는 체결 안 될 수 있음 (폴링 시스템이 백업 역할)
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS stop_orders (
+    ticker      TEXT PRIMARY KEY,
+    order_no    TEXT NOT NULL,             -- KIS ODNO (주문번호)
+    krx_orgno   TEXT NOT NULL DEFAULT '',  -- KRX_FWDG_ORD_ORGNO (취소 시 필요)
+    stop_price  REAL NOT NULL,             -- 지정가 손절 가격
+    quantity    INTEGER NOT NULL,
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
 -- 인덱스
 -- ────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_checkpoint_cycle   ON fetch_checkpoint(cycle_id, scan_type);

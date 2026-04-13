@@ -300,6 +300,33 @@ CREATE TABLE universe (
 - 동일 섹터 3종목 이상 동시 +5% 돌파 → 섹터 모멘텀 경보 발령
 - 시가총액 상위 10종목 중 3개 이상 동시 급락 → 시장 이상 신호 발령
 
+**거래소 사전 손절 주문 (KIS 안전망)**
+
+매수 1차 체결 직후 KIS에 지정가 매도 주문을 거래소에 미리 제출한다.
+시스템이 다운되거나 폴링 주기(90초) 사이에 급락이 발생해도 거래소 서버에서 자동 체결된다.
+
+```
+매수 체결
+  └→ place_stop_order(stop_price = 매수가 × (1 - TRAILING_INITIAL_STOP_PCT))
+       └→ KIS 지정가 매도 주문 거래소 제출
+
+트레일링 손절선 상향
+  └→ update_stop_order(new_stop_price)
+       └→ 기존 주문 취소 + 새 가격으로 재제출
+
+포지션 감시팀 직접 매도
+  └→ cancel_stop_order()  ← 이중 매도 방지
+       └→ 시장가 매도 실행
+```
+
+| 항목 | 내용 |
+|------|------|
+| 주문 방식 | 지정가(ORD_DVSN=00) — stop_price 이상에서만 체결 |
+| 갭 하락 시 | 미체결 가능 → 90초 폴링이 백업 역할 (이중 안전망) |
+| 손절선 갱신 | 트레일링 스톱 상향마다 취소 + 재제출 자동화 |
+| DB 테이블 | `stop_orders` (ticker PK, order_no, krx_orgno, stop_price) |
+| 관련 모듈 | `src/infra/stop_order_manager.py` |
+
 **Gate 사전 체크 (API 비용 최적화)**
 
 매매팀 Gate 1~3와 동일한 임계값을 국내 주식팀 `run_once()` 내부에서 미리 확인한다.

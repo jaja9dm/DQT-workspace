@@ -511,9 +511,14 @@ JSON만 응답:
                 f"{quantity}주 @ {current_price:,.0f}원 | 주문번호 {order_no}"
             )
 
-            # 1차 매수 시 트레일링 스톱 초기화
+            # 1차 매수 시 트레일링 스톱 초기화 + 거래소 사전 손절 주문 제출
             if tranche == 1:
                 _init_trailing_stop(ticker, current_price)
+                initial_floor = current_price * (
+                    1 - settings.TRAILING_INITIAL_STOP_PCT / 100
+                )
+                from src.infra.stop_order_manager import place_stop_order
+                place_stop_order(ticker, quantity, initial_floor)
 
             return {
                 "ticker": ticker,

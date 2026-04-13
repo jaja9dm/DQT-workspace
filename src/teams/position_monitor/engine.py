@@ -181,7 +181,7 @@ class PositionMonitorEngine:
         ts = _load_trailing_stop(ticker)
         if ts:
             # 손절선 업데이트 (단방향 상승)
-            updated_floor = _update_trailing_floor(ticker, ts, current_price, avg_price)
+            updated_floor = _update_trailing_floor(ticker, ts, current_price, avg_price, quantity)
             trailing_floor = updated_floor
 
             # 트레일링 스톱 발동 (현재가 ≤ 손절선)
@@ -311,6 +311,10 @@ class PositionMonitorEngine:
         """KIS API 시장가 매도 주문 + trades 테이블 저장."""
         if quantity <= 0:
             return None
+
+        # 이중 매도 방지: 거래소에 걸어둔 지정가 손절 주문 먼저 취소
+        from src.infra.stop_order_manager import cancel_stop_order
+        cancel_stop_order(ticker)
 
         gw = KISGateway()
         tr_id = "VTTC0801U" if settings.KIS_MODE == "paper" else "TTTC0801U"
@@ -587,12 +591,13 @@ def _load_trailing_stop(ticker: str) -> dict | None:
 
 
 def _update_trailing_floor(
-    ticker: str, ts: dict, current_price: float, avg_price: float
+    ticker: str, ts: dict, current_price: float, avg_price: float, quantity: int
 ) -> float:
     """
     트레일링 손절선 업데이트.
     수익이 TRAILING_TRIGGER% 이상이면 손절선을 현재가 기준 TRAILING_FLOOR% 아래로 상향.
     손절선은 절대 내려가지 않음.
+    손절선이 실제로 올라간 경우 거래소 사전 손절 주문도 취소 후 재제출.
     """
     current_floor = float(ts["trailing_floor"])
     highest = float(ts["highest_price"])
@@ -623,6 +628,9 @@ def _update_trailing_floor(
             f"[트레일링] {ticker} 손절선 상향: {current_floor:,.0f} → {new_floor:,.0f}원 "
             f"(현재가 {current_price:,.0f}, 수익 {gain_pct:+.1f}%)"
         )
+        # 거래소 사전 손절 주문도 새 손절선으로 업데이트
+        from src.infra.stop_order_manager import update_stop_order
+        update_stop_order(ticker, quantity, new_floor)
 
     return new_floor
 

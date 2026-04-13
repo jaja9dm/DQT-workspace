@@ -227,6 +227,30 @@
 - `db/schema.sql` ✅ — `fetch_checkpoint` 테이블 추가
   - cycle_id, scan_type, item_key, status, error_msg, fetched_at
 
+### 20단계 — KIS 거래소 사전 손절 주문 안전망 (2026-04-13)
+- **핵심 아이디어**: 매수 직후 KIS 거래소에 지정가 매도 주문을 미리 제출
+  - 시스템 다운·폴링 갭(90초) 발생 시에도 거래소 서버에서 자동 체결
+  - 트레일링 스톱 손절선 상향 시 기존 주문 취소 + 새 가격으로 재제출
+  - 포지션 감시팀이 직접 매도할 때는 미리 제출한 주문 먼저 취소(이중 매도 방지)
+- `db/schema.sql` ✅ — `stop_orders` 테이블 추가
+  - ticker(PK), order_no, krx_orgno, stop_price, quantity, created_at, updated_at
+- `src/infra/stop_order_manager.py` ✅ (신규)
+  - `place_stop_order(ticker, qty, stop_price)` — KIS 지정가 매도 주문 제출
+  - `cancel_stop_order(ticker)` — 기존 주문 취소 (이중 매도 방지)
+  - `update_stop_order(ticker, qty, new_stop_price)` — 취소 + 재제출
+  - KIS 취소 API: `/uapi/domestic-stock/v1/trading/order-rvsecncl` (VTTC/TTTC0803U)
+  - UPSERT 기반 DB 저장 (ticker UNIQUE)
+- `src/teams/trading/engine.py` ✅
+  - `_place_buy()` 1차 체결 후 `place_stop_order()` 호출 추가
+  - 초기 손절가 = 매수가 × (1 - TRAILING_INITIAL_STOP_PCT / 100)
+- `src/teams/position_monitor/engine.py` ✅
+  - `_place_sell()` 진입 즉시 `cancel_stop_order()` 호출 (이중 매도 방지)
+  - `_update_trailing_floor()` 에 `quantity` 파라미터 추가
+  - 손절선 실제 상향 시 `update_stop_order()` 호출 → 거래소 주문 자동 갱신
+- **설계 한계 (의도적 수용)**
+  - 지정가 주문이므로 갭 하락 시 미체결 가능 — 폴링(90초)이 백업 역할
+  - 이중 안전망: 거래소 지정가 주문(1차) + 폴링 손절(2차)
+
 ### 19단계 — Hot List 분석 Gate 사전 체크 (2026-04-13)
 - `src/teams/domestic_stock/engine.py` ✅
   - `_is_trading_blocked()` 함수 추가
