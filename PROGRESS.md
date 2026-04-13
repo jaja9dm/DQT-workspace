@@ -216,38 +216,70 @@
 - `src/teams/trading/overnight.py` ✅ (신규) — 오버나잇 판단 모듈
 - `src/scheduler/scheduler.py` ✅ — 9:10, 15:10 잡 등록 + 콜백 구현
 
+### 17단계 — 네트워크 중단 복원력 (커밋 `2eba648`, 2026-04-12)
+- `src/utils/retry.py` ✅ (신규) — 지수 백오프 재시도 유틸 (`retry_call`)
+- `src/teams/domestic_stock/collector.py` ✅
+  - FDR 조회 최대 3회 재시도 (`retry_call` 적용)
+  - 체크포인트 기반 중단 재개: `fetch_checkpoint` 테이블 활용
+  - 5분 단위 `cycle_id`로 현재 사이클 식별
+  - 완료된 종목 건너뛰기 → 재시작 시 이어받기 가능
+  - 오래된 체크포인트 자동 정리 (오늘 이전 삭제)
+- `db/schema.sql` ✅ — `fetch_checkpoint` 테이블 추가
+  - cycle_id, scan_type, item_key, status, error_msg, fetched_at
+
+### 18단계 — 시뮬레이션 v2 + 장중 시뮬레이션 (커밋 `13bc749`, 2026-04-13)
+- `simulate_friday.py` ✅ (업그레이드)
+  - 일봉 MACD 필터 + 오프닝 게이트 판단 추가
+  - 글로벌 시황(yfinance) + 국내 시황 연동
+  - 텔레그램 결과 발송
+- `simulate_intraday.py` ✅ (신규)
+  - 오늘 hot list 기반 실제 OHLCV 사용
+  - Brownian Bridge 가격 경로 생성 (open→close, high/low 바운드)
+  - 매수 체결 → 5분봉 78개 압축 재생 (봉당 1.5초, 약 2분)
+  - 트레일링 스톱·1·2차 익절·손절 이벤트 자동 발동
+  - 각 이벤트마다 텔레그램 알림, 30분마다 포지션 현황 발송
+  - 최종 손익 요약 텔레그램 발송
+
+---
+
+## 운용 현황 (2026-04-13)
+
+- **상태**: 모의투자 가동 중 (PID 23779, `KIS_MODE=paper`)
+- **첫 실거래일**: 2026-04-13 (월요일)
+- **오늘 스캔**: 450종목 → 후보 68개 → Hot List 8종목 확정 (10:57)
+  - 티엠씨(+30%), 조일알미늄(+22%), 실리콘투(+9%), KT&G, 삼성전기, 퍼스텍, 동방, 코람코더원리츠
+- **텔레그램**: Hot List 발송 완료, 장중 시뮬레이션 결과 발송 완료
+- **거래**: 아직 없음 (모의 계좌 설정 확인 필요)
+
 ---
 
 ## 다음 할일 — 통합 테스트
 
-### Phase 1: 환경 설정 및 첫 실행
-1. `.env` 파일 생성 (`.env.example` 참고)
-   - `KIS_MODE=paper` (모의투자)
-   - `KIS_APP_KEY`, `KIS_APP_SECRET`, `KIS_ACCOUNT_NO` 입력
-   - `ANTHROPIC_API_KEY` 입력
-   - `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` 입력 (텔레그램 봇 생성 필요)
-2. 패키지 설치: `pip install -r requirements.txt`
-3. 즉시 실행 테스트: `python main.py --now`
+### Phase 1: 환경 설정 및 첫 실행 ✅ 완료
+1. ✅ `.env` 파일 생성 (KIS API 키, Anthropic API 키, 텔레그램 봇 설정)
+2. ✅ 패키지 설치 완료
+3. ✅ 시스템 첫 기동 확인 (2026-04-13, 텔레그램 "🚀 DQT 시스템 시작" 수신)
 
 ### Phase 2: 팀별 단위 테스트 (실행 확인)
-- [ ] DB 초기화 확인 (`db/dqt.db` 생성, 9개 테이블)
-- [ ] KIS 게이트웨이 토큰 발급 확인 (로그 `KIS 게이트웨이 준비 완료`)
-- [ ] 유니버스 재구성 확인 (로그 `유니버스 확정: N종목`)
-- [ ] 글로벌 시황팀 1회 실행 확인 (`global_condition` 테이블 row 삽입)
-- [ ] 국내 시황팀 1회 실행 확인 (`market_condition` 테이블 row 삽입)
-- [ ] 국내 주식팀 스캔 확인 (후보 종목 로그)
+- ✅ DB 초기화 확인 (`db/dqt.db`, 13개 테이블)
+- ✅ 유니버스 재구성 확인 (450종목)
+- ✅ 국내 주식팀 스캔 확인 (450종목 → 후보 68개)
+- ✅ 텔레그램 알림 수신 확인 (Hot List 발송 확인)
+- [ ] KIS 게이트웨이 토큰 발급 확인 (장외시간 KIS 오류 — 장 중 재확인 필요)
+- [ ] 글로벌 시황팀 1회 실행 확인 (`global_condition` 테이블)
+- [ ] 국내 시황팀 1회 실행 확인 (`market_condition` 테이블)
 - [ ] 위기 관리팀 리스크 레벨 산출 확인 (`risk_status` 테이블)
-- [ ] 텔레그램 알림 수신 확인 (시스템 시작 메시지)
 
 ### Phase 3: 매매 흐름 검증
-- [ ] Hot List 생성 확인 (`hot_list` 테이블)
+- ✅ Hot List 생성 확인 (`hot_list` 테이블 — 8종목)
 - [ ] 매매팀 게이트 로그 확인 (Gate 1~5 통과 여부)
 - [ ] 모의투자 매수 주문 체결 확인 (KIS 모의 계좌)
 - [ ] 포지션 감시 손절·익절 동작 확인
 - [ ] 장 마감 후 리포트 텔레그램 수신 확인
 
-### Phase 4: 안정화 (최소 1주일 모의 운용)
-- [ ] 오류 로그 (`logs/dqt.log`) 모니터링
+### Phase 4: 안정화 (최소 1주일 모의 운용) ← 현재 단계
+- [ ] 오류 로그 (`logs/dqt.log`) 일별 모니터링
+- [ ] KIS API 장외시간 오류 원인 분석 및 폴백 개선
 - [ ] 이상 동작 버그 수정
 - [ ] 실전 전환 여부 결정 (`KIS_MODE=live`)
 
@@ -271,48 +303,42 @@
 ```
 DQT-workspace/
 ├── main.py                          ← 시스템 진입점
+├── simulate_friday.py               ← 금요일 시뮬레이션 (목요일 신호 → 금요일 매매)
+├── simulate_intraday.py             ← 장중 시뮬레이션 (실제 OHLCV + Brownian Bridge)
 ├── requirements.txt
 ├── .env.example
 ├── db/
-│   └── schema.sql                   ← 9개 테이블
+│   ├── schema.sql                   ← 13개 테이블
+│   └── dqt.db                       ← 운영 DB (WAL 모드)
+├── logs/
+│   └── dqt.log                      ← 시스템 로그
 ├── src/
-│   ├── config/settings.py           ← 환경 변수 설정
+│   ├── config/settings.py           ← 환경 변수 설정 (30+ 파라미터)
 │   ├── infra/
 │   │   ├── database.py              ← SQLite 연결
-│   │   ├── kis_gateway.py           ← KIS API 게이트웨이 ✅
-│   │   └── universe.py              ← 종목 유니버스 ✅
-│   ├── utils/logger.py
-│   └── teams/
-│       ├── global_market/           ✅ 완료
-│       │   ├── collector.py
-│       │   ├── analyzer.py
-│       │   └── engine.py
-│       ├── domestic_market/         ✅ 완료
-│       │   ├── collector.py
-│       │   ├── analyzer.py
-│       │   └── engine.py
-│       ├── domestic_stock/          ✅ 완료
-│       │   ├── collector.py
-│       │   ├── analyzer.py
-│       │   └── engine.py
-│       ├── risk/                    ✅ 완료
-│       │   └── engine.py
-│       ├── position_monitor/        ✅ 완료
-│       │   └── engine.py
-│       ├── trading/                 ✅ 완료
-│       │   └── engine.py
-│       ├── intraday_macd/           ✅ 완료 (15단계)
-│       │   └── engine.py
-│       ├── report/                  ✅ 완료
-│       │   └── engine.py
-│       └── research/                ✅ 완료
-│           └── engine.py
+│   │   ├── kis_gateway.py           ← KIS API 게이트웨이 (싱글턴, 우선순위 큐)
+│   │   ├── universe.py              ← 종목 유니버스 (450종목)
+│   │   └── sentiment_cache.py       ← 뉴스 감성 분석 캐시
+│   ├── scheduler/
+│   │   └── scheduler.py             ← DQTScheduler (APScheduler 기반)
+│   ├── teams/
+│   │   ├── global_market/           ✅ 글로벌 시황팀
+│   │   ├── domestic_market/         ✅ 국내 시황팀
+│   │   ├── domestic_stock/          ✅ 국내 주식팀 (체크포인트 재개 포함)
+│   │   ├── intraday_macd/           ✅ 장중 MACD Pre-Cross 팀
+│   │   ├── risk/                    ✅ 위기 관리팀
+│   │   ├── position_monitor/        ✅ 포지션 감시팀 (트레일링 스톱)
+│   │   ├── trading/                 ✅ 매매팀 (오프닝 게이트, 오버나잇 판단)
+│   │   ├── report/                  ✅ 리포트팀
+│   │   └── research/                ✅ 연구소 (백테스트)
 │   └── utils/
 │       ├── logger.py
-│       ├── notifier.py
-│       └── macd.py                  ✅ 완료 (15단계)
+│       ├── notifier.py              ← 텔레그램 알림 (5종 함수)
+│       ├── macd.py                  ← MACD 유틸 + Pre-Cross 감지
+│       └── retry.py                 ← 지수 백오프 재시도 유틸
 └── docs/
     └── planning/
-        ├── concept.md               ← 상세 설계 문서 (v0.2.1)
-        └── concept.html
+        ├── concept.md               ← 상세 설계 문서
+        ├── concept.html             ← 빌드된 HTML
+        └── CHANGELOG.md             ← 버전 이력
 ```
