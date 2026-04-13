@@ -4,6 +4,23 @@
 
 ---
 
+## [v1.0.3] - 2026-04-13
+
+### Added (WebSocket 실시간 손절)
+- `src/infra/kis_websocket.py` (신규) — KIS H0STCNT0 실시간 체결가 구독
+  - 싱글턴, 자동 재연결, PINGPONG 처리
+  - `subscribe()` / `unsubscribe()` / `mark_selling()` / `clear_selling()`
+- `requirements.txt` — `websocket-client>=1.6` 추가
+
+### Changed
+- `src/teams/position_monitor/engine.py`
+  - WebSocket 실시간 구독으로 폴링 갭(90초) 없이 즉시 손절 대응
+  - `_on_ws_price_tick()` — tick마다 트레일링 스톱 비교, 돌파 즉시 시장가 매도
+  - `_sync_ws_subscriptions()` — 포지션 변화에 따라 구독 자동 동기화
+  - 3단계 안전망: WS 즉시 반응 → 거래소 지정가 주문 → 90초 폴링
+
+---
+
 ## [v1.0.2] - 2026-04-13
 
 ### Added (거래소 사전 손절 주문 안전망)

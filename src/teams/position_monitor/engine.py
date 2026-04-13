@@ -75,13 +75,33 @@ class PositionMonitorEngine:
             daemon=True,
             name="position-monitor-engine",
         )
+        # WebSocket 실시간 구독 관리
+        self._ws_subscribed: set[str] = set()   # 현재 구독 중인 종목
+        self._ws_triggered: set[str] = set()    # WebSocket이 매도 트리거한 종목 (폴링 중복 방지)
+        # 콜백에서 _place_sell 호출 시 필요한 최신 수량 캐시
+        self._qty_cache: dict[str, int] = {}    # {ticker: quantity}
 
     def start(self) -> None:
         logger.info("포지션 감시 엔진 시작")
         self._thread.start()
+        # WebSocket 클라이언트 기동 (싱글턴 — 이미 실행 중이면 무시)
+        try:
+            from src.infra.kis_websocket import KISWebSocket
+            KISWebSocket()
+            logger.info("KIS WebSocket 클라이언트 연결 대기 중")
+        except Exception as e:
+            logger.warning(f"KIS WebSocket 초기화 실패 (폴링으로 대체): {e}")
 
     def stop(self) -> None:
         self._stop_event.set()
+        # 모든 WebSocket 구독 해제
+        try:
+            from src.infra.kis_websocket import KISWebSocket
+            ws = KISWebSocket()
+            for ticker in list(self._ws_subscribed):
+                ws.unsubscribe(ticker)
+        except Exception:
+            pass
         self._thread.join(timeout=15)
         logger.info("포지션 감시 엔진 종료")
 
@@ -112,19 +132,29 @@ class PositionMonitorEngine:
         # 2. KIS 잔고 조회
         positions = _fetch_positions()
         if not positions:
+            # 보유 종목이 없어지면 남은 구독 전부 해제
+            self._sync_ws_subscriptions(positions)
             return []
 
-        # 3. 스냅샷 저장
+        # 3. 스냅샷 저장 + 수량 캐시 갱신
         _save_snapshots(positions)
+        for pos in positions:
+            self._qty_cache[pos["ticker"]] = pos["quantity"]
 
-        # 4. Level 5 → 전량 청산
+        # 4. WebSocket 구독 동기화 (신규 종목 구독 / 청산 종목 해제)
+        self._sync_ws_subscriptions(positions)
+
+        # 5. Level 5 → 전량 청산
         if level >= 5:
             actions = self._liquidate_all(positions, reason="level5_emergency")
             return actions
 
-        # 5. 개별 종목 감시
+        # 6. 개별 종목 감시 (WebSocket이 이미 트리거한 종목은 스킵)
         actions = []
         for pos in positions:
+            if pos["ticker"] in self._ws_triggered:
+                logger.debug(f"[WS 트리거됨] {pos['ticker']} — 폴링 스킵")
+                continue
             action = self._evaluate_position(pos, stop_loss_pct, level)
             if action:
                 actions.append(action)
@@ -279,6 +309,88 @@ class PositionMonitorEngine:
 
         return None
 
+    # ──────────────────────────────────────────
+    # WebSocket 구독 관리
+    # ──────────────────────────────────────────
+
+    def _sync_ws_subscriptions(self, positions: list[dict]) -> None:
+        """
+        현재 보유 포지션 기준으로 WebSocket 구독을 동기화.
+        - 새로 들어온 종목 → 구독 추가
+        - 청산된 종목 → 구독 해제
+        """
+        try:
+            from src.infra.kis_websocket import KISWebSocket
+            ws = KISWebSocket()
+        except Exception:
+            return
+
+        current_tickers = {pos["ticker"] for pos in positions}
+
+        # 신규 구독
+        for ticker in current_tickers - self._ws_subscribed:
+            ws.subscribe(ticker, self._on_ws_price_tick)
+            self._ws_subscribed.add(ticker)
+            logger.debug(f"[WS] 신규 구독: {ticker}")
+
+        # 청산된 종목 해제
+        for ticker in self._ws_subscribed - current_tickers:
+            ws.unsubscribe(ticker)
+            self._ws_subscribed.discard(ticker)
+            self._ws_triggered.discard(ticker)
+            logger.debug(f"[WS] 구독 해제 (청산): {ticker}")
+
+    def _on_ws_price_tick(self, ticker: str, current_price: float) -> None:
+        """
+        WebSocket 실시간 체결가 콜백.
+        tick마다 호출 — 손절선 돌파 즉시 시장가 매도.
+
+        폴링과 독립적으로 실행되므로 중복 매도 방지 필수.
+        """
+        ts = _load_trailing_stop(ticker)
+        if not ts:
+            return
+
+        trailing_floor = float(ts["trailing_floor"])
+        if current_price > trailing_floor:
+            return  # 정상 범위 — 아무것도 안 함
+
+        # 손절선 돌파 감지
+        try:
+            from src.infra.kis_websocket import KISWebSocket
+            ws = KISWebSocket()
+            if not ws.mark_selling(ticker):
+                return  # 이미 다른 스레드에서 매도 처리 중
+        except Exception:
+            return
+
+        self._ws_triggered.add(ticker)
+        qty = self._qty_cache.get(ticker, 0)
+        if qty <= 0:
+            ws.clear_selling(ticker)
+            self._ws_triggered.discard(ticker)
+            return
+
+        logger.warning(
+            f"[WS 실시간 손절] {ticker} | 현재가 {current_price:,.0f} ≤ "
+            f"손절선 {trailing_floor:,.0f} | {qty}주 즉시 청산"
+        )
+        _delete_trailing_stop(ticker)
+
+        from src.utils.notifier import notify
+        notify(
+            f"⚡ <b>[실시간 손절 — WS]</b> {ticker}\n"
+            f"현재가 {current_price:,.0f}원 ≤ 손절선 {trailing_floor:,.0f}원\n"
+            f"{qty}주 즉시 시장가 매도"
+        )
+        self._place_sell(
+            ticker=ticker,
+            quantity=qty,
+            current_price=current_price,
+            action="stop_loss",
+            reason=f"WS 실시간 트레일링 스톱 (손절선 {trailing_floor:,.0f}원)",
+        )
+
     def _liquidate_all(self, positions: list[dict], reason: str) -> list[dict]:
         """모든 포지션 전량 청산 (Level 5 긴급)."""
         logger.warning(f"[긴급 전량 청산] {len(positions)}종목 — {reason}")
@@ -353,6 +465,18 @@ class PositionMonitorEngine:
                 f"@ {exec_price:,.0f}원 | 주문번호 {order_no}"
             )
 
+            # 매도 완료 → WebSocket 구독 해제 + 트리거 플래그 정리
+            try:
+                from src.infra.kis_websocket import KISWebSocket
+                ws = KISWebSocket()
+                ws.unsubscribe(ticker)
+                ws.clear_selling(ticker)
+            except Exception:
+                pass
+            self._ws_subscribed.discard(ticker)
+            self._ws_triggered.discard(ticker)
+            self._qty_cache.pop(ticker, None)
+
             return {
                 "ticker": ticker,
                 "action": action,
@@ -364,6 +488,12 @@ class PositionMonitorEngine:
 
         except Exception as e:
             logger.error(f"매도 주문 실패 [{ticker}]: {e}")
+            # 실패 시 selling 플래그 해제 (재시도 가능하게)
+            try:
+                from src.infra.kis_websocket import KISWebSocket
+                KISWebSocket().clear_selling(ticker)
+            except Exception:
+                pass
             return None
 
 

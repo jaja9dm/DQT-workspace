@@ -227,6 +227,27 @@
 - `db/schema.sql` ✅ — `fetch_checkpoint` 테이블 추가
   - cycle_id, scan_type, item_key, status, error_msg, fetched_at
 
+### 21단계 — KIS WebSocket 실시간 손절 (2026-04-13)
+- **핵심**: 보유 종목을 KIS WebSocket(H0STCNT0)으로 실시간 구독 → tick마다 손절선 비교
+  - 폴링 갭(90초) 완전 제거 — 손절선 돌파 즉시 시장가 매도
+  - 3단계 안전망: WebSocket 즉시 반응(1차) + 거래소 지정가 주문(2차) + 90초 폴링(3차)
+- `requirements.txt` ✅ — `websocket-client>=1.6` 추가
+- `src/infra/kis_websocket.py` ✅ (신규)
+  - KISWebSocket 싱글턴, 자동 재연결, 기존 구독 복원
+  - `subscribe(ticker, callback)` / `unsubscribe(ticker)`
+  - `mark_selling(ticker)` / `clear_selling(ticker)` — 중복 매도 방지 락
+  - `_get_approval_key()` — `/oauth2/Approval` REST 호출
+  - `_parse_realtime()` — `0|H0STCNT0|건수|필드^...` 파싱, 필드[2]=현재가
+  - PINGPONG 자동 응답
+- `src/teams/position_monitor/engine.py` ✅
+  - `__init__`: `_ws_subscribed`, `_ws_triggered`, `_qty_cache` 상태 추가
+  - `start()`: KISWebSocket 초기화, 실패 시 경고만 (폴링으로 대체)
+  - `stop()`: 모든 구독 해제
+  - `run_once()`: `_sync_ws_subscriptions()` 호출, `_ws_triggered` 종목 폴링 스킵
+  - `_sync_ws_subscriptions()`: 신규 포지션 구독, 청산 포지션 해제
+  - `_on_ws_price_tick()`: 실시간 콜백 — 손절선 돌파 즉시 `_place_sell()` 호출
+  - `_place_sell()`: 매도 완료 후 구독 해제 + 플래그 정리, 실패 시 selling 플래그 해제
+
 ### 20단계 — KIS 거래소 사전 손절 주문 안전망 (2026-04-13)
 - **핵심 아이디어**: 매수 직후 KIS 거래소에 지정가 매도 주문을 미리 제출
   - 시스템 다운·폴링 갭(90초) 발생 시에도 거래소 서버에서 자동 체결

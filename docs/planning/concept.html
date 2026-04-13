@@ -756,6 +756,53 @@ gateway.place_order(&quot;005930&quot;, &quot;buy&quot;, 10)  # 주문 실행
 - 거래량이 평균 5배 초과 → 위기 관리팀·매매팀에 즉시 알림
 - 동일 섹터 3종목 이상 동시 +5% 돌파 → 섹터 모멘텀 경보 발령
 - 시가총액 상위 10종목 중 3개 이상 동시 급락 → 시장 이상 신호 발령</p>
+<p><strong>3단계 손절 안전망</strong></p>
+<table>
+<thead>
+<tr>
+<th>단계</th>
+<th>방식</th>
+<th>반응 속도</th>
+<th>시스템 다운 시</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1차</td>
+<td>KIS WebSocket 실시간 (H0STCNT0)</td>
+<td>tick 즉시</td>
+<td>❌ 동작 안 함</td>
+</tr>
+<tr>
+<td>2차</td>
+<td>거래소 지정가 사전 주문</td>
+<td>즉시 (거래소)</td>
+<td>✅ 자동 체결</td>
+</tr>
+<tr>
+<td>3차</td>
+<td>90초 폴링 백업</td>
+<td>최대 90초</td>
+<td>❌ 동작 안 함</td>
+</tr>
+</tbody>
+</table>
+<pre><code>매수 체결
+  ├→ [1차] WebSocket 구독 시작 (tick마다 손절선 비교)
+  └→ [2차] 거래소 지정가 손절 주문 제출
+
+트레일링 손절선 상향
+  ├→ [1차] WebSocket 콜백의 비교 기준 자동 갱신 (DB 읽음)
+  └→ [2차] 거래소 주문 취소 + 새 가격 재제출
+
+손절선 돌파 감지
+  ├→ [1차] _on_ws_price_tick() → 즉시 시장가 매도 + 구독 해제
+  └→ [2차] 거래소 지정가 주문이 이미 취소됨 (이중 매도 방지)
+</code></pre>
+<p><strong>WebSocket 모듈:</strong> <code>src/infra/kis_websocket.py</code>
+- KISWebSocket 싱글턴, 자동 재연결, 구독 복원
+- TR_ID: <code>H0STCNT0</code> (주식 체결), 인가키: <code>/oauth2/Approval</code>
+- 장외 시간에는 메시지 수신 없음 → 폴링(3차)이 백업 역할 유지</p>
 <p><strong>거래소 사전 손절 주문 (KIS 안전망)</strong></p>
 <p>매수 1차 체결 직후 KIS에 지정가 매도 주문을 거래소에 미리 제출한다.
 시스템이 다운되거나 폴링 주기(90초) 사이에 급락이 발생해도 거래소 서버에서 자동 체결된다.</p>

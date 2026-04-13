@@ -20,5 +20,8 @@ fredapi>=0.5
 # ── 스케줄러 ─────────────────────────────────────
 APScheduler>=3.10
 
+# ── WebSocket (KIS 실시간 구독) ───────────────────
+websocket-client>=1.6
+
 # ── 문서 빌드 (build_html.py) ────────────────────
 markdown>=3.6
