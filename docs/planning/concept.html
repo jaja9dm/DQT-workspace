@@ -756,6 +756,38 @@ gateway.place_order(&quot;005930&quot;, &quot;buy&quot;, 10)  # 주문 실행
 - 거래량이 평균 5배 초과 → 위기 관리팀·매매팀에 즉시 알림
 - 동일 섹터 3종목 이상 동시 +5% 돌파 → 섹터 모멘텀 경보 발령
 - 시가총액 상위 10종목 중 3개 이상 동시 급락 → 시장 이상 신호 발령</p>
+<p><strong>Gate 사전 체크 (API 비용 최적화)</strong></p>
+<p>매매팀 Gate 1~3와 동일한 임계값을 국내 주식팀 <code>run_once()</code> 내부에서 미리 확인한다.
+차단 조건이 하나라도 충족되면 Claude <code>analyze()</code> 호출 없이 즉시 <code>[]</code> 반환.</p>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>조건</th>
+<th>데이터 소스</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gate 1</td>
+<td>리스크 레벨 ≥ 4</td>
+<td><code>risk_status</code> 테이블</td>
+</tr>
+<tr>
+<td>Gate 2</td>
+<td>글로벌 시황 outlook == <code>negative</code></td>
+<td><code>global_condition</code> 테이블</td>
+</tr>
+<tr>
+<td>Gate 3</td>
+<td>국내 시황 점수 &lt; -0.3</td>
+<td><code>market_condition</code> 테이블 (이미 조회된 값 재사용)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>리스크팀이 아직 미기동 상태(DB 레코드 없음)인 경우 Gate 1은 무시하고 진행한다.</p>
+</blockquote>
 <hr />
 <h3 id="팀-1-2-국내-시황팀">팀 1-2. 국내 시황팀</h3>
 <p><strong>엔진 타입:</strong> 주기적 엔진 — 장 전 1회 / 장 중 30분 / 장 마감 후 1회</p>
