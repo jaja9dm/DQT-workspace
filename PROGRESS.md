@@ -227,6 +227,19 @@
 - `db/schema.sql` ✅ — `fetch_checkpoint` 테이블 추가
   - cycle_id, scan_type, item_key, status, error_msg, fetched_at
 
+### 19단계 — Hot List 분석 Gate 사전 체크 (2026-04-13)
+- `src/teams/domestic_stock/engine.py` ✅
+  - `_is_trading_blocked()` 함수 추가
+    - 매매팀 Gate 1~3과 동일한 임계값으로 사전 차단 조건 확인
+    - Gate 1: `risk_status` 테이블에서 risk_level ≥ 4
+    - Gate 2: `global_condition` 테이블에서 korea_market_outlook == 'negative'
+    - Gate 3: 국내 시황 점수 < -0.3 (이미 조회된 market_score 재활용)
+  - `run_once()` 내 즉시 트리거 경보 직후 게이트 사전 체크 삽입
+    - 차단 조건이면 Claude `analyze()` 호출 없이 즉시 `[]` 반환
+    - 리스크팀 미기동(DB 미존재) 시 Gate 1은 무시하고 진행 (exception 무시)
+  - 모듈 상단에 `_GATE_RISK_LEVEL_MAX = 4`, `_GATE_MARKET_SCORE_MIN = -0.3` 상수 추가
+    - 매매팀 engine.py 임계값과 단일 출처 원칙 유지를 위해 동일 값 명시
+
 ### 18단계 — 시뮬레이션 v2 + 장중 시뮬레이션 (커밋 `13bc749`, 2026-04-13)
 - `simulate_friday.py` ✅ (업그레이드)
   - 일봉 MACD 필터 + 오프닝 게이트 판단 추가

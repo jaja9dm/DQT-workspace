@@ -4,6 +4,17 @@
 
 ---
 
+## [v1.0.1] - 2026-04-13
+
+### Changed (API 비용 최적화)
+- `src/teams/domestic_stock/engine.py`
+  - `_is_trading_blocked()` 추가 — 매매팀 Gate 1~3 차단 조건을 Hot List 분석 전에 사전 체크
+  - 리스크 레벨 ≥ 4, 글로벌 시황 negative, 국내 시황 점수 < -0.3 중 하나라도 해당하면
+    Claude `analyze()` 호출 없이 즉시 반환 (Sonnet API 비용 절감)
+  - 모듈 상수 `_GATE_RISK_LEVEL_MAX`, `_GATE_MARKET_SCORE_MIN` 추가 (매매팀과 동일 임계값)
+
+---
+
 ## [v1.0.0] - 2026-04-13
 
 ### 첫 실전 모의투자 가동

@@ -35,6 +35,10 @@ _INTERVAL_SEC = 300              # 5분
 _IMMEDIATE_VOL_RATIO = 5.0      # 즉시 트리거용 거래량 배율 (5배)
 _IMMEDIATE_PRICE_PCT = 5.0      # 즉시 트리거용 가격 급등 (5%)
 
+# 매매팀 Gate 1~3과 동일한 임계값 — 이 조건이면 어차피 진입 불가이므로 Hot List 분석 스킵
+_GATE_RISK_LEVEL_MAX = 4        # Gate 1: 리스크 레벨 이 값 이상이면 신규 진입 금지
+_GATE_MARKET_SCORE_MIN = -0.3   # Gate 3: 국내 시황 점수 이 값 미만이면 진입 보류
+
 
 class DomesticStockEngine:
     """국내 주식팀 엔진 — 독립 스레드로 실행."""
@@ -86,13 +90,21 @@ class DomesticStockEngine:
         # 3. 즉시 트리거 경보 (스캔 직후)
         self._check_immediate_alerts(scan)
 
-        # 4. Claude Hot List 판단
+        # 4. [Gate 사전 체크] 매매팀 Gate 1~3 차단 조건이면 Claude 호출 생략
+        #    어차피 매매팀이 진입을 차단할 시황이면 Hot List 분석 자체가 낭비
+        if _is_trading_blocked(market_score):
+            logger.info(
+                "Hot List 분석 스킵 — 매매팀 게이트 차단 조건 (리스크 레벨/글로벌 시황/국내 시황)"
+            )
+            return []
+
+        # 5. Claude Hot List 판단
         hot_list = analyze(scan, market_score, global_risk_score)
 
-        # 5. DB 저장
+        # 6. DB 저장
         saved = _save_hot_list(hot_list, scan)
 
-        # 6. 종목별 뉴스 감성 분석 제출 (Hot List 종목 대상)
+        # 7. 종목별 뉴스 감성 분석 제출 (Hot List 종목 대상)
         self._submit_ticker_sentiment(hot_list, scan)
 
         logger.info(f"Hot List 확정: {len(saved)}종목")
@@ -153,6 +165,47 @@ class DomesticStockEngine:
 # ──────────────────────────────────────────────
 # DB 헬퍼
 # ──────────────────────────────────────────────
+
+def _is_trading_blocked(market_score: float) -> bool:
+    """
+    매매팀 Gate 1~3 차단 조건을 미리 확인.
+
+    True를 반환하면 어차피 매매팀이 진입을 차단하므로
+    Claude Hot List 분석 호출 자체를 생략해 API 비용을 절감한다.
+
+    Gate 1 — 리스크 레벨 ≥ 4 (risk_status 테이블)
+    Gate 2 — 글로벌 outlook == 'negative' (global_condition 테이블)
+    Gate 3 — 국내 시황 점수 < -0.3 (이미 인자로 전달됨)
+    """
+    # Gate 1: 리스크 레벨
+    try:
+        row = fetch_one(
+            "SELECT risk_level FROM risk_status ORDER BY created_at DESC LIMIT 1"
+        )
+        if row and int(row["risk_level"]) >= _GATE_RISK_LEVEL_MAX:
+            logger.debug(f"Gate 1 차단: 리스크 레벨 {row['risk_level']}")
+            return True
+    except Exception:
+        pass  # 리스크팀 아직 미기동 시 무시하고 진행
+
+    # Gate 2: 글로벌 시황 outlook
+    try:
+        row = fetch_one(
+            "SELECT korea_market_outlook FROM global_condition ORDER BY created_at DESC LIMIT 1"
+        )
+        if row and row["korea_market_outlook"] == "negative":
+            logger.debug("Gate 2 차단: 글로벌 시황 negative")
+            return True
+    except Exception:
+        pass
+
+    # Gate 3: 국내 시황 점수
+    if market_score < _GATE_MARKET_SCORE_MIN:
+        logger.debug(f"Gate 3 차단: 국내 시황 점수 {market_score:.2f}")
+        return True
+
+    return False
+
 
 def _get_market_score() -> float:
     """국내 시황팀 DB에서 가장 최근 시장 점수 조회."""
