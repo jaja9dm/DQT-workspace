@@ -51,8 +51,8 @@ _KIS_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
 _KIS_BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 _KIS_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 
-# 분할 매수 비율
-_TRANCHE_RATIOS = [0.40, 0.35, 0.25]
+# 분할 매수 비율 — 1차에 60% 집중, 나머지 분할
+_TRANCHE_RATIOS = [0.60, 0.25, 0.15]
 
 # 게이트 임계값
 _MARKET_SCORE_GATE = -0.3     # 국내 시황 최소 점수
