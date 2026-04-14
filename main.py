@@ -76,6 +76,12 @@ def main() -> None:
     logger.info("스케줄러 대기 중 (Ctrl+C로 종료)")
     scheduler.run_forever()
 
+    # run_forever 반환 = 정상 종료 신호 수신
+    # non-daemon 스레드가 남아있어도 강제 종료 (PID 파일은 이미 삭제됨)
+    if os.path.exists(_PID_FILE):
+        os.remove(_PID_FILE)
+    os._exit(0)
+
 
 if __name__ == "__main__":
     main()
