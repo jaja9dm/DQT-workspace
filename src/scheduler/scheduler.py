@@ -158,6 +158,11 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Seoul"
         ), id="research_daily", name="연구소 일일 분석")
 
+        # 일일 복기 — 오늘 매매 분석 + 개선점 도출 + Telegram 리포트
+        s.add_job(self._run_daily_review, CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
+        ), id="daily_review_debrief", name="일일 매매 복기")
+
         # 연구소 심층 백테스트 (일요일 주 1회)
         s.add_job(self._run_research_deep, CronTrigger(
             day_of_week="sun", hour=16, minute=30, timezone="Asia/Seoul"
@@ -295,6 +300,15 @@ class DQTScheduler:
             ReportEngine().run()
         except Exception as e:
             logger.error(f"리포트 실행 오류: {e}", exc_info=True)
+
+    def _run_daily_review(self) -> None:
+        """16:30 — 일일 매매 복기 (오늘 매매 분석 + 개선점 도출)."""
+        logger.info("일일 복기 실행")
+        try:
+            from src.teams.review.engine import run_daily_review
+            run_daily_review()
+        except Exception as e:
+            logger.error(f"일일 복기 오류: {e}", exc_info=True)
 
     def _run_research_daily(self) -> None:
         """16:00 — 연구소 일일 분석."""

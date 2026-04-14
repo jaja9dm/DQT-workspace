@@ -224,6 +224,27 @@ CREATE TABLE IF NOT EXISTS stop_orders (
 );
 
 -- ────────────────────────────────────────
+-- 일일 복기: 매매 피드백 저장
+-- 매 영업일 장 마감 후 자동 생성
+-- TradingEngine·ResearchEngine이 참조해 전략 개선에 활용
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trade_review (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    review_date   DATE NOT NULL UNIQUE,
+    total_trades  INTEGER NOT NULL DEFAULT 0,
+    win_trades    INTEGER NOT NULL DEFAULT 0,
+    loss_trades   INTEGER NOT NULL DEFAULT 0,
+    total_pnl     REAL,              -- 당일 실현 손익 합계 (원)
+    best_trade    TEXT,              -- JSON {ticker, pnl_pct, reason}
+    worst_trade   TEXT,              -- JSON {ticker, pnl_pct, reason}
+    pattern_hits  TEXT,              -- JSON array — 잘 작동한 패턴
+    pattern_fails TEXT,              -- JSON array — 실패한 패턴
+    improvements  TEXT,              -- JSON array — Claude 권고 개선사항
+    summary       TEXT,              -- Claude 자연어 총평
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
 -- 인덱스
 -- ────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_checkpoint_cycle   ON fetch_checkpoint(cycle_id, scan_type);

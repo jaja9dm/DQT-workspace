@@ -92,6 +92,14 @@ _DIP_BUY_HOTLIST_MIN  = 15     # Hot List 등재 후 최대 15분 이내
 _MACD_REVERSAL_EXIT_MIN_PNL = 0.3   # 최소 +0.3% 수익 시 탈출 허용
 _MACD_REVERSAL_EXIT_MAX_PNL = 4.9   # +5% 이상은 일반 익절 로직이 처리
 
+# 불타기 파라미터 (상승 모멘텀 확인 후 적극적 비중 추가)
+# 물타기와 반대 개념: 이미 수익권 + 모멘텀 지속 확인 → 더 공격적으로 올라탐
+# 피라미딩과 다른 점: 더 이른 진입(+1.5%), 더 많은 수량(50%), Hot List + 거래량 확인 필수
+_FIRE_BUY_TRIGGER_PCT = 1.5   # 수익 +1.5% 이상에서 불타기 검토 (피라미딩보다 이름)
+_FIRE_BUY_QTY_RATIO   = 0.5   # 기존 수량의 50% 추가 (공격적 비중 확대)
+_FIRE_BUY_VOL_MIN     = 2.0   # 거래량 2배 이상 (강한 모멘텀 확인 필수)
+_FIRE_BUY_HOTLIST_MIN = 30    # Hot List 등재 후 최대 30분 이내 (최신 모멘텀)
+
 # MACD 신호 분류
 _MACD_BULLISH  = {"buy_pre", "buy"}
 _MACD_BEARISH  = {"sell_pre", "sell"}
@@ -221,7 +229,8 @@ class PositionMonitorEngine:
           2. 트레일링 스톱 — MACD sell_pre 시 간격 절반으로 타이트하게 조임
           3. 스마트 물타기 (일시 눌림 + 반등 기대)
           3.5. 물타기 후 MACD 반등 탈출 — 목표가 미달이더라도 소폭 수익 시 조기 익절
-          4. 상승 피라미딩 (MACD bullish + 수익권 → 비중 추가)
+          3.7. 불타기 — 수익 +1.5% + MACD 강세 + Hot List 모멘텀 확인 → 비중 50% 추가
+          4. 피라미딩 — 수익 +3% + MACD 강세 (Hot List 없어도 됨) → 비중 30% 추가
           5. 타임컷
           6. 동적 익절 — MACD bullish면 목표 상향/보류, bearish면 즉시 실행
 
@@ -367,13 +376,48 @@ class PositionMonitorEngine:
                     reason=f"물타기 후 MACD 반등 탈출 ({prev_macd}→{macd_sig}, 손익 {pnl_pct:+.2f}%)",
                 )
 
-            # ── 4. 상승 피라미딩 (scale-in) ──────
+            # ── 3.7. 불타기 (Fire Buy — 모멘텀 지속 확인 후 공격적 비중 추가) ──
+            # 피라미딩보다 이른 시점(+1.5%)에 진입하되, Hot List 활성 + 거래량 2배 확인 필수
+            # 모멘텀이 살아있는 동안 수익을 극대화하는 전략
             scale_in_count = int(ts.get("scale_in_count", 0))
+            if (
+                pnl_pct >= _FIRE_BUY_TRIGGER_PCT
+                and macd_bullish
+                and scale_in_count < _SCALE_IN_MAX
+                and risk_level < 4
+            ):
+                hot = _check_hotlist_for_fire(ticker)
+                if hot and float(hot.get("volume_ratio") or 0) >= _FIRE_BUY_VOL_MIN:
+                    fire_qty = max(1, int(quantity * _FIRE_BUY_QTY_RATIO))
+                    vol_ratio = float(hot.get("volume_ratio") or 0)
+                    logger.info(
+                        f"[불타기] {ticker} | 수익 {pnl_pct:+.2f}% | MACD {macd_sig} | "
+                        f"거래량 {vol_ratio:.1f}배 | {fire_qty}주 추가 ({scale_in_count+1}/{_SCALE_IN_MAX}회)"
+                    )
+                    from src.utils.notifier import notify
+                    notify(
+                        f"🔥 <b>[불타기]</b> {hot.get('name', ticker)}({ticker})\n"
+                        f"수익 {pnl_pct:+.2f}% + MACD {macd_sig} + 거래량 {vol_ratio:.1f}배\n"
+                        f"{fire_qty}주 추가 — 모멘텀 지속 확인 ({scale_in_count+1}/{_SCALE_IN_MAX}회)"
+                    )
+                    result = self._place_buy(
+                        ticker=ticker,
+                        quantity=fire_qty,
+                        current_price=current_price,
+                        reason=f"불타기 (수익 {pnl_pct:+.2f}%, MACD {macd_sig}, 거래량 {vol_ratio:.1f}배)",
+                    )
+                    if result:
+                        _increment_scale_in(ticker)
+                        new_avg = (avg_price * quantity + current_price * fire_qty) / (quantity + fire_qty)
+                        _update_entry_price(ticker, new_avg)
+                    return result
+
+            # ── 4. 피라미딩 (Hot List 없어도 됨 — 수익 +3% 이상) ──────
             if (
                 pnl_pct >= _SCALE_IN_TRIGGER_PCT
                 and macd_bullish
                 and scale_in_count < _SCALE_IN_MAX
-                and risk_level < 4   # 리스크 4이상이면 비중 추가 금지
+                and risk_level < 4
             ):
                 scale_qty = max(1, int(quantity * _SCALE_IN_QTY_RATIO))
                 logger.info(
@@ -394,7 +438,6 @@ class PositionMonitorEngine:
                 )
                 if result:
                     _increment_scale_in(ticker)
-                    # 새 평단으로 entry_price 갱신 (trailing floor는 유지)
                     new_avg = (avg_price * quantity + current_price * scale_qty) / (quantity + scale_qty)
                     _update_entry_price(ticker, new_avg)
                 return result
@@ -1046,6 +1089,26 @@ def _increment_dip_buy(ticker: str) -> None:
         )
     except Exception:
         pass
+
+
+def _check_hotlist_for_fire(ticker: str) -> dict | None:
+    """
+    불타기 조건 확인: Hot List에 최근 30분 이내 등재 (거래량은 호출 측에서 별도 확인).
+    등재 시 해당 hot_list 레코드 반환, 아니면 None.
+    """
+    try:
+        row = fetch_one(
+            """
+            SELECT ticker, name, volume_ratio, signal_type, reason FROM hot_list
+            WHERE ticker = ?
+              AND created_at >= datetime('now', '-30 minutes')
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (ticker,),
+        )
+        return dict(row) if row else None
+    except Exception:
+        return None
 
 
 def _update_entry_price(ticker: str, new_avg: float) -> None:
