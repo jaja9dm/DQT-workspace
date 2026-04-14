@@ -71,38 +71,40 @@ _TRAILING_TRIGGER     = settings.TRAILING_TRIGGER_PCT         # 손절선 상향
 _TRAILING_FLOOR       = settings.TRAILING_FLOOR_PCT           # 트레일링 간격 %
 _TRAILING_TIGHT_FLOOR = _TRAILING_FLOOR / 2                   # MACD 약화 시 절반으로 타이트하게
 
-# 사다리 / 피라미딩 파라미터
-_LADDER_TRIGGER       = settings.LADDER_TRIGGER_PCT           # 하락 시 사다리 발동 %
-_LADDER_QTY_RATIO     = settings.LADDER_QTY_RATIO             # 사다리 매수 수량 배율
-_SCALE_IN_TRIGGER_PCT = 3.0    # 수익 +3% 이상에서 피라미딩 검토
-_SCALE_IN_QTY_RATIO   = 0.3    # 기존 수량의 30% 추가
-_SCALE_IN_MAX         = 2      # 최대 2회 (피라미딩 한도)
+# 사다리 / 피라미딩 파라미터 — 기본값 (DB strategy_params가 우선, 없으면 이 값 사용)
+_LADDER_TRIGGER       = settings.LADDER_TRIGGER_PCT
+_LADDER_QTY_RATIO     = settings.LADDER_QTY_RATIO
+_SCALE_IN_TRIGGER_PCT = 3.0
+_SCALE_IN_QTY_RATIO   = 0.3
+_SCALE_IN_MAX         = 2
 
-# 스마트 물타기 파라미터 (일시 눌림 + 반등 기대)
-_DIP_BUY_MIN_LOSS     = -1.0   # 최소 -1% 이상 눌렸을 때만 검토
-_DIP_BUY_MAX_LOSS     = -4.9   # -5% (손절선) 직전까지만 허용
-_DIP_BUY_QTY_RATIO    = 0.25   # 기존 수량의 25% 추가 (소량)
-_DIP_BUY_MAX          = 2      # 최대 2회
-_DIP_BUY_VOL_MIN      = 1.5    # Hot List 거래량 비율 최소 1.5배
-_DIP_BUY_HOTLIST_MIN  = 15     # Hot List 등재 후 최대 15분 이내
+# 스마트 물타기 기본값
+_DIP_BUY_MIN_LOSS     = -1.0
+_DIP_BUY_MAX_LOSS     = -4.9
+_DIP_BUY_QTY_RATIO    = 0.25
+_DIP_BUY_MAX          = 2
+_DIP_BUY_VOL_MIN      = 1.5
+_DIP_BUY_HOTLIST_MIN  = 15
 
-# 물타기 후 MACD 반등 탈출 파라미터
-# 물타기를 한 번이라도 한 포지션에서 MACD가 bullish로 전환되면
-# 목표가 미달이더라도 소폭 수익이면 바로 탈출 (손실 복구 후 재진입 전략)
-_MACD_REVERSAL_EXIT_MIN_PNL = 0.3   # 최소 +0.3% 수익 시 탈출 허용
-_MACD_REVERSAL_EXIT_MAX_PNL = 4.9   # +5% 이상은 일반 익절 로직이 처리
+# 물타기 후 MACD 반등 탈출 기본값
+_MACD_REVERSAL_EXIT_MIN_PNL = 0.3
+_MACD_REVERSAL_EXIT_MAX_PNL = 4.9
 
-# 불타기 파라미터 (상승 모멘텀 확인 후 적극적 비중 추가)
-# 물타기와 반대 개념: 이미 수익권 + 모멘텀 지속 확인 → 더 공격적으로 올라탐
-# 피라미딩과 다른 점: 더 이른 진입(+1.5%), 더 많은 수량(50%), Hot List + 거래량 확인 필수
-_FIRE_BUY_TRIGGER_PCT = 1.5   # 수익 +1.5% 이상에서 불타기 검토 (피라미딩보다 이름)
-_FIRE_BUY_QTY_RATIO   = 0.5   # 기존 수량의 50% 추가 (공격적 비중 확대)
-_FIRE_BUY_VOL_MIN     = 2.0   # 거래량 2배 이상 (강한 모멘텀 확인 필수)
-_FIRE_BUY_HOTLIST_MIN = 30    # Hot List 등재 후 최대 30분 이내 (최신 모멘텀)
+# 불타기 기본값
+_FIRE_BUY_TRIGGER_PCT = 1.5
+_FIRE_BUY_QTY_RATIO   = 0.5
+_FIRE_BUY_VOL_MIN     = 2.0
+_FIRE_BUY_HOTLIST_MIN = 30
 
 # MACD 신호 분류
 _MACD_BULLISH  = {"buy_pre", "buy"}
 _MACD_BEARISH  = {"sell_pre", "sell"}
+
+
+def _p(name: str, fallback: float) -> float:
+    """DB strategy_params 우선 조회. 자동 튜닝 값이 있으면 반환, 없으면 fallback."""
+    from src.teams.research.param_tuner import get_param
+    return get_param(name, fallback)
 
 
 class PositionMonitorEngine:
@@ -310,16 +312,19 @@ class PositionMonitorEngine:
                 )
 
             # ── 3. 스마트 물타기 (일시 눌림 반등 기대) ──
+            dip_min  = _p("dip_buy_min_loss",  _DIP_BUY_MIN_LOSS)
+            dip_max  = _p("dip_buy_max_loss",  _DIP_BUY_MAX_LOSS)
+            dip_max_count = int(_p("dip_buy_max_count", _DIP_BUY_MAX))
             dip_buy_count = int(ts.get("dip_buy_count", 0))
             if (
-                _DIP_BUY_MIN_LOSS >= pnl_pct >= _DIP_BUY_MAX_LOSS
+                dip_min >= pnl_pct >= dip_max
                 and not macd_bearish
-                and dip_buy_count < _DIP_BUY_MAX
+                and dip_buy_count < dip_max_count
                 and risk_level < 4
             ):
                 hot = _check_hotlist_for_dip(ticker)
                 if hot:
-                    dip_qty = max(1, int(quantity * _DIP_BUY_QTY_RATIO))
+                    dip_qty = max(1, int(quantity * _p("dip_buy_qty_ratio", _DIP_BUY_QTY_RATIO)))
                     vol_ratio = hot.get("volume_ratio", 0)
                     logger.info(
                         f"[스마트 물타기] {ticker} | 눌림 {pnl_pct:+.2f}% | "
@@ -350,10 +355,11 @@ class PositionMonitorEngine:
             # 목표가 미달이더라도 소폭 수익 구간이면 바로 전량 익절 후 탈출
             # → 손실 복구 확정 후 재진입 전략 (물타기 후 눌리다 반등 시 탈출 최적 타이밍)
             dip_buy_done = int(ts.get("dip_buy_count", 0)) > 0
+            reversal_min = _p("macd_reversal_exit_min", _MACD_REVERSAL_EXIT_MIN_PNL)
             if (
                 dip_buy_done
                 and macd_just_turned_bullish
-                and _MACD_REVERSAL_EXIT_MIN_PNL <= pnl_pct <= _MACD_REVERSAL_EXIT_MAX_PNL
+                and reversal_min <= pnl_pct <= _MACD_REVERSAL_EXIT_MAX_PNL
             ):
                 logger.info(
                     f"[MACD 반등 탈출] {ticker} | 물타기 이력 있음 | "
@@ -377,18 +383,19 @@ class PositionMonitorEngine:
                 )
 
             # ── 3.7. 불타기 (Fire Buy — 모멘텀 지속 확인 후 공격적 비중 추가) ──
-            # 피라미딩보다 이른 시점(+1.5%)에 진입하되, Hot List 활성 + 거래량 2배 확인 필수
-            # 모멘텀이 살아있는 동안 수익을 극대화하는 전략
+            fire_trigger = _p("fire_buy_trigger_pct", _FIRE_BUY_TRIGGER_PCT)
+            fire_vol_min = _p("fire_buy_vol_min",     _FIRE_BUY_VOL_MIN)
+            scale_in_max = int(_p("scale_in_max_count", _SCALE_IN_MAX))
             scale_in_count = int(ts.get("scale_in_count", 0))
             if (
-                pnl_pct >= _FIRE_BUY_TRIGGER_PCT
+                pnl_pct >= fire_trigger
                 and macd_bullish
-                and scale_in_count < _SCALE_IN_MAX
+                and scale_in_count < scale_in_max
                 and risk_level < 4
             ):
                 hot = _check_hotlist_for_fire(ticker)
-                if hot and float(hot.get("volume_ratio") or 0) >= _FIRE_BUY_VOL_MIN:
-                    fire_qty = max(1, int(quantity * _FIRE_BUY_QTY_RATIO))
+                if hot and float(hot.get("volume_ratio") or 0) >= fire_vol_min:
+                    fire_qty = max(1, int(quantity * _p("fire_buy_qty_ratio", _FIRE_BUY_QTY_RATIO)))
                     vol_ratio = float(hot.get("volume_ratio") or 0)
                     logger.info(
                         f"[불타기] {ticker} | 수익 {pnl_pct:+.2f}% | MACD {macd_sig} | "
@@ -413,13 +420,14 @@ class PositionMonitorEngine:
                     return result
 
             # ── 4. 피라미딩 (Hot List 없어도 됨 — 수익 +3% 이상) ──────
+            scale_trigger = _p("scale_in_trigger_pct", _SCALE_IN_TRIGGER_PCT)
             if (
-                pnl_pct >= _SCALE_IN_TRIGGER_PCT
+                pnl_pct >= scale_trigger
                 and macd_bullish
-                and scale_in_count < _SCALE_IN_MAX
+                and scale_in_count < scale_in_max
                 and risk_level < 4
             ):
-                scale_qty = max(1, int(quantity * _SCALE_IN_QTY_RATIO))
+                scale_qty = max(1, int(quantity * _p("scale_in_qty_ratio", _SCALE_IN_QTY_RATIO)))
                 logger.info(
                     f"[피라미딩] {ticker} | 수익 {pnl_pct:+.2f}% + MACD {macd_sig} | "
                     f"{scale_qty}주 추가 매수 ({scale_in_count+1}/{_SCALE_IN_MAX}회)"

@@ -163,6 +163,11 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         ), id="daily_review_debrief", name="일일 매매 복기")
 
+        # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (17:00)
+        s.add_job(self._run_param_tuning, CronTrigger(
+            day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
+        ), id="param_tuning", name="자동 파라미터 튜닝")
+
         # 연구소 심층 백테스트 (일요일 주 1회)
         s.add_job(self._run_research_deep, CronTrigger(
             day_of_week="sun", hour=16, minute=30, timezone="Asia/Seoul"
@@ -300,6 +305,15 @@ class DQTScheduler:
             ReportEngine().run()
         except Exception as e:
             logger.error(f"리포트 실행 오류: {e}", exc_info=True)
+
+    def _run_param_tuning(self) -> None:
+        """17:00 — 자동 파라미터 튜닝 (복기 결과 기반)."""
+        logger.info("자동 파라미터 튜닝 실행")
+        try:
+            from src.teams.research.param_tuner import run_param_tuning
+            run_param_tuning()
+        except Exception as e:
+            logger.error(f"파라미터 튜닝 오류: {e}", exc_info=True)
 
     def _run_daily_review(self) -> None:
         """16:30 — 일일 매매 복기 (오늘 매매 분석 + 개선점 도출)."""

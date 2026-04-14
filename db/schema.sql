@@ -224,6 +224,22 @@ CREATE TABLE IF NOT EXISTS stop_orders (
 );
 
 -- ────────────────────────────────────────
+-- 자동 파라미터 튜닝: 조정 가능한 전략 수치
+-- 장 마감 후 복기 엔진이 자동 갱신 (안전 범위 내에서만)
+-- 엔진들이 하드코딩 상수 대신 이 값을 우선 참조
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS strategy_params (
+    param_name   TEXT PRIMARY KEY,
+    current_val  REAL NOT NULL,
+    default_val  REAL NOT NULL,
+    min_val      REAL NOT NULL,    -- 안전 하한 (이 아래로 내리지 않음)
+    max_val      REAL NOT NULL,    -- 안전 상한 (이 위로 올리지 않음)
+    description  TEXT,
+    tuned_by     TEXT DEFAULT 'default',  -- default | auto | manual
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
 -- 일일 복기: 매매 피드백 저장
 -- 매 영업일 장 마감 후 자동 생성
 -- TradingEngine·ResearchEngine이 참조해 전략 개선에 활용
