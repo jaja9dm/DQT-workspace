@@ -86,6 +86,12 @@ _DIP_BUY_MAX          = 2      # 최대 2회
 _DIP_BUY_VOL_MIN      = 1.5    # Hot List 거래량 비율 최소 1.5배
 _DIP_BUY_HOTLIST_MIN  = 15     # Hot List 등재 후 최대 15분 이내
 
+# 물타기 후 MACD 반등 탈출 파라미터
+# 물타기를 한 번이라도 한 포지션에서 MACD가 bullish로 전환되면
+# 목표가 미달이더라도 소폭 수익이면 바로 탈출 (손실 복구 후 재진입 전략)
+_MACD_REVERSAL_EXIT_MIN_PNL = 0.3   # 최소 +0.3% 수익 시 탈출 허용
+_MACD_REVERSAL_EXIT_MAX_PNL = 4.9   # +5% 이상은 일반 익절 로직이 처리
+
 # MACD 신호 분류
 _MACD_BULLISH  = {"buy_pre", "buy"}
 _MACD_BEARISH  = {"sell_pre", "sell"}
@@ -106,6 +112,8 @@ class PositionMonitorEngine:
         self._ws_triggered: set[str] = set()    # WebSocket이 매도 트리거한 종목 (폴링 중복 방지)
         # 콜백에서 _place_sell 호출 시 필요한 최신 수량 캐시
         self._qty_cache: dict[str, int] = {}    # {ticker: quantity}
+        # 종목별 이전 MACD 상태 — 반등 전환(bearish/None → bullish) 감지용
+        self._macd_prev: dict[str, str | None] = {}  # {ticker: last_signal}
 
     def start(self) -> None:
         logger.info("포지션 감시 엔진 시작")
@@ -211,7 +219,8 @@ class PositionMonitorEngine:
           0. MACD 신호 수집 (이후 모든 판단에 활용)
           1. MACD 조기 손절 (최우선)
           2. 트레일링 스톱 — MACD sell_pre 시 간격 절반으로 타이트하게 조임
-          3. 하락 사다리 매수 (평단 낮추기)
+          3. 스마트 물타기 (일시 눌림 + 반등 기대)
+          3.5. 물타기 후 MACD 반등 탈출 — 목표가 미달이더라도 소폭 수익 시 조기 익절
           4. 상승 피라미딩 (MACD bullish + 수익권 → 비중 추가)
           5. 타임컷
           6. 동적 익절 — MACD bullish면 목표 상향/보류, bearish면 즉시 실행
@@ -232,6 +241,11 @@ class PositionMonitorEngine:
         macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
         macd_bullish = macd_sig in _MACD_BULLISH
         macd_bearish = macd_sig in _MACD_BEARISH
+
+        # 이전 사이클 대비 bullish 전환 여부 (bearish/None → bullish)
+        prev_macd = self._macd_prev.get(ticker)
+        macd_just_turned_bullish = macd_bullish and (prev_macd not in _MACD_BULLISH)
+        self._macd_prev[ticker] = macd_sig  # 이번 상태 저장 (다음 사이클용)
 
         # ── 1. MACD 조기 손절 (최우선) ─────────
         if settings.MACD_EARLY_EXIT_ENABLED and macd_bearish:
@@ -321,6 +335,37 @@ class PositionMonitorEngine:
                         new_avg = (avg_price * quantity + current_price * dip_qty) / (quantity + dip_qty)
                         _update_entry_price(ticker, new_avg)
                     return result
+
+            # ── 3.5. 물타기 후 MACD 반등 탈출 ────
+            # 물타기를 한 번이라도 했고 + MACD가 bearish/neutral에서 bullish로 전환된 순간 +
+            # 목표가 미달이더라도 소폭 수익 구간이면 바로 전량 익절 후 탈출
+            # → 손실 복구 확정 후 재진입 전략 (물타기 후 눌리다 반등 시 탈출 최적 타이밍)
+            dip_buy_done = int(ts.get("dip_buy_count", 0)) > 0
+            if (
+                dip_buy_done
+                and macd_just_turned_bullish
+                and _MACD_REVERSAL_EXIT_MIN_PNL <= pnl_pct <= _MACD_REVERSAL_EXIT_MAX_PNL
+            ):
+                logger.info(
+                    f"[MACD 반등 탈출] {ticker} | 물타기 이력 있음 | "
+                    f"MACD {prev_macd} → {macd_sig} (bullish 전환) | "
+                    f"손익 {pnl_pct:+.2f}% — 목표가 미달이지만 조기 익절"
+                )
+                _delete_trailing_stop(ticker)
+                from src.utils.notifier import notify
+                notify(
+                    f"🔄 <b>[MACD 반등 탈출]</b> {ticker}\n"
+                    f"물타기 후 MACD {prev_macd} → {macd_sig} 전환 감지\n"
+                    f"손익 {pnl_pct:+.2f}% | {quantity}주 전량 익절 탈출\n"
+                    f"(목표가 미달이지만 손실 복구 확정 후 재진입 전략)"
+                )
+                return self._place_sell(
+                    ticker=ticker,
+                    quantity=quantity,
+                    current_price=current_price,
+                    action="take_profit",
+                    reason=f"물타기 후 MACD 반등 탈출 ({prev_macd}→{macd_sig}, 손익 {pnl_pct:+.2f}%)",
+                )
 
             # ── 4. 상승 피라미딩 (scale-in) ──────
             scale_in_count = int(ts.get("scale_in_count", 0))
