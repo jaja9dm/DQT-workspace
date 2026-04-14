@@ -78,6 +78,14 @@ _SCALE_IN_TRIGGER_PCT = 3.0    # 수익 +3% 이상에서 피라미딩 검토
 _SCALE_IN_QTY_RATIO   = 0.3    # 기존 수량의 30% 추가
 _SCALE_IN_MAX         = 2      # 최대 2회 (피라미딩 한도)
 
+# 스마트 물타기 파라미터 (일시 눌림 + 반등 기대)
+_DIP_BUY_MIN_LOSS     = -1.0   # 최소 -1% 이상 눌렸을 때만 검토
+_DIP_BUY_MAX_LOSS     = -4.9   # -5% (손절선) 직전까지만 허용
+_DIP_BUY_QTY_RATIO    = 0.25   # 기존 수량의 25% 추가 (소량)
+_DIP_BUY_MAX          = 2      # 최대 2회
+_DIP_BUY_VOL_MIN      = 1.5    # Hot List 거래량 비율 최소 1.5배
+_DIP_BUY_HOTLIST_MIN  = 15     # Hot List 등재 후 최대 15분 이내
+
 # MACD 신호 분류
 _MACD_BULLISH  = {"buy_pre", "buy"}
 _MACD_BEARISH  = {"sell_pre", "sell"}
@@ -278,23 +286,40 @@ class PositionMonitorEngine:
                     reason=f"트레일링 스톱 발동 (손절선 {trailing_floor:,.0f}원)",
                 )
 
-            # ── 3. 하락 사다리 매수 ──────────────
-            if ts["ladder_bought"] == 0:
-                ladder_trigger_price = avg_price * (1 - _LADDER_TRIGGER / 100)
-                if current_price <= ladder_trigger_price:
-                    ladder_qty = max(1, int(quantity * _LADDER_QTY_RATIO))
+            # ── 3. 스마트 물타기 (일시 눌림 반등 기대) ──
+            dip_buy_count = int(ts.get("dip_buy_count", 0))
+            if (
+                _DIP_BUY_MIN_LOSS >= pnl_pct >= _DIP_BUY_MAX_LOSS
+                and not macd_bearish
+                and dip_buy_count < _DIP_BUY_MAX
+                and risk_level < 4
+            ):
+                hot = _check_hotlist_for_dip(ticker)
+                if hot:
+                    dip_qty = max(1, int(quantity * _DIP_BUY_QTY_RATIO))
+                    vol_ratio = hot.get("volume_ratio", 0)
                     logger.info(
-                        f"[사다리 매수] {ticker} | 현재가 {current_price:,.0f} ≤ "
-                        f"발동가 {ladder_trigger_price:,.0f} | {ladder_qty}주 추가 매수"
+                        f"[스마트 물타기] {ticker} | 눌림 {pnl_pct:+.2f}% | "
+                        f"MACD {macd_sig} | 거래량 {vol_ratio:.1f}배 | "
+                        f"{dip_qty}주 추가 ({dip_buy_count+1}/{_DIP_BUY_MAX}회)"
+                    )
+                    from src.utils.notifier import notify
+                    notify(
+                        f"💧 <b>[스마트 물타기]</b> {hot.get('name', ticker)}({ticker})\n"
+                        f"눌림 {pnl_pct:+.2f}% | MACD {macd_sig} | 거래량 {vol_ratio:.1f}배\n"
+                        f"{dip_qty}주 추가 — 반등 기대 ({dip_buy_count+1}/{_DIP_BUY_MAX}회)"
                     )
                     result = self._place_buy(
                         ticker=ticker,
-                        quantity=ladder_qty,
+                        quantity=dip_qty,
                         current_price=current_price,
-                        reason=f"사다리 매수 (하락 {pnl_pct:+.2f}% ≤ -{_LADDER_TRIGGER:.0f}%)",
+                        reason=f"스마트 물타기 (눌림 {pnl_pct:+.2f}%, MACD {macd_sig}, 거래량 {vol_ratio:.1f}배)",
                     )
                     if result:
-                        _mark_ladder_bought(ticker)
+                        _increment_dip_buy(ticker)
+                        # 새 평단 갱신 (손절선은 내리지 않음)
+                        new_avg = (avg_price * quantity + current_price * dip_qty) / (quantity + dip_qty)
+                        _update_entry_price(ticker, new_avg)
                     return result
 
             # ── 4. 상승 피라미딩 (scale-in) ──────
@@ -940,6 +965,38 @@ def _increment_scale_in(ticker: str) -> None:
     try:
         execute(
             "UPDATE trailing_stop SET scale_in_count = scale_in_count + 1, updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
+            (ticker,),
+        )
+    except Exception:
+        pass
+
+
+def _check_hotlist_for_dip(ticker: str) -> dict | None:
+    """
+    스마트 물타기 조건 확인: Hot List에 최근 15분 이내 등재 + 거래량 비율 충족.
+    조건 충족 시 해당 hot_list 레코드 반환, 아니면 None.
+    """
+    try:
+        row = fetch_one(
+            """
+            SELECT ticker, name, volume_ratio, reason FROM hot_list
+            WHERE ticker = ?
+              AND created_at >= datetime('now', '-15 minutes')
+              AND (volume_ratio IS NULL OR volume_ratio >= ?)
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            (ticker, _DIP_BUY_VOL_MIN),
+        )
+        return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def _increment_dip_buy(ticker: str) -> None:
+    """스마트 물타기 실행 횟수 증가."""
+    try:
+        execute(
+            "UPDATE trailing_stop SET dip_buy_count = dip_buy_count + 1, updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
             (ticker,),
         )
     except Exception:
