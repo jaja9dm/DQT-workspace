@@ -139,6 +139,11 @@ class PositionMonitorEngine:
         """
         1회 실행: 잔고 조회 → 스냅샷 저장 → 손절·익절·타임컷 판단 → 주문.
 
+        KIS 잔고 API 실패 시 폴백 순서:
+          1순위: KIS 잔고 API (실시간 가격 포함)
+          2순위: DB 스냅샷 + KIS 현재가 개별 조회
+          3순위: DB 스냅샷 마지막 가격 그대로 사용 (stale 가능성 있지만 손절 판단은 유지)
+
         Returns:
             처리된 액션 목록
         """
@@ -147,11 +152,16 @@ class PositionMonitorEngine:
         level = risk.get("risk_level", 1)
         stop_loss_pct = get_stop_loss_pct()
 
-        # 2. KIS 잔고 조회
+        # 2. KIS 잔고 조회 (실패 시 DB 스냅샷 폴백)
         positions = _fetch_positions()
         if not positions:
-            # 보유 종목이 없어지면 남은 구독 전부 해제
-            self._sync_ws_subscriptions(positions)
+            positions = _fetch_positions_from_snapshot()
+            if positions:
+                logger.warning(
+                    f"KIS 잔고 API 실패 → DB 스냅샷 폴백 ({len(positions)}종목) — 가격 stale 가능"
+                )
+        if not positions:
+            self._sync_ws_subscriptions([])
             return []
 
         # 3. 스냅샷 저장 + 수량 캐시 갱신
@@ -710,6 +720,76 @@ def _fetch_positions() -> list[dict]:
     except Exception as e:
         logger.warning(f"KIS 잔고 조회 실패: {e}")
         return []
+
+
+def _fetch_positions_from_snapshot() -> list[dict]:
+    """
+    KIS 잔고 API 실패 시 폴백.
+    DB position_snapshot 최신 레코드 + KIS 현재가 API(개별)로 포지션 구성.
+    현재가 API도 실패하면 스냅샷 마지막 가격 사용.
+    trailing_stop 테이블에 있는 종목만 대상 (실제 보유 포지션으로 간주).
+    """
+    try:
+        # trailing_stop에 등록된 종목 = 현재 보유 중인 종목
+        ts_rows = fetch_all("SELECT ticker FROM trailing_stop")
+        if not ts_rows:
+            return []
+
+        tickers = [row["ticker"] for row in ts_rows]
+        positions = []
+
+        for ticker in tickers:
+            # 최신 스냅샷 조회
+            snap = fetch_one(
+                "SELECT * FROM position_snapshot WHERE ticker = ? ORDER BY snapshot_at DESC LIMIT 1",
+                (ticker,),
+            )
+            if not snap:
+                continue
+
+            quantity = snap["quantity"]
+            if quantity <= 0:
+                continue
+
+            avg_price = float(snap["avg_price"])
+
+            # KIS 현재가 개별 조회 시도
+            current_price = _fetch_current_price_safe(ticker, fallback=float(snap["current_price"]))
+            pnl_pct = (current_price / avg_price - 1) * 100 if avg_price > 0 else 0.0
+
+            positions.append({
+                "ticker": ticker,
+                "name": snap.get("name", ticker),
+                "quantity": quantity,
+                "avg_price": avg_price,
+                "current_price": current_price,
+                "pnl_pct": pnl_pct,
+                "held_days": _calc_held_days(ticker),
+                "partial_sold": _count_partial_sells(ticker),
+            })
+
+        return positions
+
+    except Exception as e:
+        logger.warning(f"DB 스냅샷 폴백 실패: {e}")
+        return []
+
+
+def _fetch_current_price_safe(ticker: str, fallback: float) -> float:
+    """KIS 현재가 조회. 실패 시 fallback 가격 반환."""
+    try:
+        gw = KISGateway()
+        resp = gw.request(
+            method="GET",
+            path="/uapi/domestic-stock/v1/quotations/inquire-price",
+            params={"FID_COND_MRKT_DIV_CODE": "J", "FID_INPUT_ISCD": ticker},
+            tr_id="FHKST01010100",
+            priority=RequestPriority.POSITION_MONITOR,
+        )
+        price = float(resp.get("output", {}).get("stck_prpr", 0) or 0)
+        return price if price > 0 else fallback
+    except Exception:
+        return fallback
 
 
 # ──────────────────────────────────────────────
