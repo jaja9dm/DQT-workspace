@@ -225,17 +225,20 @@ def _execute_sell(pos: dict, reason: str) -> None:
             tr_id=tr_id,
             priority=Priority.TRADING,
         )
+        avg_price = float(pos.get("avg_price", 0) or 0)
+        pnl_pct = ((price / avg_price) - 1) * 100 if avg_price > 0 else None
+        pnl_amt = (price - avg_price) * quantity if avg_price > 0 else None
         execute(
             """
             INSERT INTO trades
                 (date, ticker, name, action, order_type, exec_price,
-                 quantity, status, signal_source, strategy_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 quantity, status, pnl, pnl_pct, signal_source, strategy_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(date.today()), ticker, pos.get("name", ""),
                 "sell", "market", price, quantity,
-                "filled", "overnight_judge", reason[:50],
+                "filled", pnl_amt, pnl_pct, "overnight_judge", reason,
             ),
         )
         # trailing_stop 레코드 삭제

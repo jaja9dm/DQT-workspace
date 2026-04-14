@@ -240,6 +240,7 @@ class PositionMonitorEngine:
             실행된 액션 딕셔너리 또는 None
         """
         ticker = pos["ticker"]
+        name = pos.get("name", ticker)
         pnl_pct = pos["pnl_pct"]
         held_days = pos["held_days"]
         quantity = pos["quantity"]
@@ -274,11 +275,9 @@ class PositionMonitorEngine:
                     f"{quantity}주 즉시 청산"
                 )
                 return self._place_sell(
-                    ticker=ticker,
-                    quantity=quantity,
-                    current_price=current_price,
-                    action="stop_loss",
-                    reason=f"MACD 조기손절 (sell_pre, 손익 {pnl_pct:+.2f}%)",
+                    ticker=ticker, quantity=quantity, current_price=current_price,
+                    action="stop_loss", reason=f"MACD 조기손절 (sell_pre, 손익 {pnl_pct:+.2f}%)",
+                    avg_price=avg_price, name=name,
                 )
 
         # ── 2. 트레일링 스톱 ────────────────────
@@ -304,11 +303,9 @@ class PositionMonitorEngine:
                     f"손익 {pnl_pct:+.2f}% | {quantity}주 전량 매도"
                 )
                 return self._place_sell(
-                    ticker=ticker,
-                    quantity=quantity,
-                    current_price=current_price,
-                    action="stop_loss",
-                    reason=f"트레일링 스톱 발동 (손절선 {trailing_floor:,.0f}원)",
+                    ticker=ticker, quantity=quantity, current_price=current_price,
+                    action="stop_loss", reason=f"트레일링 스톱 발동 (손절선 {trailing_floor:,.0f}원)",
+                    avg_price=avg_price, name=name,
                 )
 
             # ── 3. 스마트 물타기 (일시 눌림 반등 기대) ──
@@ -375,11 +372,9 @@ class PositionMonitorEngine:
                     f"(목표가 미달이지만 손실 복구 확정 후 재진입 전략)"
                 )
                 return self._place_sell(
-                    ticker=ticker,
-                    quantity=quantity,
-                    current_price=current_price,
-                    action="take_profit",
-                    reason=f"물타기 후 MACD 반등 탈출 ({prev_macd}→{macd_sig}, 손익 {pnl_pct:+.2f}%)",
+                    ticker=ticker, quantity=quantity, current_price=current_price,
+                    action="take_profit", reason=f"물타기 후 MACD 반등 탈출 ({prev_macd}→{macd_sig}, 손익 {pnl_pct:+.2f}%)",
+                    avg_price=avg_price, name=name,
                 )
 
             # ── 3.7. 불타기 (Fire Buy — 모멘텀 지속 확인 후 공격적 비중 추가) ──
@@ -458,11 +453,9 @@ class PositionMonitorEngine:
                     f"기준 -{stop_loss_pct:.1f}% | {quantity}주 전량"
                 )
                 return self._place_sell(
-                    ticker=ticker,
-                    quantity=quantity,
-                    current_price=current_price,
-                    action="stop_loss",
-                    reason=f"손익 {pnl_pct:+.2f}% ≤ -{stop_loss_pct:.1f}%",
+                    ticker=ticker, quantity=quantity, current_price=current_price,
+                    action="stop_loss", reason=f"손익 {pnl_pct:+.2f}% ≤ -{stop_loss_pct:.1f}%",
+                    avg_price=avg_price, name=name,
                 )
 
         # ── 5. 타임컷 ────────────────────────────
@@ -473,11 +466,9 @@ class PositionMonitorEngine:
             )
             _delete_trailing_stop(ticker)
             return self._place_sell(
-                ticker=ticker,
-                quantity=quantity,
-                current_price=current_price,
-                action="time_cut",
-                reason=f"{held_days}영업일 초과 ({_MAX_HOLD_DAYS}일 기준)",
+                ticker=ticker, quantity=quantity, current_price=current_price,
+                action="time_cut", reason=f"{held_days}영업일 초과 ({_MAX_HOLD_DAYS}일 기준)",
+                avg_price=avg_price, name=name,
             )
 
         # ── 6. 동적 익절 (MACD 연동) ─────────────
@@ -516,11 +507,9 @@ class PositionMonitorEngine:
                 sell_qty = max(1, quantity // 3)
                 logger.info(f"[익절 {tp_label}] {ticker} | 손익 {pnl_pct:+.2f}% | {sell_qty}주")
                 return self._place_sell(
-                    ticker=ticker,
-                    quantity=sell_qty,
-                    current_price=current_price,
-                    action="take_profit",
-                    reason=f"{tp_label} 익절 {pnl_pct:+.2f}% ≥ +{tp_pct:.0f}%",
+                    ticker=ticker, quantity=sell_qty, current_price=current_price,
+                    action="take_profit", reason=f"{tp_label} 익절 {pnl_pct:+.2f}% ≥ +{tp_pct:.0f}%",
+                    avg_price=avg_price, name=name,
                 )
 
         return None
@@ -635,6 +624,8 @@ class PositionMonitorEngine:
         current_price: float,
         action: str,
         reason: str,
+        avg_price: float = 0.0,
+        name: str = "",
     ) -> dict | None:
         """KIS API 시장가 매도 주문 + trades 테이블 저장."""
         if quantity <= 0:
@@ -674,6 +665,8 @@ class PositionMonitorEngine:
                 exec_price=exec_price,
                 signal_source="position_monitor",
                 reason=reason,
+                avg_price=avg_price,
+                name=name,
             )
 
             logger.info(
@@ -1156,24 +1149,31 @@ def _record_trade(
     exec_price: float,
     signal_source: str,
     reason: str,
+    avg_price: float = 0.0,
+    name: str = "",
 ) -> None:
-    """trades 테이블에 매도 이력 기록."""
+    """trades 테이블에 매매 이력 기록 (pnl 포함)."""
+    pnl_pct = ((exec_price / avg_price) - 1) * 100 if avg_price > 0 else None
+    pnl_amt = (exec_price - avg_price) * quantity if avg_price > 0 else None
     execute(
         """
         INSERT INTO trades
-            (date, ticker, action, order_type, exec_price,
-             quantity, status, signal_source, strategy_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (date, ticker, name, action, order_type, exec_price,
+             quantity, status, pnl, pnl_pct, signal_source, strategy_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             str(date.today()),
             ticker,
+            name,
             action,
             "market",
             exec_price,
             quantity,
-            "filled",       # 시장가이므로 즉시 체결 처리
+            "filled",
+            pnl_amt,
+            pnl_pct,
             signal_source,
-            reason[:50],    # strategy_id 컬럼 임시 활용
+            reason,
         ),
     )
