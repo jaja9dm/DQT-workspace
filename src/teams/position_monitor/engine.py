@@ -6,23 +6,31 @@ engine.py — 포지션 감시 서브엔진
   매매팀과 독립적으로 동작하며, 위기 관리팀의 리스크 레벨을 실시간 참조한다.
 
 손절 기준:
-  트레일링 스톱 (기본): 매수가 대비 -10% 초기 손절선, 수익 시 손절선 상향
+  트레일링 스톱 (기본): 매수가 대비 -5% 초기 손절선, 수익 시 손절선 상향
   고정 손절 (트레일링 미등록 포지션): 리스크 레벨 연동
 
-트레일링 스톱:
+트레일링 스톱 (동적):
   초기 손절선 = 매수가 × (1 - TRAILING_INITIAL_STOP_PCT)
   매수가 대비 +TRAILING_TRIGGER_PCT% 수익 시 손절선 상향 시작
   손절선 = max(현재 손절선, 현재가 × (1 - TRAILING_FLOOR_PCT))
+  MACD sell_pre 신호 발생 시 손절선 간격 절반으로 타이트하게 조임
   손절선은 절대 내려가지 않음
 
-사다리 매수:
+사다리 매수 (하락 시 평단 낮추기):
   현재가 ≤ 매수가 × (1 - LADDER_TRIGGER_PCT) 이고 아직 미실행 시
   보유 수량 × LADDER_QTY_RATIO 만큼 추가 매수
 
-분할 익절:
-  +5%  도달 시 보유량의 1/3 매도 (1차)
-  +10% 도달 시 보유량의 1/3 매도 (2차)
-  나머지는 트레일링 스톱 또는 타임컷까지 유지
+피라미딩 (상승 시 비중 추가 — 스마트 scale-in):
+  수익 +SCALE_IN_TRIGGER_PCT% 이상 + MACD buy_pre/buy 신호 시
+  최대 SCALE_IN_MAX회까지 원래 수량의 SCALE_IN_QTY_RATIO만큼 추가 매수
+  추가 매수 후 entry_price 갱신 → 트레일링 스톱 자동 재조정
+
+동적 익절 (MACD 연동):
+  +5% 도달 시 MACD 확인
+    → MACD bullish: 익절 보류 + 손절선을 매수가+1% 이상으로 상향 (수익 확보)
+    → MACD neutral/bearish: 보유량 1/3 매도
+  +10% 도달 시 동일 로직
+  MACD가 sell_pre로 돌아서는 순간 익절 즉시 실행
 
 타임컷:
   5 영업일 초과 보유 → 수익 여부 무관 전량 청산
@@ -52,17 +60,27 @@ _INTERVAL_SEC = 90          # 1분 30초 (1~2분 주기)
 _KIS_BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 _KIS_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
 
-# 익절 목표 (concept.md 기준)
-_TAKE_PROFIT_1_PCT = settings.TAKE_PROFIT_1_PCT   # +5% → 1/3 매도
-_TAKE_PROFIT_2_PCT = settings.TAKE_PROFIT_2_PCT   # +10% → 1/3 매도
+# 익절 목표
+_TAKE_PROFIT_1_PCT = settings.TAKE_PROFIT_1_PCT   # +5% → MACD 판단 후 1/3 매도 or 보류
+_TAKE_PROFIT_2_PCT = settings.TAKE_PROFIT_2_PCT   # +10% → 동일 로직
 _MAX_HOLD_DAYS = settings.POSITION_MAX_HOLD_DAYS  # 5 영업일
 
 # 트레일링 스톱 파라미터
 _TRAILING_INITIAL_STOP = settings.TRAILING_INITIAL_STOP_PCT  # 초기 손절선 %
 _TRAILING_TRIGGER     = settings.TRAILING_TRIGGER_PCT         # 손절선 상향 시작 수익률 %
 _TRAILING_FLOOR       = settings.TRAILING_FLOOR_PCT           # 트레일링 간격 %
-_LADDER_TRIGGER       = settings.LADDER_TRIGGER_PCT           # 사다리 매수 발동 하락률 %
+_TRAILING_TIGHT_FLOOR = _TRAILING_FLOOR / 2                   # MACD 약화 시 절반으로 타이트하게
+
+# 사다리 / 피라미딩 파라미터
+_LADDER_TRIGGER       = settings.LADDER_TRIGGER_PCT           # 하락 시 사다리 발동 %
 _LADDER_QTY_RATIO     = settings.LADDER_QTY_RATIO             # 사다리 매수 수량 배율
+_SCALE_IN_TRIGGER_PCT = 3.0    # 수익 +3% 이상에서 피라미딩 검토
+_SCALE_IN_QTY_RATIO   = 0.3    # 기존 수량의 30% 추가
+_SCALE_IN_MAX         = 2      # 최대 2회 (피라미딩 한도)
+
+# MACD 신호 분류
+_MACD_BULLISH  = {"buy_pre", "buy"}
+_MACD_BEARISH  = {"sell_pre", "sell"}
 
 
 class PositionMonitorEngine:
@@ -169,7 +187,16 @@ class PositionMonitorEngine:
         self, pos: dict, stop_loss_pct: float, risk_level: int
     ) -> dict | None:
         """
-        단일 포지션에 대해 트레일링 스톱·사다리 매수·익절·타임컷 판단.
+        단일 포지션에 대해 스마트 포지션 관리 실행.
+
+        판단 순서:
+          0. MACD 신호 수집 (이후 모든 판단에 활용)
+          1. MACD 조기 손절 (최우선)
+          2. 트레일링 스톱 — MACD sell_pre 시 간격 절반으로 타이트하게 조임
+          3. 하락 사다리 매수 (평단 낮추기)
+          4. 상승 피라미딩 (MACD bullish + 수익권 → 비중 추가)
+          5. 타임컷
+          6. 동적 익절 — MACD bullish면 목표 상향/보류, bearish면 즉시 실행
 
         Returns:
             실행된 액션 딕셔너리 또는 None
@@ -182,12 +209,16 @@ class PositionMonitorEngine:
         avg_price = pos["avg_price"]
         partial_sold = pos.get("partial_sold", 0)
 
-        # ── MACD 조기 손절 (최우선) ─────────────
-        if settings.MACD_EARLY_EXIT_ENABLED:
-            from src.teams.intraday_macd.engine import get_latest_macd_signal
-            macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
+        # ── 0. MACD 신호 수집 ───────────────────
+        from src.teams.intraday_macd.engine import get_latest_macd_signal
+        macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
+        macd_bullish = macd_sig in _MACD_BULLISH
+        macd_bearish = macd_sig in _MACD_BEARISH
+
+        # ── 1. MACD 조기 손절 (최우선) ─────────
+        if settings.MACD_EARLY_EXIT_ENABLED and macd_bearish:
             min_loss = settings.MACD_EARLY_EXIT_MIN_LOSS_PCT
-            if macd_sig == "sell_pre" and pnl_pct <= -min_loss:
+            if pnl_pct <= -min_loss:
                 logger.warning(
                     f"[MACD 조기손절] {ticker} | MACD 역행 + 손익 {pnl_pct:+.2f}% | "
                     f"기준 -{min_loss:.1f}% | {quantity}주 전량 청산"
@@ -207,14 +238,16 @@ class PositionMonitorEngine:
                     reason=f"MACD 조기손절 (sell_pre, 손익 {pnl_pct:+.2f}%)",
                 )
 
-        # ── 트레일링 스톱 ────────────────────────
+        # ── 2. 트레일링 스톱 ────────────────────
         ts = _load_trailing_stop(ticker)
         if ts:
-            # 손절선 업데이트 (단방향 상승)
-            updated_floor = _update_trailing_floor(ticker, ts, current_price, avg_price, quantity)
+            # MACD bearish면 trailing 간격 절반으로 타이트하게
+            tight = macd_bearish
+            updated_floor = _update_trailing_floor(
+                ticker, ts, current_price, avg_price, quantity, tight=tight
+            )
             trailing_floor = updated_floor
 
-            # 트레일링 스톱 발동 (현재가 ≤ 손절선)
             if current_price <= trailing_floor:
                 logger.warning(
                     f"[트레일링 스톱] {ticker} | 현재가 {current_price:,.0f} ≤ "
@@ -235,7 +268,7 @@ class PositionMonitorEngine:
                     reason=f"트레일링 스톱 발동 (손절선 {trailing_floor:,.0f}원)",
                 )
 
-            # 사다리 매수 (현재가 ≤ 매수가 × (1 - LADDER_TRIGGER%) 이고 미실행)
+            # ── 3. 하락 사다리 매수 ──────────────
             if ts["ladder_bought"] == 0:
                 ladder_trigger_price = avg_price * (1 - _LADDER_TRIGGER / 100)
                 if current_price <= ladder_trigger_price:
@@ -254,8 +287,40 @@ class PositionMonitorEngine:
                         _mark_ladder_bought(ticker)
                     return result
 
+            # ── 4. 상승 피라미딩 (scale-in) ──────
+            scale_in_count = int(ts.get("scale_in_count", 0))
+            if (
+                pnl_pct >= _SCALE_IN_TRIGGER_PCT
+                and macd_bullish
+                and scale_in_count < _SCALE_IN_MAX
+                and risk_level < 4   # 리스크 4이상이면 비중 추가 금지
+            ):
+                scale_qty = max(1, int(quantity * _SCALE_IN_QTY_RATIO))
+                logger.info(
+                    f"[피라미딩] {ticker} | 수익 {pnl_pct:+.2f}% + MACD {macd_sig} | "
+                    f"{scale_qty}주 추가 매수 ({scale_in_count+1}/{_SCALE_IN_MAX}회)"
+                )
+                from src.utils.notifier import notify
+                notify(
+                    f"📈 <b>[피라미딩]</b> {ticker}\n"
+                    f"수익 {pnl_pct:+.2f}% + MACD 강세 → {scale_qty}주 추가\n"
+                    f"({scale_in_count+1}/{_SCALE_IN_MAX}회차)"
+                )
+                result = self._place_buy(
+                    ticker=ticker,
+                    quantity=scale_qty,
+                    current_price=current_price,
+                    reason=f"피라미딩 (수익 {pnl_pct:+.2f}%, MACD {macd_sig})",
+                )
+                if result:
+                    _increment_scale_in(ticker)
+                    # 새 평단으로 entry_price 갱신 (trailing floor는 유지)
+                    new_avg = (avg_price * quantity + current_price * scale_qty) / (quantity + scale_qty)
+                    _update_entry_price(ticker, new_avg)
+                return result
+
         else:
-            # 트레일링 스톱 미등록 포지션 → 기존 고정 손절 유지
+            # 트레일링 스톱 미등록 포지션 → 고정 손절
             if pnl_pct <= -stop_loss_pct:
                 logger.warning(
                     f"[손절] {ticker} | 손익 {pnl_pct:+.2f}% | "
@@ -269,7 +334,7 @@ class PositionMonitorEngine:
                     reason=f"손익 {pnl_pct:+.2f}% ≤ -{stop_loss_pct:.1f}%",
                 )
 
-        # ── 타임컷 ───────────────────────────────
+        # ── 5. 타임컷 ────────────────────────────
         if held_days > _MAX_HOLD_DAYS:
             logger.warning(
                 f"[타임컷] {ticker} | {held_days}영업일 보유 | "
@@ -284,28 +349,48 @@ class PositionMonitorEngine:
                 reason=f"{held_days}영업일 초과 ({_MAX_HOLD_DAYS}일 기준)",
             )
 
-        # ── 분할 익절 ────────────────────────────
-        if pnl_pct >= _TAKE_PROFIT_2_PCT and partial_sold >= 1:
-            sell_qty = max(1, quantity // 3)
-            logger.info(f"[익절 2차] {ticker} | 손익 {pnl_pct:+.2f}% | {sell_qty}주")
-            return self._place_sell(
-                ticker=ticker,
-                quantity=sell_qty,
-                current_price=current_price,
-                action="take_profit",
-                reason=f"2차 익절 {pnl_pct:+.2f}% ≥ +{_TAKE_PROFIT_2_PCT:.0f}%",
-            )
+        # ── 6. 동적 익절 (MACD 연동) ─────────────
+        # 익절 목표 도달 시:
+        #   - MACD bullish  → 익절 보류. 대신 손절선을 매수가+1% 이상으로 강제 상향 (수익 보호)
+        #   - MACD bearish/neutral → 즉시 분할 매도
+        for tp_pct, tp_label, tp_cond in [
+            (_TAKE_PROFIT_2_PCT, "2차", partial_sold >= 1),
+            (_TAKE_PROFIT_1_PCT, "1차", partial_sold == 0),
+        ]:
+            if pnl_pct >= tp_pct and tp_cond:
+                if macd_bullish and ts:
+                    # 익절 보류 — 손절선을 매수가+1%로 상향해 수익 보호
+                    lock_floor = avg_price * 1.01
+                    current_floor = float(ts["trailing_floor"])
+                    if lock_floor > current_floor:
+                        execute(
+                            "UPDATE trailing_stop SET trailing_floor = ?, updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
+                            (lock_floor, ticker),
+                        )
+                        from src.infra.stop_order_manager import update_stop_order
+                        update_stop_order(ticker, quantity, lock_floor)
+                        logger.info(
+                            f"[익절 보류] {ticker} | +{pnl_pct:.1f}% 달성 but MACD {macd_sig} 강세 | "
+                            f"손절선 → {lock_floor:,.0f}원 (매수가+1%) 으로 상향, 홀딩 유지"
+                        )
+                        from src.utils.notifier import notify
+                        notify(
+                            f"⏫ <b>[익절 보류 — MACD 강세]</b> {ticker}\n"
+                            f"수익 {pnl_pct:+.2f}% (목표 {tp_pct}% 도달) but MACD {macd_sig}\n"
+                            f"손절선 {lock_floor:,.0f}원으로 상향 — 더 높은 가격 노림"
+                        )
+                    return None  # 이번 사이클 아무 행동 없음
 
-        if pnl_pct >= _TAKE_PROFIT_1_PCT and partial_sold == 0:
-            sell_qty = max(1, quantity // 3)
-            logger.info(f"[익절 1차] {ticker} | 손익 {pnl_pct:+.2f}% | {sell_qty}주")
-            return self._place_sell(
-                ticker=ticker,
-                quantity=sell_qty,
-                current_price=current_price,
-                action="take_profit",
-                reason=f"1차 익절 {pnl_pct:+.2f}% ≥ +{_TAKE_PROFIT_1_PCT:.0f}%",
-            )
+                # MACD neutral/bearish → 분할 매도 실행
+                sell_qty = max(1, quantity // 3)
+                logger.info(f"[익절 {tp_label}] {ticker} | 손익 {pnl_pct:+.2f}% | {sell_qty}주")
+                return self._place_sell(
+                    ticker=ticker,
+                    quantity=sell_qty,
+                    current_price=current_price,
+                    action="take_profit",
+                    reason=f"{tp_label} 익절 {pnl_pct:+.2f}% ≥ +{tp_pct:.0f}%",
+                )
 
         return None
 
@@ -721,29 +806,34 @@ def _load_trailing_stop(ticker: str) -> dict | None:
 
 
 def _update_trailing_floor(
-    ticker: str, ts: dict, current_price: float, avg_price: float, quantity: int
+    ticker: str, ts: dict, current_price: float, avg_price: float, quantity: int,
+    tight: bool = False,
 ) -> float:
     """
     트레일링 손절선 업데이트.
     수익이 TRAILING_TRIGGER% 이상이면 손절선을 현재가 기준 TRAILING_FLOOR% 아래로 상향.
+    tight=True (MACD bearish) 이면 간격을 절반으로 줄여 더 타이트하게 추적.
     손절선은 절대 내려가지 않음.
     손절선이 실제로 올라간 경우 거래소 사전 손절 주문도 취소 후 재제출.
     """
     current_floor = float(ts["trailing_floor"])
     highest = float(ts["highest_price"])
 
-    # 최고가 갱신
     new_highest = max(highest, current_price)
 
-    # 손절선 상향 조건: 현재 수익 ≥ TRAILING_TRIGGER%
     gain_pct = (current_price / avg_price - 1) * 100
+    floor_gap = _TRAILING_TIGHT_FLOOR if tight else _TRAILING_FLOOR
+
     if gain_pct >= _TRAILING_TRIGGER:
-        candidate_floor = current_price * (1 - _TRAILING_FLOOR / 100)
+        candidate_floor = current_price * (1 - floor_gap / 100)
+        new_floor = max(current_floor, candidate_floor)
+    elif tight and gain_pct > 0:
+        # MACD 약화 + 수익권: 수익 전액 기준으로도 타이트하게
+        candidate_floor = current_price * (1 - floor_gap / 100)
         new_floor = max(current_floor, candidate_floor)
     else:
         new_floor = current_floor
 
-    # DB 업데이트
     execute(
         """
         UPDATE trailing_stop
@@ -754,15 +844,37 @@ def _update_trailing_floor(
     )
 
     if new_floor > current_floor:
+        tight_label = " [MACD타이트]" if tight else ""
         logger.info(
-            f"[트레일링] {ticker} 손절선 상향: {current_floor:,.0f} → {new_floor:,.0f}원 "
+            f"[트레일링{tight_label}] {ticker} 손절선 상향: {current_floor:,.0f} → {new_floor:,.0f}원 "
             f"(현재가 {current_price:,.0f}, 수익 {gain_pct:+.1f}%)"
         )
-        # 거래소 사전 손절 주문도 새 손절선으로 업데이트
         from src.infra.stop_order_manager import update_stop_order
         update_stop_order(ticker, quantity, new_floor)
 
     return new_floor
+
+
+def _increment_scale_in(ticker: str) -> None:
+    """피라미딩 실행 횟수 증가."""
+    try:
+        execute(
+            "UPDATE trailing_stop SET scale_in_count = scale_in_count + 1, updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
+            (ticker,),
+        )
+    except Exception:
+        pass
+
+
+def _update_entry_price(ticker: str, new_avg: float) -> None:
+    """피라미딩 후 평균 매수가 갱신."""
+    try:
+        execute(
+            "UPDATE trailing_stop SET entry_price = ?, updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
+            (new_avg, ticker),
+        )
+    except Exception:
+        pass
 
 
 def _delete_trailing_stop(ticker: str) -> None:

@@ -665,8 +665,8 @@ def _init_trailing_stop(ticker: str, entry_price: float) -> None:
         execute(
             """
             INSERT INTO trailing_stop
-                (ticker, entry_price, trailing_floor, highest_price, ladder_bought)
-            VALUES (?, ?, ?, ?, 0)
+                (ticker, entry_price, trailing_floor, highest_price, ladder_bought, scale_in_count)
+            VALUES (?, ?, ?, ?, 0, 0)
             """,
             (ticker, entry_price, initial_floor, entry_price),
         )
