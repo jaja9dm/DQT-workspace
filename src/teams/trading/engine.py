@@ -511,6 +511,13 @@ JSON만 응답:
                 f"{quantity}주 @ {current_price:,.0f}원 | 주문번호 {order_no}"
             )
 
+            from src.utils.notifier import notify
+            notify(
+                f"🟢 <b>[{tranche}차 매수 체결]</b> {name}({ticker})\n"
+                f"💰 {quantity}주 @ {current_price:,.0f}원\n"
+                f"📝 {decision.get('reason', '')}"
+            )
+
             # 1차 매수 시 트레일링 스톱 초기화 + 거래소 사전 손절 주문 제출
             if tranche == 1:
                 _init_trailing_stop(ticker, current_price)
