@@ -12,4 +12,4 @@ export PYTHONPATH="$VENV/lib/python3.9/site-packages:$PYTHONPATH"
 export VIRTUAL_ENV="$VENV"
 export PATH="$VENV/bin:$PATH"
 
-exec "$PYTHON" main.py
+exec "$PYTHON" main.py "$@"
