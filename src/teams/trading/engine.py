@@ -204,6 +204,14 @@ class TradingEngine:
             logger.info(f"Gate 1 차단: 리스크 레벨 {level} — 신규 진입 금지")
             return []
 
+        # ── Gate 1.5: 최대 보유 종목 수 ──────────
+        from src.teams.research.param_tuner import get_param
+        max_pos = int(get_param("max_positions", 5.0))
+        open_count = _count_open_positions()
+        if open_count >= max_pos:
+            logger.debug(f"Gate 1.5 차단: 현재 {open_count}종목 보유 (최대 {max_pos}종목) — 신규 진입 금지")
+            return []
+
         # ── Gate 2: 글로벌 시황 ──────────────────
         global_ctx = _load_global_context()
         if global_ctx.get("korea_market_outlook") == "negative":
@@ -738,6 +746,12 @@ def _has_open_position(ticker: str) -> bool:
     """trailing_stop 테이블에 해당 종목 레코드가 있으면 보유 중으로 간주."""
     row = fetch_one("SELECT ticker FROM trailing_stop WHERE ticker = ?", (ticker,))
     return row is not None
+
+
+def _count_open_positions() -> int:
+    """현재 보유 종목 수 (trailing_stop 행 수)."""
+    row = fetch_one("SELECT COUNT(*) AS cnt FROM trailing_stop")
+    return int(row["cnt"]) if row else 0
 
 
 def _init_trailing_stop(ticker: str, entry_price: float) -> None:

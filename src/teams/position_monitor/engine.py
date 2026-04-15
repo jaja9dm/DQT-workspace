@@ -377,6 +377,76 @@ class PositionMonitorEngine:
                     avg_price=avg_price, name=name,
                 )
 
+            # ── 3.6. 스캘핑 부분 익절 + 재진입 준비 ──────────────────────────
+            # 단타 전략: 수익 +scalp_profit_pct% 도달 시 보유량의 scalp_sell_ratio만큼 즉시 익절
+            # 익절 후 scalp_exit_price·scalp_exit_qty를 trailing_stop에 기록
+            # → 이후 재진입 사이클에서 price가 exit_price * (1 - reload_dip%) 이하로 내려오면 재매수
+            scalp_thr   = _p("scalp_profit_pct",  2.5)
+            scalp_ratio = _p("scalp_sell_ratio",   0.5)
+            ts_scalp_exit = float(ts.get("scalp_exit_price") or 0)
+            ts_scalp_qty  = int(ts.get("scalp_exit_qty") or 0)
+            if (
+                pnl_pct >= scalp_thr
+                and ts_scalp_exit == 0            # 이미 부분 익절 한 번 한 건 스킵
+                and partial_sold == 0             # position_snapshot 기준도 확인
+            ):
+                scalp_qty = max(1, int(quantity * scalp_ratio))
+                logger.info(
+                    f"[스캘핑 부분 익절] {ticker} | 수익 {pnl_pct:+.2f}% ≥ +{scalp_thr:.1f}% | "
+                    f"{scalp_qty}주 ({scalp_ratio*100:.0f}%) 즉시 익절"
+                )
+                from src.utils.notifier import notify
+                notify(
+                    f"✂️ <b>[스캘핑 부분 익절]</b> {name}({ticker})\n"
+                    f"수익 {pnl_pct:+.2f}% — {scalp_qty}주({scalp_ratio*100:.0f}%) 익절\n"
+                    f"재진입 대기: -{_p('scalp_reload_dip', 1.0):.1f}% 하락 시 재매수"
+                )
+                # trailing_stop에 재진입 기준 기록
+                execute(
+                    """UPDATE trailing_stop
+                       SET scalp_exit_price = ?, scalp_exit_qty = ?, updated_at = CURRENT_TIMESTAMP
+                       WHERE ticker = ?""",
+                    (current_price, scalp_qty, ticker),
+                )
+                return self._place_sell(
+                    ticker=ticker, quantity=scalp_qty, current_price=current_price,
+                    action="take_profit",
+                    reason=f"스캘핑 부분 익절 {pnl_pct:+.2f}% ({scalp_ratio*100:.0f}%)",
+                    avg_price=avg_price, name=name,
+                )
+
+            # 재진입: 부분 익절 후 price가 exit * (1-reload_dip%) 이하로 내려오면 재매수
+            if ts_scalp_exit > 0 and ts_scalp_qty > 0 and not macd_bearish:
+                reload_dip  = _p("scalp_reload_dip", 1.0)
+                reload_trig = ts_scalp_exit * (1 - reload_dip / 100)
+                if current_price <= reload_trig:
+                    logger.info(
+                        f"[스캘핑 재진입] {ticker} | 현재가 {current_price:,.0f} ≤ "
+                        f"재진입선 {reload_trig:,.0f} (exit {ts_scalp_exit:,.0f} -{reload_dip:.1f}%)"
+                    )
+                    from src.utils.notifier import notify
+                    notify(
+                        f"🔄 <b>[스캘핑 재진입]</b> {name}({ticker})\n"
+                        f"현재가 {current_price:,.0f}원 (재진입선 {reload_trig:,.0f}원)\n"
+                        f"{ts_scalp_qty}주 재매수"
+                    )
+                    # 재진입 후 scalp 기록 초기화
+                    execute(
+                        """UPDATE trailing_stop
+                           SET scalp_exit_price = NULL, scalp_exit_qty = 0, updated_at = CURRENT_TIMESTAMP
+                           WHERE ticker = ?""",
+                        (ticker,),
+                    )
+                    result = self._place_buy(
+                        ticker=ticker, quantity=ts_scalp_qty,
+                        current_price=current_price,
+                        reason=f"스캘핑 재진입 (exit {ts_scalp_exit:,.0f}→현재 {current_price:,.0f})",
+                    )
+                    if result:
+                        new_avg = (avg_price * quantity + current_price * ts_scalp_qty) / (quantity + ts_scalp_qty)
+                        _update_entry_price(ticker, new_avg)
+                    return result
+
             # ── 3.7. 불타기 (Fire Buy — 모멘텀 지속 확인 후 공격적 비중 추가) ──
             fire_trigger = _p("fire_buy_trigger_pct", _FIRE_BUY_TRIGGER_PCT)
             fire_vol_min = _p("fire_buy_vol_min",     _FIRE_BUY_VOL_MIN)

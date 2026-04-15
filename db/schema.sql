@@ -161,14 +161,16 @@ CREATE TABLE IF NOT EXISTS position_snapshot (
 -- 매수 시 생성, 포지션 청산 시 삭제
 -- ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS trailing_stop (
-    ticker         TEXT PRIMARY KEY,
-    entry_price    REAL NOT NULL,        -- 최초 매수 평균 단가
-    trailing_floor REAL NOT NULL,        -- 현재 손절선 (단방향 상승만 허용)
-    highest_price  REAL NOT NULL,        -- 진입 후 최고가
-    ladder_bought  INTEGER NOT NULL DEFAULT 0,   -- 사다리 매수 실행 횟수 (큰 하락 시 평단 낮추기)
-    scale_in_count INTEGER NOT NULL DEFAULT 0,   -- 피라미딩 실행 횟수 (상승 시 비중 추가)
-    dip_buy_count  INTEGER NOT NULL DEFAULT 0,   -- 스마트 물타기 횟수 (일시 눌림 + 조건 충족 시)
-    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+    ticker           TEXT PRIMARY KEY,
+    entry_price      REAL NOT NULL,        -- 최초 매수 평균 단가
+    trailing_floor   REAL NOT NULL,        -- 현재 손절선 (단방향 상승만 허용)
+    highest_price    REAL NOT NULL,        -- 진입 후 최고가
+    ladder_bought    INTEGER NOT NULL DEFAULT 0,   -- 사다리 매수 실행 횟수 (큰 하락 시 평단 낮추기)
+    scale_in_count   INTEGER NOT NULL DEFAULT 0,   -- 피라미딩 실행 횟수 (상승 시 비중 추가)
+    dip_buy_count    INTEGER NOT NULL DEFAULT 0,   -- 스마트 물타기 횟수 (일시 눌림 + 조건 충족 시)
+    scalp_exit_price REAL DEFAULT NULL,            -- 부분 익절(스캘핑) 실행 가격 (재진입 기준선)
+    scalp_exit_qty   INTEGER DEFAULT 0,            -- 부분 익절 시 매도 수량 (재진입 목표 수량)
+    updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ────────────────────────────────────────

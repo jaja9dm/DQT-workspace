@@ -30,8 +30,8 @@ _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 # 1회 Claude 호출당 처리할 최대 종목 수
 _BATCH_SIZE = 20
 
-# Hot List 최대 종목 수
-_MAX_HOT_LIST = 10
+# Hot List 최대 종목 수 (max_positions와 맞춤 — 5종목 집중)
+_MAX_HOT_LIST = 5
 
 # ─────────────────────────────────────────────────────────────────────
 # 정적 시스템 프롬프트 — 캐시 대상 (1024 토큰 이상, 5분마다 재사용)
