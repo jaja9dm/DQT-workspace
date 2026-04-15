@@ -174,7 +174,7 @@ JSON만 응답:
 
     try:
         response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_MAIN,
+            model=settings.CLAUDE_MODEL_FAST,
             max_tokens=128,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],

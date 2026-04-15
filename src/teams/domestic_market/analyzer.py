@@ -98,8 +98,8 @@ def analyze(data: DomesticMarketData, global_risk_score: int = 5) -> dict:
 
     try:
         response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_MAIN,
-            max_tokens=512,
+            model=settings.CLAUDE_MODEL_FAST,
+            max_tokens=256,
             temperature=settings.CLAUDE_TEMPERATURE,
             messages=[
                 {"role": "user", "content": _build_prompt(data, global_risk_score)}

@@ -6,6 +6,11 @@ analyzer.py — 국내 주식팀 Claude 분석 모듈
 
 모델: claude-sonnet-4-6 (temperature=0)
 출력: hot_list 테이블에 저장할 종목 목록
+
+토큰 최적화:
+  - 시스템 프롬프트(정적 선정 기준·규칙)를 cache_control=ephemeral로 캐시
+  - 사이클마다 바뀌는 후보 데이터만 user 메시지로 전송
+  - 5분 주기 반복 호출 시 캐시 히트 → 입력 토큰 ~70% 절감
 """
 
 from __future__ import annotations
@@ -28,12 +33,88 @@ _BATCH_SIZE = 20
 # Hot List 최대 종목 수
 _MAX_HOT_LIST = 10
 
+# ─────────────────────────────────────────────────────────────────────
+# 정적 시스템 프롬프트 — 캐시 대상 (1024 토큰 이상, 5분마다 재사용)
+#
+# 내용: 역할 정의 · 선정 기준 · 시장 해석 규칙 · 출력 형식 · 판단 가이드
+# 변경 시: 캐시가 무효화되어 다음 호출에서 재캐싱됨
+# ─────────────────────────────────────────────────────────────────────
+_SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
+5분 주기로 제공되는 후보 종목 배치를 분석하여 당일 매매 관심 목록(Hot List)을 선정합니다.
+후보 종목들은 이미 일봉 MACD 필터(MACD 강세 또는 골든크로스 임박)를 통과한 상태입니다.
 
-def _build_prompt(
+## 역할과 목표
+- 당일 장중 모멘텀이 가장 강한 종목을 선별합니다.
+- Hot List에 오른 종목은 매매팀이 실제 주문을 실행하므로 정확성이 중요합니다.
+- 과열·리스크 신호가 있는 종목은 과감히 제외합니다.
+
+## 입력 데이터 해석 가이드
+
+### 각 종목 필드 설명
+- 등락(%): 전일 종가 대비 현재가 변동률
+- RSI: 상대강도지수 (0~100). 30↓=과매도, 70↑=과열
+- MACD 히스토그램: 양수=강세, 음수=약세. 증가 중=모멘텀 축적
+- BB위치(볼린저밴드): 0.0=하단, 0.5=중앙, 1.0=상단, 1.0↑=돌파
+- MA20: 20일 이동평균선. 현재가가 위=상승 추세, 아래=하락 추세
+- 거래량비율: 최근 20일 평균 대비 배수 (1.0=평균, 3.0=3배)
+- 조건 태그: 거래량N배 / 가격+N% / BB돌파 (동시 충족할수록 신호 강도 높음)
+
+### 시장 컨텍스트 해석
+- 국내 시장점수: -1.0(극약세) ~ +1.0(극강세). 0.0 이상=중립 이상
+- 글로벌 리스크: 0(완전 안전) ~ 10(극도 위험). 7↑=보수적 선정 필요
+
+## 선정 기준 (우선순위 순)
+
+### 1순위: 복합 모멘텀 신호 (즉시 선정 고려)
+- 거래량 3배↑ + 가격 상승 + MACD 히스토그램 양수: 강력 매수 신호
+- 볼린저밴드 상단 돌파(BB위치 > 1.0) + RSI 60↑ + MA20 위: 모멘텀 돌파
+
+### 2순위: 골든크로스 임박 (선점 진입)
+- MACD 히스토그램이 음수이지만 2봉 이상 연속 증가 (수렴 중)
+- RSI 50~65 구간 (과열 아닌 상승 초입)
+- MA20 위에서 거래량 증가 동반
+
+### 3순위: 거래량 집중 단독 신호
+- 거래량 5배↑ + 가격 소폭 상승: 세력 집결 가능성
+- 단, MACD 하락세 중이면 제외
+
+## 제외 기준 (하나라도 해당 시 선정 불가)
+- RSI 75↑ AND BB위치 0.95↑: 단기 과열 — 진입 시 손실 위험
+- 가격 하락 중 + MACD 히스토그램 하락: 명확한 하락 추세
+- 거래량 없이 가격만 급등 (거래량비율 < 1.5): 유동성 부족
+- 글로벌 리스크 8↑ 시: RSI 60↑ 종목만 선정 (보수 모드)
+
+## 시장 상황별 선정 강도 조절
+- 시장점수 +0.5↑: 적극 선정 (최대 10종목까지 허용)
+- 시장점수 -0.1 ~ +0.5: 기준 준수 (5~8종목)
+- 시장점수 -0.3 ~ -0.1: 보수적 선정 (3~5종목)
+- 시장점수 -0.3↓: 최소화 (1~3종목, 매우 강한 신호만)
+
+## 응답 규칙
+- JSON만 출력합니다. 설명이나 주석을 추가하지 않습니다.
+- hot_list가 비어있으면 빈 배열 []을 반환합니다.
+- 선정 이유는 한국어로 20자 이내로 간결하게 작성합니다.
+- signal_type은 반드시 다음 중 하나: volume_surge | breakout | momentum | sector_momentum
+
+## 출력 형식
+{
+  "hot_list": [
+    {
+      "ticker": "<6자리 종목코드>",
+      "signal_type": "<volume_surge|breakout|momentum|sector_momentum>",
+      "reason": "<선정 근거 20자 이내>"
+    }
+  ]
+}"""
+
+
+def _build_user_message(
     candidates: list[StockSnapshot],
     market_score: float,
     global_risk_score: int,
+    max_hot_list: int,
 ) -> str:
+    """동적 부분만 담은 사용자 메시지 구성."""
     lines = []
     for s in candidates:
         flags = []
@@ -53,36 +134,14 @@ def _build_prompt(
         )
     stock_block = "\n".join(lines)
 
-    return f"""당신은 국내 주식 퀀트 전략가입니다.
-아래 후보 종목들을 검토하여 당일 매매 관심 목록(Hot List)을 선정하세요.
-※ 이미 일봉 MACD 필터(MACD 강세 또는 골든크로스 임박)를 통과한 종목들입니다.
-
-## 시장 컨텍스트
-- 국내 시장 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)
-- 글로벌 리스크 점수: {global_risk_score}/10 (10이 최대 위험)
-
-## 후보 종목 ({len(candidates)}개) — 일봉 MACD 필터 통과
-{stock_block}
-
-## 선정 기준
-1. 거래량 급증 (평균 대비 3배↑) + 가격 상승 동반: 강력 매수 신호
-2. 볼린저밴드 상단 돌파 + RSI 60↑: 모멘텀 돌파 신호
-3. MACD 히스토그램 수렴 중 (음수이지만 증가): 골든크로스 임박
-4. 글로벌 리스크 7 이상 시 보수적으로 선정
-5. RSI 70 초과 + BB위치 0.9 이상이면 과열 — 제외
-
-## 응답 형식 (반드시 JSON만, 최대 {_MAX_HOT_LIST}종목)
-{{
-  "hot_list": [
-    {{
-      "ticker": "<6자리>",
-      "signal_type": "<volume_surge|breakout|momentum|sector_momentum>",
-      "reason": "<선정 근거 20자 이내>"
-    }}
-  ]
-}}
-
-선정 기준 미충족 시 hot_list를 빈 배열로 반환."""
+    return (
+        f"## 현재 시장 컨텍스트\n"
+        f"- 국내 시장점수: {market_score:+.2f}\n"
+        f"- 글로벌 리스크: {global_risk_score}/10\n\n"
+        f"## 후보 종목 ({len(candidates)}개)\n"
+        f"{stock_block}\n\n"
+        f"위 종목 중 Hot List를 선정하세요. 최대 {max_hot_list}종목."
+    )
 
 
 def analyze(
@@ -134,12 +193,21 @@ def analyze(
     try:
         response = _client.messages.create(
             model=settings.CLAUDE_MODEL_MAIN,
-            max_tokens=1024,
+            max_tokens=512,
             temperature=settings.CLAUDE_TEMPERATURE,
+            system=[
+                {
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},  # 정적 기준 캐시 (5분 TTL)
+                }
+            ],
             messages=[
                 {
                     "role": "user",
-                    "content": _build_prompt(batch, market_score, global_risk_score),
+                    "content": _build_user_message(
+                        batch, market_score, global_risk_score, _MAX_HOT_LIST
+                    ),
                 }
             ],
         )
@@ -152,6 +220,16 @@ def analyze(
 
         result = json.loads(raw)
         hot_list = result.get("hot_list", [])
+
+        # 캐시 히트 여부 로깅 (usage 블록에서 확인)
+        usage = response.usage
+        cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+        cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
+        if cache_read:
+            logger.debug(f"프롬프트 캐시 히트: {cache_read}토큰 절감")
+        elif cache_write:
+            logger.debug(f"프롬프트 캐시 저장: {cache_write}토큰")
+
         logger.info(f"Claude Hot List 결정: {len(hot_list)}종목")
         return hot_list[:_MAX_HOT_LIST]
 
