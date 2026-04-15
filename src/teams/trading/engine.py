@@ -54,6 +54,72 @@ _KIS_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 # 분할 매수 비율 — 1차에 60% 집중, 나머지 분할
 _TRANCHE_RATIOS = [0.60, 0.25, 0.15]
 
+# ─────────────────────────────────────────────────────────────────────
+# 매수 판단 정적 시스템 프롬프트 — 캐시 대상 (1024 토큰 이상)
+#
+# 매 5분 주기마다 동일하게 전송되는 판단 기준 · 룰 · 출력 형식.
+# cache_control=ephemeral 로 5분 이내 재호출 시 토큰 ~70% 절감.
+# ─────────────────────────────────────────────────────────────────────
+_BUY_SYSTEM_PROMPT = """당신은 국내 주식 퀀트 트레이딩 시스템의 최종 매수 판단 AI입니다.
+Hot List에서 선별된 후보 종목들을 받아 실제 주문 실행 여부를 결정합니다.
+이 판단은 실제 자금이 투입되므로 근거 있는 결정이 중요합니다.
+
+## 역할
+- 매 5분 주기로 최대 3개 후보 종목을 일괄 검토합니다.
+- 각 종목에 대해 즉시 매수(buy: true) 또는 보류(buy: false)를 결정합니다.
+- 종목별로 목표 수익률(target_pct)과 손절 기준(stop_pct)을 제시합니다.
+
+## 입력 데이터 필드 설명
+- signal_type: 선정 근거 유형 (volume_surge=거래량 급등, breakout=볼린저밴드 돌파, momentum=모멘텀)
+- price_change_pct: 당일 등락률 (%)
+- volume_ratio: 최근 평균 대비 거래량 배수 (1.0=평균, 3.0=3배)
+- rsi: 상대강도지수 (0~100). 30이하=과매도, 70이상=과열
+- reason: Hot List 선정 시 기록된 근거
+- sentiment_score: 최근 뉴스 감성 점수 (-1.0 부정 ~ +1.0 긍정)
+- sentiment_direction: 뉴스 감성 방향 (bullish/bearish/neutral)
+
+## 매수 기준 (buy: true)
+
+### 적극 매수 신호 (하나 이상이면 매수 강력 권고)
+- volume_surge 신호 + 당일 등락 +1%↑ + RSI 45~70: 거래량·가격 동반 상승
+- breakout 신호 + RSI 60↑ + 감성 neutral 이상: 볼린저밴드 돌파 모멘텀
+- momentum 신호 + 거래량 3배↑ + 당일 등락 +0.5%↑: 복합 모멘텀
+
+### 조건부 매수 (아래 항목 과반 충족 시)
+- RSI 50~65 (상승 초입, 과열 아님)
+- 당일 등락 0% 이상 (최소한 보합 이상)
+- 거래량 1.5배↑
+- 감성 점수 -0.2 이상 (매우 부정적이지 않으면 허용)
+
+## 매수 보류 기준 (buy: false)
+- RSI 75 초과: 단기 과열 — 고점 매수 위험
+- 당일 등락 +5% 초과: 추격 매수 지양 (급등 후 조정 가능)
+- 글로벌 리스크 8 이상: 매크로 불확실성 — 신규 진입 자제
+- 감성 점수 -0.5 이하: 강한 부정 뉴스 존재 시
+
+## 목표 수익률·손절 기준 산정
+- target_pct: 신호 강도에 따라 5~15% 제시 (기본 5%, 강한 신호 7~10%)
+- stop_pct: 항상 5% 제시 (트레일링 스톱 초기값, 시스템이 이후 자동 조정)
+
+## 운영 방침
+현재는 알고리즘 테스트 기간입니다. 로직 검증을 위해 최대한 많은 매매를 시도해야 합니다.
+명확한 보류 이유(과열·추격·극단 리스크)가 없으면 buy: true를 선택하세요.
+
+## 응답 형식 (JSON만 출력, 마크다운 불가)
+{
+  "decisions": [
+    {
+      "ticker": "<6자리 종목코드>",
+      "buy": <true|false>,
+      "reason": "<판단 근거 30자 이내>",
+      "target_pct": <목표 수익률, 양수 숫자>,
+      "stop_pct": <손절 기준, 양수 숫자>
+    }
+  ]
+}
+
+종목이 여러 개이면 decisions 배열에 순서대로 모두 포함하세요."""
+
 # 게이트 임계값
 _MARKET_SCORE_GATE = -0.3     # 국내 시황 최소 점수
 _RISK_LEVEL_GATE = 4          # 이 레벨 이상이면 신규 진입 금지
@@ -186,17 +252,19 @@ class TradingEngine:
         # 리스크 레벨에 따라 실제 사용 가능 예수금 제한
         usable_cash = available_cash * position_limit_pct / 100
 
-        # ── Gate 5: Claude 최종 판단 ─────────────
-        orders = []
-        for item in candidates[:3]:   # 1회 최대 3종목
-            ticker = item["ticker"]
+        # ── Gate 5: Claude 최종 판단 (배치) ──────
+        batch = candidates[:3]   # 1회 최대 3종목
+        decisions = self._ask_claude_batch(
+            items=batch,
+            market_score=market_score,
+            global_risk_score=global_ctx.get("global_risk_score", 5),
+            risk_level=level,
+        )  # {ticker: decision_dict}
 
-            decision = self._ask_claude(
-                item=item,
-                market_score=market_score,
-                global_risk_score=global_ctx.get("global_risk_score", 5),
-                risk_level=level,
-            )
+        orders = []
+        for item in batch:
+            ticker = item["ticker"]
+            decision = decisions.get(ticker, {"buy": False, "reason": "판단 없음", "target_pct": 5.0, "stop_pct": 5.0})
 
             if not decision.get("buy"):
                 logger.info(f"Claude 매수 보류: {ticker} — {decision.get('reason', '')}")
@@ -317,81 +385,105 @@ JSON만 응답:
             return False
 
     # ──────────────────────────────────────────
-    # Claude 매수 판단
+    # Claude 매수 판단 (배치 + 프롬프트 캐싱)
     # ──────────────────────────────────────────
 
-    def _ask_claude(
+    def _ask_claude_batch(
         self,
-        item: dict,
+        items: list[dict],
         market_score: float,
         global_risk_score: int,
         risk_level: int,
-    ) -> dict:
+    ) -> dict[str, dict]:
         """
-        Claude에 종목 매수 여부 최종 판단 요청.
+        후보 종목 전체를 1번의 Claude 호출로 일괄 판단.
+
+        기존 종목별 1회 호출(N번) → 배치 1회 호출로 줄이고,
+        정적 판단 기준(_BUY_SYSTEM_PROMPT)을 캐시로 재사용.
 
         Returns:
-            {"buy": bool, "reason": str, "target_pct": float, "stop_pct": float}
+            {ticker: {"buy": bool, "reason": str, "target_pct": float, "stop_pct": float}}
         """
-        ticker = item["ticker"]
-        sentiment = _load_sentiment(ticker)
+        if not items:
+            return {}
 
-        prompt = f"""당신은 국내 주식 퀀트 트레이더입니다.
-아래 정보를 종합하여 이 종목의 즉시 매수 여부를 판단하세요.
+        # 후보별 동적 데이터 조립
+        stock_lines = []
+        for item in items:
+            ticker = item["ticker"]
+            sentiment = _load_sentiment(ticker)
+            stock_lines.append(
+                f"- 티커: {ticker} ({item.get('name', '')})\n"
+                f"  신호: {item.get('signal_type', '')} | "
+                f"등락: {item.get('price_change_pct', 0):+.1f}% | "
+                f"거래량: {item.get('volume_ratio', 0):.1f}배 | "
+                f"RSI: {item.get('rsi', 50):.0f}\n"
+                f"  선정근거: {item.get('reason', '')} | "
+                f"감성: {sentiment.get('avg_score', 0):+.2f}({sentiment.get('direction', 'neutral')})"
+            )
 
-## 매크로 컨텍스트
-- 리스크 레벨: {risk_level}/5
-- 글로벌 리스크 점수: {global_risk_score}/10
-- 국내 시황 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)
+        user_content = (
+            f"## 현재 매크로 컨텍스트\n"
+            f"- 리스크 레벨: {risk_level}/5\n"
+            f"- 글로벌 리스크: {global_risk_score}/10\n"
+            f"- 국내 시황 점수: {market_score:+.2f}\n\n"
+            f"## 매수 판단 후보 ({len(items)}종목)\n"
+            + "\n".join(stock_lines)
+            + f"\n\n위 {len(items)}종목 전체에 대해 decisions 배열로 응답하세요."
+        )
 
-## 종목 정보
-- 티커: {ticker} ({item.get('name', '')})
-- 신호 유형: {item.get('signal_type', '')}
-- 당일 등락률: {item.get('price_change_pct', 0):+.1f}%
-- 거래량 비율: {item.get('volume_ratio', 0):.1f}배 (평균 대비)
-- RSI: {item.get('rsi', 50):.0f}
-- 선정 근거: {item.get('reason', '')}
-
-## 감성 분석 (최근 5건 평균)
-- 감성 점수: {sentiment.get('avg_score', 0):+.2f} (-1.0~+1.0)
-- 주요 방향: {sentiment.get('direction', 'neutral')}
-
-## 판단 기준
-- RSI 75 초과이면 과열 — 보수적으로 판단 (75 이하는 유효)
-- 거래량 급등 + 상승이 가장 강력한 신호
-- 글로벌 리스크 8 이상이면 매수 자제 (7 이하는 허용)
-- 당일 이미 5% 이상 상승했으면 추격 매수 지양 (5% 미만은 허용)
-
-## 운영 방침 (중요)
-현재는 알고리즘 테스트 기간입니다. 로직 검증을 위해 최대한 많은 매매를 시도해야 합니다.
-신호가 약하더라도 명확한 매수 반대 이유가 없으면 buy: true를 선택하세요.
-
-## 응답 형식 (JSON만)
-{{
-  "buy": <true|false>,
-  "reason": "<판단 근거 30자 이내>",
-  "target_pct": <목표 수익률 %, 양수>,
-  "stop_pct": <손절 기준 %, 양수>
-}}"""
+        _default = {"buy": False, "reason": "Claude 오류", "target_pct": 5.0, "stop_pct": 5.0}
 
         try:
             response = _client.messages.create(
                 model=settings.CLAUDE_MODEL_MAIN,
-                max_tokens=256,
+                max_tokens=512,
                 temperature=settings.CLAUDE_TEMPERATURE,
-                messages=[{"role": "user", "content": prompt}],
+                system=[
+                    {
+                        "type": "text",
+                        "text": _BUY_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+                messages=[{"role": "user", "content": user_content}],
             )
             raw = response.content[0].text.strip()
             if "```" in raw:
                 raw = raw.split("```")[1]
                 if raw.startswith("json"):
                     raw = raw[4:]
-            return json.loads(raw)
+            result = json.loads(raw)
+
+            # 캐시 히트 로깅
+            usage = response.usage
+            cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+            if cache_read:
+                logger.debug(f"매수판단 캐시 히트: {cache_read}토큰 절감")
+
+            # ticker 키 딕셔너리로 변환
+            decisions: dict[str, dict] = {}
+            for d in result.get("decisions", []):
+                t = d.get("ticker", "")
+                if t:
+                    decisions[t] = d
+                    logger.info(
+                        f"매수 판단 [{t}] → {'BUY' if d.get('buy') else 'PASS'} | {d.get('reason', '')}"
+                    )
+
+            # 판단 누락 종목은 기본값 보류
+            for item in items:
+                if item["ticker"] not in decisions:
+                    logger.warning(f"매수 판단 누락 [{item['ticker']}] — 보류 처리")
+                    decisions[item["ticker"]] = _default
+
+            return decisions
+
         except Exception as e:
-            logger.error(f"Claude 매수 판단 오류 [{ticker}]: {e}")
+            logger.error(f"Claude 배치 매수 판단 오류: {e}")
             from src.utils.notifier import check_claude_error
-            check_claude_error(e, f"매매팀 [{ticker}]")
-            return {"buy": False, "reason": "Claude 오류", "target_pct": 5.0, "stop_pct": 5.0}
+            check_claude_error(e, "매매팀 배치 판단")
+            return {item["ticker"]: _default for item in items}
 
     # ──────────────────────────────────────────
     # 분할 매수 지연 실행
