@@ -297,6 +297,9 @@ class DQTScheduler:
                 self._trading.run_once()
                 logger.info("09:10 매매팀 재실행 완료")
 
+            # 헬스체크 리포트 — 시스템 상태 텔레그램 요약
+            _send_morning_healthcheck(self)
+
             notify("🔄 <b>[09:10 재점검]</b> Hot List 재스캔 + 매수 재개")
         except Exception as e:
             logger.error(f"09:10 재점검 오류: {e}", exc_info=True)
@@ -416,3 +419,76 @@ class DQTScheduler:
             }
             for job in self._scheduler.get_jobs()
         ]
+
+
+# ──────────────────────────────────────────────────────────────
+# 09:10 헬스체크 — 시스템 상태 텔레그램 요약
+# ──────────────────────────────────────────────────────────────
+
+def _send_morning_healthcheck(scheduler: "DQTScheduler") -> None:
+    """
+    매일 09:10에 시스템 정상 동작 여부를 텔레그램으로 요약.
+    - 엔진 활성 여부
+    - 오늘 Hot List 종목 수
+    - MACD 신호 수집 현황
+    - 보유 포지션
+    """
+    from src.infra.database import fetch_one, fetch_all
+    from src.utils.notifier import notify
+    from datetime import date
+
+    today = str(date.today())
+    lines = ["🩺 <b>[09:10 헬스체크]</b>"]
+
+    # 1. 엔진 상태
+    engines = {
+        "시황": scheduler._global_market,
+        "국내주식": scheduler._domestic_stock,
+        "매매팀": scheduler._trading,
+        "포지션감시": scheduler._position_monitor,
+        "MACD": scheduler._intraday_macd,
+    }
+    alive = [name for name, e in engines.items() if e is not None]
+    dead  = [name for name, e in engines.items() if e is None]
+    lines.append(f"✅ 엔진: {' · '.join(alive)}" if not dead else
+                 f"⚠️ 엔진: {' · '.join(alive)} | 미기동: {' · '.join(dead)}")
+
+    # 2. 오늘 Hot List
+    try:
+        hl = fetch_all(
+            "SELECT DISTINCT ticker FROM hot_list WHERE date(created_at)=? ORDER BY created_at DESC",
+            (today,),
+        )
+        lines.append(f"🔥 Hot List: {len(hl)}종목" + (f" ({', '.join(r['ticker'] for r in hl[:5])})" if hl else ""))
+    except Exception:
+        lines.append("🔥 Hot List: 조회 실패")
+
+    # 3. MACD 신호 수집 현황
+    try:
+        macd_row = fetch_one(
+            "SELECT COUNT(*) as cnt FROM intraday_macd_signal WHERE date(created_at)=?",
+            (today,),
+        )
+        cnt = macd_row["cnt"] if macd_row else 0
+        lines.append(f"📊 MACD 신호: {'정상 수집 중 ' + str(cnt) + '건' if cnt > 0 else '⚠️ 아직 0건 (3분봉 대기 중)'}")
+    except Exception:
+        lines.append("📊 MACD 신호: 조회 실패")
+
+    # 4. 보유 포지션
+    try:
+        from src.infra.kis_gateway import KISGateway
+        gw = KISGateway()
+        bal = gw.get_balance()
+        positions = bal.get("positions", [])
+        if positions:
+            pos_str = " · ".join(
+                f"{p.get('name', p['ticker'])}({p['pnl_pct']:+.1f}%)"
+                for p in positions[:5]
+            )
+            lines.append(f"💼 보유: {len(positions)}종목 — {pos_str}")
+        else:
+            lines.append("💼 보유: 없음 (매수 대기)")
+    except Exception:
+        lines.append("💼 보유: 조회 실패")
+
+    notify("\n".join(lines))
