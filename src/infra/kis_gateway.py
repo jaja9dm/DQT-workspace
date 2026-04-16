@@ -11,11 +11,13 @@ KIS(한국투자증권) API 게이트웨이 — 싱글턴 서비스.
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import IntEnum
+from pathlib import Path
 from queue import PriorityQueue
 
 import requests
@@ -86,6 +88,8 @@ class KISGateway:
         self._access_token: str = ""
         self._token_expires_at: datetime = datetime(2000, 1, 1)  # 항상 만료 상태로 초기화
         self._token_lock = threading.Lock()
+        # 토큰 파일 캐시 경로 — 재시작 시 재발급 방지 (KIS 하루 1회 발급 제한)
+        self._token_cache_path = Path(settings.DB_PATH).parent.parent / ".kis_token_cache.json"
 
         # 우선순위 요청 큐
         self._queue: PriorityQueue[_Request] = PriorityQueue()
@@ -410,14 +414,35 @@ class KISGateway:
         return {}  # unreachable
 
     def _get_token(self) -> str:
-        """Access Token 반환. 만료 30분 전이면 자동 갱신."""
+        """Access Token 반환. 캐시 파일 확인 → 만료 30분 전이면 갱신."""
         with self._token_lock:
+            # 메모리 토큰이 유효하면 바로 반환
             if datetime.now() < self._token_expires_at - timedelta(minutes=30):
                 return self._access_token
+            # 파일 캐시에서 복원 시도 (재시작 시 재발급 방지)
+            if self._load_token_cache():
+                if datetime.now() < self._token_expires_at - timedelta(minutes=30):
+                    logger.info("KIS 토큰 파일 캐시 복원 — 재발급 생략")
+                    return self._access_token
             return self._issue_token()
 
+    def _load_token_cache(self) -> bool:
+        """파일 캐시에서 토큰 복원. 성공 시 True."""
+        try:
+            if not self._token_cache_path.exists():
+                return False
+            data = json.loads(self._token_cache_path.read_text())
+            expires_at = datetime.fromisoformat(data["expires_at"])
+            if datetime.now() >= expires_at - timedelta(minutes=30):
+                return False  # 만료 임박 — 재발급 필요
+            self._access_token = data["access_token"]
+            self._token_expires_at = expires_at
+            return True
+        except Exception:
+            return False
+
     def _issue_token(self) -> str:
-        """Access Token 신규 발급."""
+        """Access Token 신규 발급 후 파일에도 캐시."""
         url = self._base_url + "/oauth2/tokenP"
         body = {
             "grant_type": "client_credentials",
@@ -430,8 +455,22 @@ class KISGateway:
 
         self._access_token = data["access_token"]
         expires_in = int(data.get("expires_in", 86400))
+        if expires_in <= 0:
+            expires_in = 86400
         self._token_expires_at = datetime.now() + timedelta(seconds=expires_in)
-        logger.info(f"KIS 토큰 갱신 완료 — 만료: {self._token_expires_at.strftime('%H:%M:%S')}")
+
+        # 파일 캐시에 저장
+        try:
+            self._token_cache_path.write_text(json.dumps({
+                "access_token": self._access_token,
+                "expires_at": self._token_expires_at.isoformat(),
+            }))
+        except Exception as e:
+            logger.warning(f"토큰 캐시 파일 저장 실패: {e}")
+
+        logger.info(
+            f"KIS 토큰 발급 완료 — 만료: {self._token_expires_at.strftime('%Y-%m-%d %H:%M:%S')}"
+        )
         return self._access_token
 
     def _token_refresh_loop(self) -> None:
