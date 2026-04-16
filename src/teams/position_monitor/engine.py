@@ -210,30 +210,65 @@ class PositionMonitorEngine:
         max_pos = int(get_param("max_positions", 5.0))
         if len(positions) > max_pos:
             excess = len(positions) - max_pos
-            # PnL 낮은 순(손실 큰 것부터) 정렬해서 초과분 청산
-            sorted_pos = sorted(positions, key=lambda p: p["pnl_pct"])
+
+            # 제거 우선순위 스코어 계산 (높을수록 먼저 청산)
+            # 1순위: MACD 역행(bearish) — 추세 반전 확인 종목
+            # 2순위: 손익 마이너스
+            # 3순위: Hot List 미포함 (최근 30분 이내 등재 없음)
+            # 4순위: 보유 기간 긴 종목
+            def _evict_score(p: dict) -> tuple:
+                ticker = p["ticker"]
+                macd_d = get_macd_details(ticker, max_age_minutes=10)
+                is_bearish = macd_d["signal"] in _MACD_BEARISH
+                is_losing  = p["pnl_pct"] < 0
+                in_hotlist = fetch_one(
+                    "SELECT 1 FROM hot_list WHERE ticker=? AND created_at >= datetime('now','-30 minutes')",
+                    (ticker,),
+                ) is not None
+                held = p.get("held_days", 0)
+                # 튜플 비교: 앞 요소가 클수록 먼저 청산
+                return (
+                    int(is_bearish),   # MACD 역행이면 1 (최우선)
+                    int(is_losing),    # 손실 중이면 1
+                    int(not in_hotlist),  # Hot List 없으면 1
+                    held,              # 보유 기간 (길수록 먼저)
+                    -p["pnl_pct"],     # 손익률 낮을수록 먼저 (부호 반전)
+                )
+
+            sorted_pos = sorted(positions, key=_evict_score, reverse=True)
+
             for pos in sorted_pos[:excess]:
+                ticker = pos["ticker"]
+                macd_d = get_macd_details(ticker, max_age_minutes=10)
+                evict_reasons = []
+                if macd_d["signal"] in _MACD_BEARISH:
+                    evict_reasons.append(f"MACD {macd_d['signal']}")
+                if pos["pnl_pct"] < 0:
+                    evict_reasons.append(f"손실 {pos['pnl_pct']:+.2f}%")
+                evict_reasons.append(f"보유 {pos.get('held_days',0)}일")
+                reason_str = " | ".join(evict_reasons)
+
                 logger.info(
-                    f"[초과 포지션 정리] {pos['ticker']} | 손익 {pos['pnl_pct']:+.2f}% | "
+                    f"[초과 포지션 정리] {ticker} | {reason_str} | "
                     f"보유 {len(positions)}종목 > 최대 {max_pos}종목"
                 )
                 from src.utils.notifier import notify
                 notify(
-                    f"📉 <b>[초과 포지션 정리]</b> {pos.get('name', pos['ticker'])}({pos['ticker']})\n"
+                    f"📉 <b>[초과 포지션 정리]</b> {pos.get('name', ticker)}({ticker})\n"
                     f"보유 {len(positions)}종목 → 최대 {max_pos}종목 초과\n"
-                    f"손익 {pos['pnl_pct']:+.2f}% | {pos['quantity']}주 전량 청산"
+                    f"{reason_str} | {pos['quantity']}주 전량 청산"
                 )
                 result = self._place_sell(
-                    ticker=pos["ticker"],
+                    ticker=ticker,
                     quantity=pos["quantity"],
                     current_price=pos["current_price"],
                     action="time_cut",
-                    reason=f"초과 포지션 정리 ({len(positions)}종목>{max_pos}종목)",
+                    reason=f"초과 포지션 정리 ({reason_str})",
                     avg_price=pos["avg_price"],
-                    name=pos.get("name", pos["ticker"]),
+                    name=pos.get("name", ticker),
                 )
                 if result:
-                    positions = [p for p in positions if p["ticker"] != pos["ticker"]]
+                    positions = [p for p in positions if p["ticker"] != ticker]
 
         # 7. 개별 종목 감시 (WebSocket이 이미 트리거한 종목은 스킵)
         actions = []
