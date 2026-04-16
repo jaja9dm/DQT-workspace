@@ -41,6 +41,10 @@ PRICE_SURGE_PCT = 3.0        # 3% 이상 급등
 RSI_OVERBOUGHT = 70.0
 RSI_OVERSOLD = 30.0
 
+# 잡주 필터: 당일 거래대금 최소 기준 (원)
+# 10억 미만 → 유동성 부족, 세력 조작 가능성 높음
+MIN_TRADING_VALUE = 1_000_000_000   # 10억원
+
 # 기술지표 파라미터
 _RSI_PERIOD = 14
 _MACD_FAST = 12
@@ -90,6 +94,12 @@ class StockSnapshot:
     macd_hist_prev: float = 0.0   # 직전 봉 히스토그램 (Pre-Cross 감지용)
     daily_macd_ok: bool = False   # 일봉 MACD 강세 여부 (True → 매매 허용)
 
+    # 거래대금 (잡주 필터용)
+    trading_value: int = 0        # 당일 누적 거래대금 (원) — 10억 미만 = 잡주
+
+    # 수급 (외인 순매수 — KIS 현재가 응답에서 추출, 없으면 0)
+    frgn_net_buy: int = 0         # 외국인 순매수량 (주) — 양수=매수우위, 음수=매도우위
+
     error: str = ""               # 수집 오류 메시지
 
 
@@ -107,12 +117,12 @@ class UniverseScan:
 
 # ── KIS 현재가 조회 ───────────────────────────────────────────
 
-def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int]:
+def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int]:
     """
-    KIS API로 현재가·등락률·거래량 조회.
+    KIS API로 현재가·등락률·거래량·거래대금·외인순매수 조회.
 
     Returns:
-        (current_price, change_pct, volume)
+        (current_price, change_pct, volume, trading_value, frgn_net_buy)
     """
     gw = KISGateway()
     try:
@@ -130,10 +140,12 @@ def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int]:
         price = float(output.get("stck_prpr", 0) or 0)
         change_pct = float(output.get("prdy_ctrt", 0) or 0)
         volume = int(output.get("acml_vol", 0) or 0)
-        return price, change_pct, volume
+        trading_value = int(output.get("acml_tr_pbmn", 0) or 0)  # 누적 거래대금
+        frgn_net_buy = int(output.get("frgn_ntby_qty", 0) or 0)  # 외국인 순매수량
+        return price, change_pct, volume, trading_value, frgn_net_buy
     except Exception as e:
         logger.debug(f"KIS 현재가 실패 [{ticker}]: {e}")
-        return 0.0, 0.0, 0
+        return 0.0, 0.0, 0, 0, 0
 
 
 # ── FDR 기술지표 계산 ─────────────────────────────────────────
@@ -281,10 +293,12 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap = StockSnapshot(ticker=ticker, name=name)
 
     # 1. KIS 현재가
-    price, change_pct, volume = _fetch_price_from_kis(ticker)
+    price, change_pct, volume, trading_value, frgn_net_buy = _fetch_price_from_kis(ticker)
     snap.current_price = price
     snap.change_pct = change_pct
     snap.volume = volume
+    snap.trading_value = trading_value
+    snap.frgn_net_buy = frgn_net_buy
 
     # 2. 기술지표 (FDR + pandas-ta)
     ind = _compute_indicators(ticker, price, volume)
@@ -420,11 +434,32 @@ def collect(max_workers: int = 10) -> UniverseScan:
         except Exception as e:
             logger.debug(f"체크포인트 저장 실패 [{ticker}]: {e}")
 
-    # 후보 필터: 신호가 하나라도 있는 종목
-    scan.candidates = [
+    # 후보 필터 1: 신호가 하나라도 있는 종목
+    raw_candidates = [
         s for s in scan.snapshots
         if s.is_volume_surge or s.is_price_surge or s.is_breakout
     ]
+
+    # 후보 필터 2: 잡주 제외 — 당일 거래대금 기준
+    # 장중에는 최종 거래대금이 낮을 수 있으므로:
+    #   - 거래대금이 집계됐고 MIN_TRADING_VALUE 미만이면 제외
+    #   - 거래대금이 0이면 (조회 실패 등) 거래량 급증 여부로 대체 판단
+    filtered_out = 0
+    scan.candidates = []
+    for s in raw_candidates:
+        if s.trading_value == 0:
+            # 거래대금 조회 실패 → 거래량 급증인 경우만 포함 (최소 유동성 보장)
+            if s.is_volume_surge or s.volume > 100_000:
+                scan.candidates.append(s)
+            else:
+                filtered_out += 1
+        elif s.trading_value < MIN_TRADING_VALUE:
+            filtered_out += 1  # 잡주 제외
+        else:
+            scan.candidates.append(s)
+
+    if filtered_out:
+        logger.info(f"잡주 필터: {filtered_out}종목 제외 (거래대금 10억 미만)")
 
     logger.info(
         f"스캔 완료 — {len(scan.snapshots)}종목 / "

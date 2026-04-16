@@ -438,8 +438,11 @@ class PositionMonitorEngine:
                     #   exhaustion=0.20 → effective = base × 0.89  (거의 그대로)
                     #   exhaustion=0.50 → effective = base × 0.73
                     #   exhaustion=1.00 → effective = base × 0.45  (절반 가까이 낮춤)
-                    base_thr       = _p("scalp_profit_pct", 2.0)
-                    effective_thr  = base_thr * max(0.40, 1.0 - exhaustion * 0.55)
+                    commission    = _p("commission_rate", 0.35)   # 왕복 수수료+세금
+                    base_thr      = _p("scalp_profit_pct", 2.0)
+                    effective_thr = base_thr * max(0.40, 1.0 - exhaustion * 0.55)
+                    # 최소 임계값: 수수료 × 2 (왕복 손익분기 + 버퍼)
+                    effective_thr = max(effective_thr, commission * 2)
 
                     if pnl_pct >= effective_thr:
                         # 매도 비율 동적 조정: 소진도 낮으면 적게, 높으면 많이
@@ -605,6 +608,60 @@ class PositionMonitorEngine:
                     action="stop_loss", reason=f"손익 {pnl_pct:+.2f}% ≤ -{stop_loss_pct:.1f}%",
                     avg_price=avg_price, name=name,
                 )
+
+        # ── 4.5. 장마감 자동 청산 (단타 전략 핵심) ───────────────
+        # 당일 매수·매도 원칙: 오버나잇은 예외적으로만 허용
+        #
+        # 14:50 ~ 15:20 (마감 30분~10분 전): 수익권이면 무조건 익절
+        #   - 오버나잇 허용 예외: MACD 강세 + 수익 3% 이상 (강한 모멘텀)
+        # 15:20 이후 (마감 10분 전): 손익 무관 전량 청산 (오버나잇 금지)
+        _now = datetime.now()
+        _hm = _now.hour * 100 + _now.minute
+        _commission = _p("commission_rate", 0.35)  # 왕복 수수료 + 세금 (%)
+
+        if 1450 <= _hm < 1520:
+            # 수익 = 수수료 커버 후 실질 이익
+            net_pnl = pnl_pct - _commission
+            if net_pnl > 0:
+                # 오버나잇 허용 예외: MACD 강세 + 순수익 3% 이상
+                overnight_ok = macd_bullish and net_pnl >= 3.0
+                if not overnight_ok:
+                    logger.info(
+                        f"[장마감 익절] {ticker} | 순수익 {net_pnl:+.2f}% "
+                        f"(수익 {pnl_pct:+.2f}% - 수수료 {_commission:.2f}%) | "
+                        f"MACD:{macd_sig} | {quantity}주 전량 청산"
+                    )
+                    _delete_trailing_stop(ticker)
+                    from src.utils.notifier import notify
+                    notify(
+                        f"🔔 <b>[장마감 익절]</b> {name}({ticker})\n"
+                        f"수익 {pnl_pct:+.2f}% | 14:50 마감 전 전량 청산\n"
+                        f"(오버나잇 조건 미충족: MACD 또는 수익 3% 미만)"
+                    )
+                    return self._place_sell(
+                        ticker=ticker, quantity=quantity, current_price=current_price,
+                        action="take_profit", reason=f"장마감 익절 (순수익 {net_pnl:+.2f}%)",
+                        avg_price=avg_price, name=name,
+                    )
+
+        elif _hm >= 1520:
+            # 마감 10분 전: 손익 무관 전량 강제 청산
+            action_type = "take_profit" if pnl_pct > 0 else "stop_loss"
+            logger.warning(
+                f"[장마감 강제청산] {ticker} | 15:20 경과 | 손익 {pnl_pct:+.2f}% | {quantity}주"
+            )
+            _delete_trailing_stop(ticker)
+            from src.utils.notifier import notify
+            notify(
+                f"⏰ <b>[장마감 강제청산]</b> {name}({ticker})\n"
+                f"15:20 경과 — 오버나잇 방지 전량 청산\n"
+                f"손익 {pnl_pct:+.2f}%"
+            )
+            return self._place_sell(
+                ticker=ticker, quantity=quantity, current_price=current_price,
+                action=action_type, reason=f"장마감 강제청산 15:20 (손익 {pnl_pct:+.2f}%)",
+                avg_price=avg_price, name=name,
+            )
 
         # ── 5. 타임컷 ────────────────────────────
         if held_days > _MAX_HOLD_DAYS:
@@ -865,6 +922,31 @@ class PositionMonitorEngine:
         if quantity <= 0:
             return None
 
+        # 예수금 확인 — 1주 살 돈도 없으면 매수 금지
+        required = current_price * quantity
+        available_cash = _fetch_available_cash()
+        if available_cash < current_price:
+            logger.warning(
+                f"매수 취소 [{ticker}] 예수금 부족: "
+                f"필요 {required:,.0f}원 / 가용 {available_cash:,.0f}원 (1주={current_price:,.0f}원)"
+            )
+            from src.utils.notifier import notify
+            notify(
+                f"⚠️ <b>[예수금 부족]</b> {ticker} 매수 취소\n"
+                f"필요: {required:,.0f}원 | 가용: {available_cash:,.0f}원\n"
+                f"사유: {reason}"
+            )
+            return None
+
+        # 예수금이 1주는 살 수 있지만 전체 수량은 부족한 경우 — 수량 조정
+        if available_cash < required:
+            adjusted_qty = max(1, int(available_cash // current_price))
+            logger.info(
+                f"매수 수량 조정 [{ticker}] 예수금 부족: "
+                f"{quantity}주 → {adjusted_qty}주 (가용 {available_cash:,.0f}원)"
+            )
+            quantity = adjusted_qty
+
         gw = KISGateway()
         tr_id = "VTTC0802U" if settings.KIS_MODE == "paper" else "TTTC0802U"
         acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
@@ -896,14 +978,9 @@ class PositionMonitorEngine:
                 reason=reason,
             )
 
-            from src.utils.notifier import notify_trade
-            notify_trade(
-                ticker=ticker, name=ticker,
-                action="buy", quantity=quantity,
-                price=current_price, reason=reason,
-            )
+            # 알림은 caller(_evaluate_position)에서 이미 notify()로 발송함 — 중복 방지
             logger.info(
-                f"사다리 매수 완료 {ticker} {quantity}주 "
+                f"추가매수 완료 {ticker} {quantity}주 "
                 f"@ {current_price:,.0f}원 | {reason}"
             )
             return {"ticker": ticker, "action": "ladder_buy", "quantity": quantity,
@@ -917,6 +994,39 @@ class PositionMonitorEngine:
 # ──────────────────────────────────────────────
 # KIS 잔고 조회
 # ──────────────────────────────────────────────
+
+def _fetch_available_cash() -> float:
+    """KIS 잔고 API에서 주문 가능 현금(예수금) 조회."""
+    gw = KISGateway()
+    acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
+    tr_id = "VTTC8434R" if settings.KIS_MODE == "paper" else "TTTC8434R"
+    try:
+        resp = gw.request(
+            method="GET",
+            path=_KIS_BALANCE_PATH,
+            params={
+                "CANO": acnt_no,
+                "ACNT_PRDT_CD": acnt_prdt_cd,
+                "AFHR_FLPR_YN": "N",
+                "OFL_YN": "",
+                "INQR_DVSN": "02",
+                "UNPR_DVSN": "01",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "PRCS_DVSN": "01",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            },
+            tr_id=tr_id,
+            priority=RequestPriority.TRADING,
+        )
+        output2 = resp.get("output2", [{}])
+        cash = float((output2[0] if output2 else {}).get("ord_psbl_cash", 0) or 0)
+        return cash
+    except Exception as e:
+        logger.warning(f"예수금 조회 실패 (매수 계속 진행): {e}")
+        return float("inf")  # 조회 실패 시 차단하지 않음
+
 
 def _fetch_positions() -> list[dict]:
     """

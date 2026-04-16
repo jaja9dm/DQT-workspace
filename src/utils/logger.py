@@ -35,4 +35,5 @@ def get_logger(name: str) -> logging.Logger:
 
     logger.addHandler(ch)
     logger.addHandler(fh)
+    logger.propagate = False  # 루트 로거로 전파 차단 (중복 출력 방지)
     return logger

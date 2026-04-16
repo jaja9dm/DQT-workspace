@@ -119,44 +119,62 @@ def notify_risk(level: int, alerts: list[str]) -> bool:
 
 
 def notify_daily_report(report: dict) -> bool:
-    """일일 성과 리포트 발송."""
-    date_str = report.get("date", datetime.now().strftime("%Y-%m-%d"))
-    total_pnl_pct = report.get("total_pnl_pct", 0.0)
-    trade_count = report.get("trade_count", 0)
-    win_count = report.get("win_count", 0)
-    loss_count = report.get("loss_count", 0)
-    win_rate = report.get("win_rate", 0.0)
+    """일일 성과 리포트 발송 — 종목별 매수가·손익 상세 포함."""
+    date_str     = report.get("date", datetime.now().strftime("%Y-%m-%d"))
+    total_pnl_amt = report.get("total_pnl_amt", 0.0)
+    trade_count  = report.get("trade_count", 0)
+    win_count    = report.get("win_count", 0)
+    loss_count   = report.get("loss_count", 0)
+    win_rate     = report.get("win_rate", 0.0)
+    profit_factor = report.get("profit_factor", 0.0)
 
-    pnl_emoji = "📈" if total_pnl_pct >= 0 else "📉"
+    pnl_emoji = "📈" if total_pnl_amt >= 0 else "📉"
+    pnl_str   = f"{total_pnl_amt:+,.0f}원"
+
     lines = [
         f"📊 <b>DQT 일일 리포트 — {date_str}</b>",
         "",
-        f"{pnl_emoji} 당일 손익: <b>{total_pnl_pct:+.2f}%</b>",
-        f"거래 건수: {trade_count}건 (익절 {win_count} / 손절 {loss_count})",
-        f"승률: {win_rate:.1f}%",
+        f"{pnl_emoji} 실현 손익: <b>{pnl_str}</b>",
+        f"거래: {trade_count}건 | 승률: {win_rate:.1f}% (익 {win_count} / 손 {loss_count})"
+        + (f" | 손익비: {profit_factor:.2f}" if profit_factor > 0 else ""),
         "",
     ]
 
-    # 종목별 성과 (최대 5종목)
+    # 종목별 성과 — 매수가·매도가·손익 상세
     positions = report.get("positions", [])
     if positions:
         lines.append("📋 <b>종목별 성과</b>")
-        for pos in positions[:5]:
-            p_emoji = "▲" if pos["pnl_pct"] >= 0 else "▼"
+        for pos in positions[:8]:
+            pnl_pct = pos.get("pnl_pct", 0)
+            pnl_amt = pos.get("pnl_amt", 0)
+            p_emoji = "▲" if pnl_pct >= 0 else "▼"
+            name_str = pos.get("name") or pos["ticker"]
+            amt_str  = f" ({pnl_amt:+,.0f}원)" if pnl_amt else ""
             lines.append(
-                f"  {p_emoji} {pos['ticker']} {pos.get('name','')}: "
-                f"{pos['pnl_pct']:+.2f}%"
+                f"  {p_emoji} {name_str}({pos['ticker']}): "
+                f"<b>{pnl_pct:+.2f}%</b>{amt_str}"
             )
+        lines.append("")
+
+    # Hot List 적중률
+    hl = report.get("hot_list_accuracy", {})
+    if hl.get("total", 0) > 0:
+        hl_rate = hl["win"] / hl["traded"] * 100 if hl.get("traded", 0) > 0 else 0
+        lines.append(
+            f"🎯 Hot List 적중: {hl.get('win',0)}/{hl.get('traded',0)}건 "
+            f"({hl_rate:.0f}%) | 후보 {hl.get('total',0)}종목"
+        )
+        lines.append("")
 
     # 알림
     alerts = report.get("alerts", [])
     if alerts:
-        lines.append("")
         lines.append("⚠️ <b>주요 알림</b>")
         for alert in alerts[:3]:
             lines.append(f"  • {alert}")
+        lines.append("")
 
-    lines.append(f"\n<i>발송: {datetime.now().strftime('%Y-%m-%d %H:%M')}</i>")
+    lines.append(f"<i>발송: {datetime.now().strftime('%Y-%m-%d %H:%M')}</i>")
     return notify("\n".join(lines))
 
 
