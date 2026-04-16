@@ -87,6 +87,17 @@ class DQTScheduler:
         logger.info("DQT 스케줄러 시작 완료")
         notify("🚀 <b>DQT 시스템 시작</b>\n스케줄러 기동 완료")
 
+        # 장중 재시작 감지 — 이미 09:00~15:35 사이면 즉시 엔진 기동
+        from datetime import datetime
+        import pytz
+        _kst = pytz.timezone("Asia/Seoul")
+        _now = datetime.now(_kst)
+        _hm = _now.hour * 100 + _now.minute
+        _weekday = _now.weekday()  # 0=월 ~ 4=금
+        if _weekday < 5 and 900 <= _hm < 1535:
+            logger.info(f"장중 재시작 감지 ({_now.strftime('%H:%M')}) — 실시간 엔진 즉시 기동")
+            self._start_realtime_engines()
+
     def stop(self) -> None:
         if getattr(self, "_stopping", False):
             return

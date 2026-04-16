@@ -1159,9 +1159,10 @@ def _fetch_positions_from_snapshot() -> list[dict]:
             current_price = _fetch_current_price_safe(ticker, fallback=float(snap["current_price"]))
             pnl_pct = (current_price / avg_price - 1) * 100 if avg_price > 0 else 0.0
 
+            snap_dict = dict(snap)
             positions.append({
                 "ticker": ticker,
-                "name": snap.get("name", ticker),
+                "name": snap_dict.get("name") or ticker,
                 "quantity": quantity,
                 "avg_price": avg_price,
                 "current_price": current_price,
