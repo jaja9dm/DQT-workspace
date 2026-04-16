@@ -124,6 +124,8 @@ class PositionMonitorEngine:
         self._qty_cache: dict[str, int] = {}    # {ticker: quantity}
         # 종목별 이전 MACD 상태 — 반등 전환(bearish/None → bullish) 감지용
         self._macd_prev: dict[str, str | None] = {}  # {ticker: last_signal}
+        # 이전 사이클 MACD 히스토그램 — 모멘텀 피크 감지용 (동적 스캘핑)
+        self._macd_hist_prev: dict[str, float] = {}  # {ticker: prev hist_3m}
 
     def start(self) -> None:
         logger.info("포지션 감시 엔진 시작")
@@ -248,16 +250,22 @@ class PositionMonitorEngine:
         avg_price = pos["avg_price"]
         partial_sold = pos.get("partial_sold", 0)
 
-        # ── 0. MACD 신호 수집 ───────────────────
-        from src.teams.intraday_macd.engine import get_latest_macd_signal
-        macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
-        macd_bullish = macd_sig in _MACD_BULLISH
-        macd_bearish = macd_sig in _MACD_BEARISH
+        # ── 0. MACD 신호 수집 (히스토그램 포함) ──
+        from src.teams.intraday_macd.engine import get_macd_details
+        macd_details  = get_macd_details(ticker, max_age_minutes=6)
+        macd_sig      = macd_details["signal"]
+        hist_3m_now   = macd_details["hist_3m"] or 0.0
+        macd_bullish  = macd_sig in _MACD_BULLISH
+        macd_bearish  = macd_sig in _MACD_BEARISH
 
         # 이전 사이클 대비 bullish 전환 여부 (bearish/None → bullish)
         prev_macd = self._macd_prev.get(ticker)
         macd_just_turned_bullish = macd_bullish and (prev_macd not in _MACD_BULLISH)
         self._macd_prev[ticker] = macd_sig  # 이번 상태 저장 (다음 사이클용)
+
+        # 이전 사이클 히스토그램 — 모멘텀 피크 감지
+        hist_3m_prev = self._macd_hist_prev.get(ticker, hist_3m_now)
+        self._macd_hist_prev[ticker] = hist_3m_now
 
         # ── 1. MACD 조기 손절 (최우선) ─────────
         if settings.MACD_EARLY_EXIT_ENABLED and macd_bearish:
@@ -377,60 +385,130 @@ class PositionMonitorEngine:
                     avg_price=avg_price, name=name,
                 )
 
-            # ── 3.6. 스캘핑 부분 익절 + 재진입 준비 ──────────────────────────
-            # 단타 전략: 수익 +scalp_profit_pct% 도달 시 보유량의 scalp_sell_ratio만큼 즉시 익절
-            # 익절 후 scalp_exit_price·scalp_exit_qty를 trailing_stop에 기록
-            # → 이후 재진입 사이클에서 price가 exit_price * (1 - reload_dip%) 이하로 내려오면 재매수
-            scalp_thr   = _p("scalp_profit_pct",  2.5)
-            scalp_ratio = _p("scalp_sell_ratio",   0.5)
+            # ── 3.6. 동적 스캘핑 — 실시간 모멘텀 소진도 기반 부분 익절 + 재진입 ──
+            #
+            # 단순 고정 임계값 대신, 매 사이클 아래 신호들로 "소진도(exhaustion)" 산출:
+            #   - MACD 히스토그램이 피크 찍고 감소 중  → 모멘텀 약화 시작
+            #   - MACD 히스토그램이 음수로 전환        → 모멘텀 역전
+            #   - MACD 신호가 sell_pre / sell          → 추세 반전 확인
+            #   - 수익률 자체가 매우 높음 (≥5%)        → 수익 잠금 urgency
+            #
+            # 소진도 기반으로 임계값·매도비율 동적 결정:
+            #   - 소진도 낮음 (모멘텀 살아있음): 더 높은 임계값, 적은 비율 매도 (30%)
+            #   - 소진도 높음 (모멘텀 죽어가는 중): 낮은 임계값, 많은 비율 매도 (80%)
+            #
+            # 재진입: 단순 가격 -1% 대신 MACD buy_pre 신호 또는 충분한 눌림+MACD 회복
+            # ────────────────────────────────────────────────────────────────────────
             ts_scalp_exit = float(ts.get("scalp_exit_price") or 0)
             ts_scalp_qty  = int(ts.get("scalp_exit_qty") or 0)
-            if (
-                pnl_pct >= scalp_thr
-                and ts_scalp_exit == 0            # 이미 부분 익절 한 번 한 건 스킵
-                and partial_sold == 0             # position_snapshot 기준도 확인
-            ):
-                scalp_qty = max(1, int(quantity * scalp_ratio))
-                logger.info(
-                    f"[스캘핑 부분 익절] {ticker} | 수익 {pnl_pct:+.2f}% ≥ +{scalp_thr:.1f}% | "
-                    f"{scalp_qty}주 ({scalp_ratio*100:.0f}%) 즉시 익절"
-                )
-                from src.utils.notifier import notify
-                notify(
-                    f"✂️ <b>[스캘핑 부분 익절]</b> {name}({ticker})\n"
-                    f"수익 {pnl_pct:+.2f}% — {scalp_qty}주({scalp_ratio*100:.0f}%) 익절\n"
-                    f"재진입 대기: -{_p('scalp_reload_dip', 1.0):.1f}% 하락 시 재매수"
-                )
-                # trailing_stop에 재진입 기준 기록
-                execute(
-                    """UPDATE trailing_stop
-                       SET scalp_exit_price = ?, scalp_exit_qty = ?, updated_at = CURRENT_TIMESTAMP
-                       WHERE ticker = ?""",
-                    (current_price, scalp_qty, ticker),
-                )
-                return self._place_sell(
-                    ticker=ticker, quantity=scalp_qty, current_price=current_price,
-                    action="take_profit",
-                    reason=f"스캘핑 부분 익절 {pnl_pct:+.2f}% ({scalp_ratio*100:.0f}%)",
-                    avg_price=avg_price, name=name,
-                )
 
-            # 재진입: 부분 익절 후 price가 exit * (1-reload_dip%) 이하로 내려오면 재매수
-            if ts_scalp_exit > 0 and ts_scalp_qty > 0 and not macd_bearish:
-                reload_dip  = _p("scalp_reload_dip", 1.0)
-                reload_trig = ts_scalp_exit * (1 - reload_dip / 100)
-                if current_price <= reload_trig:
+            # ── 3.6a. 부분 익절 판단 ─────────────────────────────────────────
+            if ts_scalp_exit == 0 and partial_sold == 0 and pnl_pct > 0:
+                # 모멘텀 소진도 계산 (0.0 ~ 1.0)
+                exhaustion  = 0.0
+                exh_signals = []
+
+                # MACD 히스토그램 방향 (핵심 — 분봉 기준 실시간 모멘텀 판단)
+                if macd_bearish:
+                    # sell_pre/sell: 추세가 이미 역전, 즉시 비중 축소
+                    exhaustion += 0.50
+                    exh_signals.append(f"MACD역행({macd_sig})")
+                elif hist_3m_now < 0 and hist_3m_prev >= 0:
+                    # 히스토그램이 양수→음수 전환 (모멘텀 반전 확인)
+                    exhaustion += 0.40
+                    exh_signals.append("MACD음전환")
+                elif hist_3m_now > 0 and hist_3m_now < hist_3m_prev:
+                    # 양수 구간에서 감소 (피크 지남 = 모멘텀 약화 시작)
+                    exhaustion += 0.25
+                    exh_signals.append("MACD피크감소")
+
+                # 수익률 자체도 반영 (고수익 = 수익 잠금 urgency)
+                if pnl_pct >= 7.0:
+                    exhaustion += 0.20
+                    exh_signals.append(f"고수익+{pnl_pct:.1f}%")
+                elif pnl_pct >= 4.5:
+                    exhaustion += 0.10
+                    exh_signals.append(f"수익+{pnl_pct:.1f}%")
+
+                exhaustion = min(1.0, exhaustion)
+
+                # 소진도 0.2 이상일 때만 스캘핑 고려
+                if exhaustion >= 0.20:
+                    # 임계값 동적 조정: 소진도 높을수록 낮은 수익에서도 익절
+                    #   exhaustion=0.20 → effective = base × 0.89  (거의 그대로)
+                    #   exhaustion=0.50 → effective = base × 0.73
+                    #   exhaustion=1.00 → effective = base × 0.45  (절반 가까이 낮춤)
+                    base_thr       = _p("scalp_profit_pct", 2.0)
+                    effective_thr  = base_thr * max(0.40, 1.0 - exhaustion * 0.55)
+
+                    if pnl_pct >= effective_thr:
+                        # 매도 비율 동적 조정: 소진도 낮으면 적게, 높으면 많이
+                        #   exhaustion=0.20 → ratio = 0.30 (모멘텀 남아있으면 30%만)
+                        #   exhaustion=0.50 → ratio = 0.45
+                        #   exhaustion=1.00 → ratio = 0.75
+                        base_ratio      = _p("scalp_sell_ratio", 0.50)
+                        effective_ratio = min(0.80, max(0.30, base_ratio - 0.20 + exhaustion * 0.50))
+                        scalp_qty       = max(1, int(quantity * effective_ratio))
+                        exh_str         = " | ".join(exh_signals) if exh_signals else "기준충족"
+
+                        logger.info(
+                            f"[동적 스캘핑] {ticker} | 수익 {pnl_pct:+.2f}% ≥ 임계 +{effective_thr:.1f}% | "
+                            f"소진도 {exhaustion:.2f} ({exh_str}) | "
+                            f"{scalp_qty}주 ({effective_ratio*100:.0f}%) 부분 익절"
+                        )
+                        from src.utils.notifier import notify
+                        reload_dip = _p("scalp_reload_dip", 1.5)
+                        notify(
+                            f"✂️ <b>[동적 스캘핑]</b> {name}({ticker})\n"
+                            f"수익 {pnl_pct:+.2f}% | 소진도 {exhaustion:.2f}\n"
+                            f"신호: {exh_str}\n"
+                            f"{scalp_qty}주 ({effective_ratio*100:.0f}%) 부분 익절\n"
+                            f"재진입: MACD buy_pre 또는 -{reload_dip:.1f}% 눌림 시"
+                        )
+                        execute(
+                            """UPDATE trailing_stop
+                               SET scalp_exit_price = ?, scalp_exit_qty = ?, updated_at = CURRENT_TIMESTAMP
+                               WHERE ticker = ?""",
+                            (current_price, scalp_qty, ticker),
+                        )
+                        return self._place_sell(
+                            ticker=ticker, quantity=scalp_qty, current_price=current_price,
+                            action="take_profit",
+                            reason=f"동적 스캘핑 {pnl_pct:+.2f}% (소진도{exhaustion:.2f}/{exh_str})",
+                            avg_price=avg_price, name=name,
+                        )
+
+            # ── 3.6b. 재진입 판단 ────────────────────────────────────────────
+            # 단순 -1% 가격 트리거 대신:
+            #   우선순위 1: MACD buy_pre 전환 + 최소 눌림 (-0.3%) → 모멘텀 재개 신호
+            #   우선순위 2: 충분한 눌림 (-scalp_reload_dip%) + MACD bearish 아닐 때
+            if ts_scalp_exit > 0 and ts_scalp_qty > 0:
+                from_exit_pct = (current_price - ts_scalp_exit) / ts_scalp_exit * 100
+
+                reload = False
+                reload_reason = ""
+
+                if macd_sig == "buy_pre" and from_exit_pct <= -0.3:
+                    # MACD buy_pre: 모멘텀 재개 신호 — 작은 눌림에도 재진입
+                    reload = True
+                    reload_reason = f"MACD buy_pre + 눌림{from_exit_pct:.1f}%"
+                elif from_exit_pct <= -_p("scalp_reload_dip", 1.5) and not macd_bearish:
+                    # 충분한 가격 눌림 + MACD 역행 아닐 때
+                    reload = True
+                    reload_reason = f"눌림{from_exit_pct:.1f}% (MACD:{macd_sig})"
+
+                if reload:
                     logger.info(
-                        f"[스캘핑 재진입] {ticker} | 현재가 {current_price:,.0f} ≤ "
-                        f"재진입선 {reload_trig:,.0f} (exit {ts_scalp_exit:,.0f} -{reload_dip:.1f}%)"
+                        f"[스캘핑 재진입] {ticker} | {reload_reason} | "
+                        f"exit {ts_scalp_exit:,.0f}→현재 {current_price:,.0f} | {ts_scalp_qty}주 재매수"
                     )
                     from src.utils.notifier import notify
                     notify(
                         f"🔄 <b>[스캘핑 재진입]</b> {name}({ticker})\n"
-                        f"현재가 {current_price:,.0f}원 (재진입선 {reload_trig:,.0f}원)\n"
+                        f"{reload_reason}\n"
+                        f"익절가 {ts_scalp_exit:,.0f}원 → 현재 {current_price:,.0f}원\n"
                         f"{ts_scalp_qty}주 재매수"
                     )
-                    # 재진입 후 scalp 기록 초기화
                     execute(
                         """UPDATE trailing_stop
                            SET scalp_exit_price = NULL, scalp_exit_qty = 0, updated_at = CURRENT_TIMESTAMP
@@ -440,7 +518,7 @@ class PositionMonitorEngine:
                     result = self._place_buy(
                         ticker=ticker, quantity=ts_scalp_qty,
                         current_price=current_price,
-                        reason=f"스캘핑 재진입 (exit {ts_scalp_exit:,.0f}→현재 {current_price:,.0f})",
+                        reason=f"스캘핑 재진입 ({reload_reason})",
                     )
                     if result:
                         new_avg = (avg_price * quantity + current_price * ts_scalp_qty) / (quantity + ts_scalp_qty)

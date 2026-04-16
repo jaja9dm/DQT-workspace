@@ -205,3 +205,37 @@ def get_latest_macd_signal(ticker: str, max_age_minutes: int = 5) -> str:
         (ticker, f"-{max_age_minutes} minutes"),
     )
     return row["signal"] if row else "hold"
+
+
+def get_macd_details(ticker: str, max_age_minutes: int = 6) -> dict:
+    """
+    최신 MACD 신호 + 히스토그램 값 조회 (동적 스캘핑 판단용).
+
+    Args:
+        ticker: 종목 코드
+        max_age_minutes: 이 분 이내 신호만 유효
+
+    Returns:
+        {
+            "signal": "buy_pre" | "sell_pre" | "hold",
+            "hist_3m": float | None,   # 3분봉 MACD 히스토그램
+            "hist_5m": float | None,   # 5분봉 MACD 히스토그램
+        }
+    """
+    row = fetch_one(
+        """
+        SELECT signal, hist_3m, hist_5m FROM intraday_macd_signal
+        WHERE ticker = ?
+          AND created_at >= datetime('now', ?)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (ticker, f"-{max_age_minutes} minutes"),
+    )
+    if row:
+        return {
+            "signal": row["signal"],
+            "hist_3m": row["hist_3m"],
+            "hist_5m": row["hist_5m"],
+        }
+    return {"signal": "hold", "hist_3m": None, "hist_5m": None}
