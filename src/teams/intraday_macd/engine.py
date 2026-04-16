@@ -28,6 +28,8 @@ import threading
 import time
 from datetime import datetime
 
+import requests as _requests
+
 from src.config.settings import settings
 from src.infra.database import execute, fetch_all, fetch_one
 from src.infra.kis_gateway import KISGateway, Priority
@@ -37,6 +39,7 @@ from src.utils.macd import MACDSignal, aggregate_candles, get_signal, macd_from_
 logger = get_logger(__name__)
 
 _INTERVAL_SEC = 180   # 3분 주기
+_CANDLE_SLEEP = 5.0   # 분봉 API 종목간 간격 — KIS 모의투자 엄격 제한 (직접 requests 사용)
 
 
 class IntradayMACDEngine:
@@ -82,14 +85,23 @@ class IntradayMACDEngine:
         if not tickers:
             return []
 
-        gw = KISGateway()
         results: list[dict] = []
         n = settings.MACD_HIST_CONV_BARS
 
-        for ticker in tickers:
+        # 분봉 API 토큰: KIS Gateway에서 가져오되 직접 requests 사용 (큐 우회 → 간격 보장)
+        gw = KISGateway()
+        try:
+            token = gw._get_token()
+        except Exception as e:
+            logger.warning(f"MACD 토큰 조회 실패: {e}")
+            return []
+
+        for idx, ticker in enumerate(tickers):
+            if idx > 0:
+                time.sleep(_CANDLE_SLEEP)  # 분봉 API rate limit: 5초 간격 보장
             try:
-                # 1분봉 조회 (최신순 30봉)
-                candles_1m = gw.get_minute_candles(ticker, priority=Priority.DATA_COLLECTION)
+                # KIS Gateway 큐 우회 — 직접 HTTP로 5초 간격 보장
+                candles_1m = _fetch_minute_candles_direct(ticker, token, gw._base_url, gw._app_key, gw._app_secret)
                 if len(candles_1m) < 15:
                     continue  # 데이터 부족
 
@@ -155,6 +167,65 @@ class IntradayMACDEngine:
 # ──────────────────────────────────────────────
 # 감시 대상 종목 조회
 # ──────────────────────────────────────────────
+
+def _fetch_minute_candles_direct(
+    ticker: str,
+    token: str,
+    base_url: str,
+    app_key: str,
+    app_secret: str,
+) -> list[dict]:
+    """
+    KIS 분봉 API를 Gateway 큐 우회 직접 requests로 호출.
+
+    호출 전 반드시 5초 간격을 보장해야 함 (KIS 모의투자 rate limit).
+
+    Returns:
+        [{"time": "HHmmss", "open": .., "high": .., "low": .., "close": .., "volume": ..}, ...]
+        최신순(내림차순) 반환 — aggregate_candles 전달 전 그대로 사용 가능
+    """
+    now_str = datetime.now().strftime("%H%M%S")
+    r = _requests.get(
+        f"{base_url}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "appkey": app_key,
+            "appsecret": app_secret,
+            "tr_id": "FHKST03010200",
+            "custtype": "P",
+        },
+        params={
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": ticker,
+            "FID_INPUT_HOUR_1": now_str,
+            "FID_PW_DATA_INCU_YN": "N",
+        },
+        timeout=10,
+    )
+    r.raise_for_status()
+    data = r.json()
+
+    rt_cd = data.get("rt_cd", "-1")
+    msg = data.get("msg1", "")
+    if rt_cd != "0":
+        raise RuntimeError(f"KIS 분봉 API 오류 [{rt_cd}]: {msg}")
+
+    candles: list[dict] = []
+    for item in data.get("output2", []):
+        try:
+            candles.append({
+                "time":   item.get("stck_cntg_hour", ""),
+                "open":   float(item.get("stck_oprc", 0) or 0),
+                "high":   float(item.get("stck_hgpr", 0) or 0),
+                "low":    float(item.get("stck_lwpr", 0) or 0),
+                "close":  float(item.get("stck_prpr", 0) or 0),
+                "volume": int(item.get("cntg_vol", 0) or 0),
+            })
+        except (ValueError, TypeError):
+            continue
+    return candles  # 최신순 반환
+
 
 def _load_watch_tickers() -> list[str]:
     """

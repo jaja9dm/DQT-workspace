@@ -33,6 +33,7 @@ class Priority(IntEnum):
     POSITION_MONITOR = 1  # 포지션 감시 (가장 우선)
     TRADING = 2           # 매매팀
     DATA_COLLECTION = 3   # 수집팀
+    BACKGROUND = 4        # 분봉 조회 등 백그라운드 (rate limit 여유 있을 때만)
 
 
 # 하위 호환 alias
