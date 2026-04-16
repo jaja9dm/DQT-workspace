@@ -205,7 +205,37 @@ class PositionMonitorEngine:
             actions = self._liquidate_all(positions, reason="level5_emergency")
             return actions
 
-        # 6. 개별 종목 감시 (WebSocket이 이미 트리거한 종목은 스킵)
+        # 6. 초과 포지션 정리 (보유 수 > max_positions)
+        from src.teams.research.param_tuner import get_param
+        max_pos = int(get_param("max_positions", 5.0))
+        if len(positions) > max_pos:
+            excess = len(positions) - max_pos
+            # PnL 낮은 순(손실 큰 것부터) 정렬해서 초과분 청산
+            sorted_pos = sorted(positions, key=lambda p: p["pnl_pct"])
+            for pos in sorted_pos[:excess]:
+                logger.info(
+                    f"[초과 포지션 정리] {pos['ticker']} | 손익 {pos['pnl_pct']:+.2f}% | "
+                    f"보유 {len(positions)}종목 > 최대 {max_pos}종목"
+                )
+                from src.utils.notifier import notify
+                notify(
+                    f"📉 <b>[초과 포지션 정리]</b> {pos.get('name', pos['ticker'])}({pos['ticker']})\n"
+                    f"보유 {len(positions)}종목 → 최대 {max_pos}종목 초과\n"
+                    f"손익 {pos['pnl_pct']:+.2f}% | {pos['quantity']}주 전량 청산"
+                )
+                result = self._place_sell(
+                    ticker=pos["ticker"],
+                    quantity=pos["quantity"],
+                    current_price=pos["current_price"],
+                    action="time_cut",
+                    reason=f"초과 포지션 정리 ({len(positions)}종목>{max_pos}종목)",
+                    avg_price=pos["avg_price"],
+                    name=pos.get("name", pos["ticker"]),
+                )
+                if result:
+                    positions = [p for p in positions if p["ticker"] != pos["ticker"]]
+
+        # 7. 개별 종목 감시 (WebSocket이 이미 트리거한 종목은 스킵)
         actions = []
         for pos in positions:
             if pos["ticker"] in self._ws_triggered:
