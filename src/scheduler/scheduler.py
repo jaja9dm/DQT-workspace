@@ -87,16 +87,22 @@ class DQTScheduler:
         logger.info("DQT 스케줄러 시작 완료")
         notify("🚀 <b>DQT 시스템 시작</b>\n스케줄러 기동 완료")
 
-        # 장중 재시작 감지 — 이미 09:00~15:35 사이면 즉시 엔진 기동
+        # 장중/장전 재시작 감지 — 이미 시황 엔진 시간(08:35~15:35)이면 즉시 기동
         from datetime import datetime
         import pytz
         _kst = pytz.timezone("Asia/Seoul")
         _now = datetime.now(_kst)
         _hm = _now.hour * 100 + _now.minute
         _weekday = _now.weekday()  # 0=월 ~ 4=금
-        if _weekday < 5 and 900 <= _hm < 1535:
-            logger.info(f"장중 재시작 감지 ({_now.strftime('%H:%M')}) — 실시간 엔진 즉시 기동")
-            self._start_realtime_engines()
+        if _weekday < 5 and 835 <= _hm < 1535:
+            if _hm < 900:
+                # 08:35~08:59: 시황 엔진만 기동
+                logger.info(f"장 전 재시작 감지 ({_now.strftime('%H:%M')}) — 시황 엔진 즉시 기동")
+                self._start_market_engines()
+            else:
+                # 09:00~15:35: 전체 엔진 기동
+                logger.info(f"장중 재시작 감지 ({_now.strftime('%H:%M')}) — 전체 엔진 즉시 기동")
+                self._start_realtime_engines()
 
     def stop(self) -> None:
         if getattr(self, "_stopping", False):
@@ -134,12 +140,17 @@ class DQTScheduler:
     def _register_jobs(self) -> None:
         s = self._scheduler
 
+        # 08:35 — 글로벌·국내 시황 엔진 선기동 (오버나이트 요약)
+        s.add_job(self._start_market_engines, CronTrigger(
+            day_of_week="mon-fri", hour=8, minute=35, timezone="Asia/Seoul"
+        ), id="start_market_engines", name="시황 엔진 선기동 (오버나이트 요약)")
+
         # 장 전 준비 (평일만)
         s.add_job(self._pre_market_setup, CronTrigger(
             day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
         ), id="pre_market_setup", name="장 전 유니버스 재구성")
 
-        # 장 시작 — 실시간 엔진 전체 기동
+        # 장 시작 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)
         s.add_job(self._start_realtime_engines, CronTrigger(
             day_of_week="mon-fri", hour=9, minute=0, timezone="Asia/Seoul"
         ), id="start_engines", name="실시간 엔진 기동")
@@ -213,28 +224,49 @@ class DQTScheduler:
         except Exception as e:
             logger.error(f"장 전 준비 오류: {e}", exc_info=True)
 
-    def _start_realtime_engines(self) -> None:
-        """09:00 — 실시간 엔진 전체 기동."""
-        logger.info("실시간 엔진 기동 시작")
+    def _start_market_engines(self) -> None:
+        """08:35 — 글로벌·국내 시황 엔진 선기동 (오버나이트 요약 포함)."""
+        logger.info("시황 엔진 선기동 시작 (오버나이트 요약 모드)")
         try:
             from src.teams.global_market.engine import GlobalMarketEngine
             from src.teams.domestic_market.engine import DomesticMarketEngine
+
+            self._global_market = GlobalMarketEngine()
+            self._domestic_market = DomesticMarketEngine()
+
+            self._global_market.start(morning_summary=True)
+            self._domestic_market.start(morning_summary=True)
+
+            logger.info("시황 엔진 선기동 완료")
+        except Exception as e:
+            logger.error(f"시황 엔진 선기동 오류: {e}", exc_info=True)
+
+    def _start_realtime_engines(self) -> None:
+        """09:00 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)."""
+        logger.info("실시간 엔진 기동 시작")
+        try:
             from src.teams.domestic_stock.engine import DomesticStockEngine
             from src.teams.risk.engine import RiskEngine
             from src.teams.position_monitor.engine import PositionMonitorEngine
             from src.teams.trading.engine import TradingEngine
             from src.teams.intraday_macd.engine import IntradayMACDEngine
 
-            self._global_market = GlobalMarketEngine()
-            self._domestic_market = DomesticMarketEngine()
+            # 시황 엔진이 아직 없으면 (장중 재시작 등) 여기서도 기동
+            if self._global_market is None:
+                from src.teams.global_market.engine import GlobalMarketEngine
+                self._global_market = GlobalMarketEngine()
+                self._global_market.start(morning_summary=True)
+            if self._domestic_market is None:
+                from src.teams.domestic_market.engine import DomesticMarketEngine
+                self._domestic_market = DomesticMarketEngine()
+                self._domestic_market.start(morning_summary=True)
+
             self._domestic_stock = DomesticStockEngine()
             self._risk = RiskEngine()
             self._position_monitor = PositionMonitorEngine()
             self._trading = TradingEngine()
             self._intraday_macd = IntradayMACDEngine()
 
-            self._global_market.start()
-            self._domestic_market.start()
             self._domestic_stock.start()
             self._risk.start()
             self._position_monitor.start()

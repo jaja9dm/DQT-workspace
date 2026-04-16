@@ -31,10 +31,10 @@ class Settings:
     # ── Claude API ───────────────────────────────────
     ANTHROPIC_API_KEY: str = os.getenv("ANTHROPIC_API_KEY", "")
 
-    # Claude 모델 할당 (concept.md 8-3 기준)
-    CLAUDE_MODEL_FAST: str = "claude-haiku-4-5-20251001"    # 감성 캐시, 빠른 스캔
-    CLAUDE_MODEL_MAIN: str = "claude-sonnet-4-6"            # 매매팀, 위기관리팀
-    CLAUDE_MODEL_RESEARCH: str = "claude-opus-4-6"          # 연구소, 전략 심층 분석
+    # Claude 모델 할당 (비용 최적화)
+    CLAUDE_MODEL_FAST: str = "claude-haiku-4-5-20251001"    # 시황 분석, 감성 캐시, Hot List (78번/일)
+    CLAUDE_MODEL_MAIN: str = "claude-sonnet-4-6"            # 매수 최종 판단(Gate5), 복기, 연구소
+    CLAUDE_MODEL_RESEARCH: str = "claude-sonnet-4-6"        # (= MAIN, Opus 비용 절감)
 
     # Claude 공통 설정
     CLAUDE_TEMPERATURE: float = 0.0   # 거래 판단 — 결정론적

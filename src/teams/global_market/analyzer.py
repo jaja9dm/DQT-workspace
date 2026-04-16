@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
-def _build_prompt(data: GlobalMarketData) -> str:
+def _build_prompt(data: GlobalMarketData, morning_summary: bool = False) -> str:
     tech_lines = "\n".join(
         f"  - {name}: {chg:+.2f}%" for name, chg in data.us_tech.items()
     )
@@ -61,9 +61,11 @@ def _build_prompt(data: GlobalMarketData) -> str:
 {events_text}
 
 ## 분석 요청
-위 데이터를 기반으로 다음을 평가하세요:
+{"오버나이트 요약 모드: 전날 15:30 이후 오늘 장 전까지의 글로벌 변동을 종합하여 오늘 한국 장에 미칠 영향을 평가하세요." if morning_summary else "현재 시점 글로벌 시장 상태를 평가하세요."}
 1. **글로벌 리스크 점수** (0~10, 0=완전 안전, 10=극도 위험)
 2. **한국 시장 전망** (positive / neutral / negative)
+   - 스캘핑·단타 관점: 변동성이 있어도 추세가 있으면 positive로 판단
+   - negative는 전쟁·금융위기·서킷브레이커급 실질적 위기 상황에만 사용
 3. **VIX 기반 리스크** (18↓=낮음, 18~25=주의, 25~30=경계, 30↑=위험)
 4. **주요 리스크 요인** (최대 3가지)
 5. **한 줄 요약**
@@ -78,7 +80,7 @@ def _build_prompt(data: GlobalMarketData) -> str:
 }}"""
 
 
-def analyze(data: GlobalMarketData) -> dict:
+def analyze(data: GlobalMarketData, morning_summary: bool = False) -> dict:
     """
     Claude에 글로벌 시황 분석 요청.
 
@@ -91,7 +93,8 @@ def analyze(data: GlobalMarketData) -> dict:
             "risk_summary": str,
         }
     """
-    logger.info("Claude 글로벌 시황 분석 시작")
+    label = "오버나이트 요약" if morning_summary else "정기 분석"
+    logger.info(f"Claude 글로벌 시황 분석 시작 ({label})")
 
     try:
         response = _client.messages.create(
@@ -99,7 +102,7 @@ def analyze(data: GlobalMarketData) -> dict:
             max_tokens=256,
             temperature=settings.CLAUDE_TEMPERATURE,
             messages=[
-                {"role": "user", "content": _build_prompt(data)}
+                {"role": "user", "content": _build_prompt(data, morning_summary=morning_summary)}
             ],
         )
         raw = response.content[0].text.strip()

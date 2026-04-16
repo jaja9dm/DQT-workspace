@@ -6,8 +6,13 @@ engine.py — 일일 매매 복기 팀
   오늘 발생한 모든 매매를 분석하고 무엇이 잘 됐는지, 무엇을 고쳐야 하는지
   Claude가 판단해 trade_review 테이블에 저장하고 Telegram으로 리포트한다.
 
+시황 맥락 기능:
+  - 당일 KOSPI/KOSDAQ 등락, 외인/기관 매매, 글로벌 리스크를 복기에 포함
+  - market_regime 태그 (강세_외인주도 등) 저장 — 유사 시황에서 과거 대응 참조 가능
+  - "이런 시장 상황에서 이런 전략이 효과적이었다"는 패턴 누적
+
 출력:
-  - trade_review 테이블에 당일 복기 레코드 저장
+  - trade_review 테이블에 당일 복기 레코드 저장 (market_context JSON 포함)
   - Telegram 복기 요약 발송
   - 연구소가 내일 전략 파라미터 조정에 참고
 
@@ -65,14 +70,20 @@ def run_daily_review() -> dict | None:
     # 포지션 스냅샷 (오늘 보유 종목의 가격 흐름 맥락)
     snapshots = _load_snapshots_context(today, [t["ticker"] for t in trades])
 
+    # 당일 시황 컨텍스트 (KOSPI/KOSDAQ/외인/글로벌 리스크)
+    market_ctx = _load_market_context(today)
+
+    # 유사 시황 패턴 과거 복기 (데이터 쌓이면 참조용)
+    similar_days = _load_similar_market_days(market_ctx, days_back=60)
+
     # Claude 분석
-    review = _ask_claude_review(today, trades, stats, snapshots)
+    review = _ask_claude_review(today, trades, stats, snapshots, market_ctx, similar_days)
 
     # DB 저장
-    _save_review(today, stats, review)
+    _save_review(today, stats, review, market_ctx)
 
     # Telegram 발송
-    _notify_review(today, stats, review)
+    _notify_review(today, stats, review, market_ctx)
 
     logger.info(f"일일 복기 완료 — 매매 {stats['total']}건, 수익 {stats['win']}건, 손실 {stats['loss']}건")
     return review
@@ -97,6 +108,122 @@ def _load_todays_trades(today: str) -> list[dict]:
         (today,),
     )
     return [dict(r) for r in rows] if rows else []
+
+
+def _load_market_context(today: str) -> dict:
+    """
+    당일 시황 데이터 수집.
+    market_condition (국내) + global_condition (글로벌) 최신 레코드 활용.
+    Returns:
+        {
+            "kospi_chg": float,          # 당일 KOSPI 등락률
+            "kosdaq_chg": float,         # 당일 KOSDAQ 등락률
+            "foreign_dir": str,          # "매수" | "매도" | "중립"
+            "institutional_dir": str,    # "매수" | "매도" | "중립"
+            "market_score": float,       # -1.0 ~ 1.0
+            "market_direction": str,     # bullish|neutral|bearish
+            "global_risk": int,          # 0~10
+            "korea_outlook": str,        # positive|neutral|negative
+            "leading_force": str,        # foreign|institutional|individual|mixed
+            "summary": str,              # 국내 시황 한줄 요약
+        }
+    """
+    ctx = {
+        "kospi_chg": 0.0, "kosdaq_chg": 0.0,
+        "foreign_dir": "중립", "institutional_dir": "중립",
+        "market_score": 0.0, "market_direction": "neutral",
+        "global_risk": 5, "korea_outlook": "neutral",
+        "leading_force": "mixed", "summary": "",
+    }
+    try:
+        mc = fetch_one(
+            "SELECT * FROM market_condition WHERE date(created_at) = ? ORDER BY created_at DESC LIMIT 1",
+            (today,),
+        )
+        if mc:
+            mc = dict(mc)
+            ctx["market_score"]      = mc.get("market_score", 0.0) or 0.0
+            ctx["market_direction"]  = mc.get("market_direction", "neutral") or "neutral"
+            fnet = mc.get("foreign_net_buy_bn") or 0
+            inet = mc.get("institutional_net_buy_bn") or 0
+            ctx["foreign_dir"]       = "매수" if fnet > 100 else "매도" if fnet < -100 else "중립"
+            ctx["institutional_dir"] = "매수" if inet > 50 else "매도" if inet < -50 else "중립"
+            summary_json = mc.get("summary") or "{}"
+            try:
+                s = json.loads(summary_json)
+                ctx["kospi_chg"]    = s.get("kospi", 0.0) or 0.0
+                ctx["kosdaq_chg"]   = s.get("kosdaq", 0.0) or 0.0
+                ctx["leading_force"] = s.get("leading_force", "mixed") or "mixed"
+                ctx["summary"]      = s.get("analysis", "") or ""
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"국내 시황 조회 실패: {e}")
+
+    try:
+        gc = fetch_one(
+            "SELECT * FROM global_condition WHERE date(created_at) = ? ORDER BY created_at DESC LIMIT 1",
+            (today,),
+        )
+        if gc:
+            gc = dict(gc)
+            ctx["global_risk"]   = int(gc.get("global_risk_score") or 5)
+            ctx["korea_outlook"] = gc.get("korea_market_outlook", "neutral") or "neutral"
+    except Exception as e:
+        logger.debug(f"글로벌 시황 조회 실패: {e}")
+
+    return ctx
+
+
+def _load_similar_market_days(market_ctx: dict, days_back: int = 60) -> list[dict]:
+    """
+    오늘과 유사한 시황 패턴의 과거 복기 조회.
+    market_direction + foreign_dir 기준으로 유사 날을 찾아 참조용으로 반환.
+    Returns:
+        최대 3개의 과거 복기 요약 리스트
+    """
+    direction  = market_ctx.get("market_direction", "neutral")
+    foreign    = market_ctx.get("foreign_dir", "중립")
+
+    try:
+        rows = fetch_all(
+            """
+            SELECT review_date, total_pnl, win_trades, loss_trades,
+                   summary, market_context
+            FROM trade_review
+            WHERE market_context IS NOT NULL
+              AND created_at >= datetime('now', ? || ' days')
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            (f"-{days_back}",),
+        )
+        if not rows:
+            return []
+
+        similar = []
+        for r in rows:
+            r = dict(r)
+            try:
+                mc = json.loads(r.get("market_context") or "{}")
+                # 시황 방향 + 외인 방향이 같은 날만 유사로 간주
+                if mc.get("market_direction") == direction and mc.get("foreign_dir") == foreign:
+                    similar.append({
+                        "date": r["review_date"],
+                        "total_pnl": r.get("total_pnl") or 0,
+                        "win": r.get("win_trades") or 0,
+                        "loss": r.get("loss_trades") or 0,
+                        "summary": r.get("summary") or "",
+                        "global_risk": mc.get("global_risk", 5),
+                    })
+                    if len(similar) >= 3:
+                        break
+            except Exception:
+                continue
+        return similar
+    except Exception as e:
+        logger.debug(f"유사 시황 조회 실패: {e}")
+        return []
 
 
 def _load_snapshots_context(today: str, tickers: list[str]) -> dict[str, list[dict]]:
@@ -213,16 +340,20 @@ def _ask_claude_review(
     trades: list[dict],
     stats: dict,
     snapshots: dict[str, list[dict]],
+    market_ctx: dict,
+    similar_days: list[dict],
 ) -> dict:
     """
     Claude에게 오늘 매매 복기 및 개선점 분석 요청.
 
     Returns:
         {
-          "pattern_hits":  [...],  # 잘 작동한 패턴
-          "pattern_fails": [...],  # 실패한 패턴
-          "improvements":  [...],  # 내일 당장 적용 가능한 개선점
-          "summary":       "..."   # 한국어 총평
+          "pattern_hits":  [...],   # 잘 작동한 패턴
+          "pattern_fails": [...],   # 실패한 패턴
+          "improvements":  [...],   # 내일 당장 적용 가능한 개선점
+          "market_regime": "...",   # 오늘 시장 성격 태그 (예: 강세_외인주도)
+          "strategy_fit":  "...",   # 이 시장 상황에 맞는 전략 평가
+          "summary":       "..."    # 한국어 총평
         }
     """
     # 매매 내역 텍스트화
@@ -252,9 +383,32 @@ def _ask_claude_review(
         pnl_str  = f"손익 {ts['pnl_pct']:+.2f}%" if ts.get("pnl_pct") is not None else ""
         pair_lines.append(f"  - {ts['name']}({tk}): {buy_str} → {sell_str} {pnl_str}")
 
+    # 유사 시황 과거 복기 요약
+    similar_lines = []
+    for s in similar_days:
+        pnl_sign = "+" if s["total_pnl"] >= 0 else ""
+        similar_lines.append(
+            f"  - {s['date']}: 승률 {s['win']}/{s['win']+s['loss']}건 | "
+            f"손익 {pnl_sign}{s['total_pnl']:,.0f}원 | {s['summary'][:40]}"
+        )
+
+    similar_section = ""
+    if similar_lines:
+        similar_section = f"""
+## 유사 시황 과거 성과 (참고용 — {market_ctx['market_direction']} 장, 외인 {market_ctx['foreign_dir']})
+{chr(10).join(similar_lines)}
+→ 위 과거 데이터 기반으로 오늘 전략의 적합성을 평가하세요."""
+
     prompt = f"""당신은 국내 주식 단타 퀀트 트레이딩 시스템의 성과 분석 AI입니다.
-오늘({today}) 매매 전체를 분석하고, 무엇이 잘 됐는지·무엇을 고쳐야 하는지 구체적으로 판단하세요.
-시스템은 당일 매수·매도 단타 전략입니다. 오버나잇은 예외적입니다.
+오늘({today}) 매매 전체를 분석하고, 시장 상황과 연결하여 무엇이 잘 됐는지·무엇을 고쳐야 하는지 판단하세요.
+시스템은 당일 매수·매도 단타 전략(스캘핑 포함)입니다. 오버나잇은 예외적입니다.
+
+## 오늘 시장 상황
+- KOSPI: {market_ctx['kospi_chg']:+.2f}% | KOSDAQ: {market_ctx['kosdaq_chg']:+.2f}%
+- 시장 방향: {market_ctx['market_direction']} (점수 {market_ctx['market_score']:+.2f})
+- 외인: {market_ctx['foreign_dir']} | 기관: {market_ctx['institutional_dir']} | 주도세력: {market_ctx['leading_force']}
+- 글로벌 리스크: {market_ctx['global_risk']}/10 | 한국 전망: {market_ctx['korea_outlook']}
+- 시황 요약: {market_ctx['summary'] or '데이터 없음'}{similar_section}
 
 ## 오늘 매매 요약
 - 총 거래: {stats['total']}건 (매수 {stats['buys']}, 매도/익절/손절 {stats['sells']})
@@ -272,7 +426,7 @@ def _ask_claude_review(
 
 ## 시스템 전략 참고
 - 매수 조건: Hot List + MACD 강세 + 거래량급증, 분할 매수 (60/25/15%)
-- 손절: 트레일링 스톱, MACD 역행 시 조기 손절
+- 손절: 트레일링 스톱(-3%), MACD 역행 시 조기 손절
 - 스캘핑: MACD 피크 + 수익권 → 부분 익절 후 재진입
 - 장마감: 14:50 수익 청산, 15:20 전량 강제 청산
 
@@ -280,13 +434,17 @@ def _ask_claude_review(
 1. **pattern_hits**: 오늘 잘 작동한 진입/청산 패턴 (종목명·수익률 포함, 최대 4개)
 2. **pattern_fails**: 손실이 났거나 아쉬웠던 부분 (종목명·이유 포함, 최대 4개)
 3. **improvements**: 내일 당장 바꿀 수 있는 개선점 (파라미터 수치 제안 포함, 최대 4개)
-4. **summary**: 오늘 총평 (승률·실현손익·특이사항 포함, 2~3문장)
+4. **market_regime**: 오늘 시장 성격을 태그로 요약 (예: "강세_외인주도", "혼조_개인장", "약세_매도압력" 등 20자 이내)
+5. **strategy_fit**: 오늘 시장 상황에 현재 전략이 얼마나 잘 맞았는지 평가 (30자 이내)
+6. **summary**: 오늘 총평 (시황 + 승률 + 실현손익 + 특이사항 포함, 2~3문장)
 
 JSON만 응답:
 {{
   "pattern_hits":  ["...", ...],
   "pattern_fails": ["...", ...],
   "improvements":  ["...", ...],
+  "market_regime": "...",
+  "strategy_fit":  "...",
   "summary":       "..."
 }}"""
 
@@ -356,6 +514,8 @@ def _fallback_review(stats: dict) -> dict:
         "pattern_hits":  hits[:4],
         "pattern_fails": fails[:4],
         "improvements":  improvements[:4],
+        "market_regime": "",
+        "strategy_fit":  "",
         "summary":       summary,
     }
 
@@ -364,7 +524,7 @@ def _fallback_review(stats: dict) -> dict:
 # DB 저장
 # ──────────────────────────────────────────────
 
-def _save_review(today: str, stats: dict, review: dict) -> None:
+def _save_review(today: str, stats: dict, review: dict, market_ctx: dict) -> None:
     best_t  = stats.get("best")
     worst_t = stats.get("worst")
 
@@ -377,12 +537,22 @@ def _save_review(today: str, stats: dict, review: dict) -> None:
         ensure_ascii=False,
     ) if worst_t else None
 
+    market_context_json = json.dumps(
+        {
+            **market_ctx,
+            "market_regime": review.get("market_regime", ""),
+            "strategy_fit":  review.get("strategy_fit", ""),
+        },
+        ensure_ascii=False,
+    )
+
     execute(
         """
         INSERT OR REPLACE INTO trade_review
             (review_date, total_trades, win_trades, loss_trades, total_pnl,
-             best_trade, worst_trade, pattern_hits, pattern_fails, improvements, summary)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             best_trade, worst_trade, pattern_hits, pattern_fails, improvements,
+             summary, market_context)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             today,
@@ -396,6 +566,7 @@ def _save_review(today: str, stats: dict, review: dict) -> None:
             json.dumps(review.get("pattern_fails", []), ensure_ascii=False),
             json.dumps(review.get("improvements",  []), ensure_ascii=False),
             review.get("summary", ""),
+            market_context_json,
         ),
     )
     logger.info(f"trade_review 저장 완료: {today}")
@@ -405,7 +576,7 @@ def _save_review(today: str, stats: dict, review: dict) -> None:
 # Telegram 알림
 # ──────────────────────────────────────────────
 
-def _notify_review(today: str, stats: dict, review: dict) -> None:
+def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict) -> None:
     win_rate_str = f"{stats['win_rate']*100:.0f}%"
     total_pnl    = stats.get("total_pnl") or 0
     pnl_str      = f"{total_pnl:+,.0f}원"
@@ -416,6 +587,18 @@ def _notify_review(today: str, stats: dict, review: dict) -> None:
         f"매매 {stats['total']}건 | 승률 {win_rate_str} | {pnl_emoji} {pnl_str}",
         "",
     ]
+
+    # 시장 상황 요약
+    regime = review.get("market_regime", "")
+    strategy_fit = review.get("strategy_fit", "")
+    market_line = (
+        f"📈 KOSPI {market_ctx.get('kospi_chg', 0):+.2f}% | KOSDAQ {market_ctx.get('kosdaq_chg', 0):+.2f}%"
+        f" | 외인 {market_ctx.get('foreign_dir', '-')} | 글로벌리스크 {market_ctx.get('global_risk', '-')}/10"
+    )
+    lines.append(market_line)
+    if regime:
+        lines.append(f"🏷 시장성격: <b>{regime}</b>{f' | {strategy_fit}' if strategy_fit else ''}")
+    lines.append("")
 
     # 종목별 상세 (매수가 → 매도가, 손익, 미청산 여부)
     ticker_summary = stats.get("ticker_summary", {})

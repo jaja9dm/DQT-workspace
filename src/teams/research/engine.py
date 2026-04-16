@@ -10,7 +10,7 @@ engine.py — 연구소 엔진
   - 장 마감 배치: 17:00 이후 (리포트팀 이후 실행)
   - 주기: 매일 (일일 전략 업데이트) + 주 1회 심층 백테스트
 
-모델: claude-opus-4-6 (심층 분석)
+모델: claude-sonnet-4-6 (비용 최적화 — 심층 분석 충분)
 """
 
 from __future__ import annotations
@@ -236,7 +236,7 @@ def _ask_claude_opus(perf: list[dict], deep: bool = False) -> list[dict]:
 
     try:
         response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_RESEARCH,
+            model=settings.CLAUDE_MODEL_MAIN,  # Sonnet — 비용 최적화
             max_tokens=1024,
             temperature=settings.CLAUDE_TEMPERATURE,
             messages=[{"role": "user", "content": prompt}],
@@ -248,7 +248,7 @@ def _ask_claude_opus(perf: list[dict], deep: bool = False) -> list[dict]:
                 raw = raw[4:]
         return json.loads(raw).get("recommendations", [])
     except Exception as e:
-        logger.error(f"Claude Opus 분석 오류: {e}")
+        logger.error(f"Claude 분석 오류: {e}")
         return [{"strategy_id": p["strategy_id"], "action": "keep",
                  "reason": "분석 실패 — 현행 유지", "params": p["current_params"]}
                 for p in perf]

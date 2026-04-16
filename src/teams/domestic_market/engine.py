@@ -43,8 +43,9 @@ class DomesticMarketEngine:
         self._last_kospi: float = 0.0
         self._last_foreign_net: float = 0.0
 
-    def start(self) -> None:
+    def start(self, morning_summary: bool = False) -> None:
         logger.info("국내 시황팀 엔진 시작")
+        self._morning_summary = morning_summary
         self._thread.start()
 
     def stop(self) -> None:
@@ -57,19 +58,26 @@ class DomesticMarketEngine:
     # ──────────────────────────────────────────
 
     def _run_loop(self) -> None:
+        # 첫 실행: 오버나이트 요약 (전날 15:30 이후 변동 한번에 체크)
+        try:
+            self.run_once(morning_summary=getattr(self, "_morning_summary", False))
+        except Exception as e:
+            logger.error(f"국내 시황팀 오류: {e}", exc_info=True)
+
         while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=_INTERVAL_SEC)
+            if self._stop_event.is_set():
+                break
             try:
-                # 장 시간 여부와 무관하게 실행 (주말·공휴일은 KIS API가 빈 값 반환)
                 self.run_once()
             except Exception as e:
                 logger.error(f"국내 시황팀 오류: {e}", exc_info=True)
 
-            self._stop_event.wait(timeout=_INTERVAL_SEC)
-
-    def run_once(self) -> dict:
+    def run_once(self, morning_summary: bool = False) -> dict:
         """
         1회 실행: 수집 → 분석 → DB 저장 → 트리거 체크.
 
+        morning_summary=True: 장 전 오버나이트 요약 모드
         Returns:
             저장된 market_condition 딕셔너리
         """
@@ -80,7 +88,7 @@ class DomesticMarketEngine:
         global_risk_score = _get_global_risk_score()
 
         # 3. Claude 분석
-        analysis = analyze(data, global_risk_score)
+        analysis = analyze(data, global_risk_score, morning_summary=morning_summary)
 
         # 4. DB 저장
         row = _save_to_db(data, analysis)

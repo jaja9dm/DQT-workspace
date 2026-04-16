@@ -183,7 +183,7 @@ def _ask_claude_adjustments(
 
     try:
         response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_RESEARCH,
+            model=settings.CLAUDE_MODEL_MAIN,  # Sonnet — 비용 최적화
             max_tokens=1024,
             temperature=0,
             messages=[{"role": "user", "content": prompt}],

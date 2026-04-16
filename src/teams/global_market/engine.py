@@ -1,7 +1,8 @@
 """
 engine.py — 글로벌 시황팀 메인 엔진
 
-실행 주기: 24/7 / 1시간마다
+실행 주기: 평일 08:35 시작 / 15:35 종료 / 1시간마다
+시작 시: 전날 15:30 이후 오버나이트 데이터 한 번에 요약
 즉시 트리거 조건:
   - VIX ≥ 25
   - 미국 지수 ±2% 이상
@@ -44,8 +45,9 @@ class GlobalMarketEngine:
         )
         self._last_usd_krw: float = 0.0  # FX 변화율 계산용
 
-    def start(self) -> None:
+    def start(self, morning_summary: bool = False) -> None:
         logger.info("글로벌 시황팀 엔진 시작")
+        self._morning_summary = morning_summary
         self._thread.start()
 
     def stop(self) -> None:
@@ -58,26 +60,34 @@ class GlobalMarketEngine:
     # ──────────────────────────────────────────
 
     def _run_loop(self) -> None:
+        # 첫 실행: 오버나이트 요약 (전날 15:30 이후 변동 한번에 체크)
+        try:
+            self.run_once(morning_summary=getattr(self, "_morning_summary", False))
+        except Exception as e:
+            logger.error(f"글로벌 시황팀 오류: {e}", exc_info=True)
+
         while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=_INTERVAL_SEC)
+            if self._stop_event.is_set():
+                break
             try:
                 self.run_once()
             except Exception as e:
                 logger.error(f"글로벌 시황팀 오류: {e}", exc_info=True)
 
-            self._stop_event.wait(timeout=_INTERVAL_SEC)
-
-    def run_once(self) -> dict:
+    def run_once(self, morning_summary: bool = False) -> dict:
         """
         1회 실행: 수집 → 분석 → DB 저장 → 트리거 체크.
 
+        morning_summary=True: 오버나이트(전날 15:30~현재) 요약 모드
         Returns:
             저장된 global_condition 딕셔너리
         """
         # 1. 데이터 수집
         data = collect()
 
-        # 2. Claude 분석
-        analysis = analyze(data)
+        # 2. Claude 분석 (아침 첫 실행은 오버나이트 요약 포함)
+        analysis = analyze(data, morning_summary=morning_summary)
 
         # 3. DB 저장
         row = _save_to_db(data, analysis)

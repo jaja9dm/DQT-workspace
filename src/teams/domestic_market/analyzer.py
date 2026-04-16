@@ -22,7 +22,7 @@ logger = get_logger(__name__)
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 
-def _build_prompt(data: DomesticMarketData, global_risk_score: int = 5) -> str:
+def _build_prompt(data: DomesticMarketData, global_risk_score: int = 5, morning_summary: bool = False) -> str:
     news_lines = "\n".join(
         f"  - {n.title}" for n in data.news[:5]
     ) or "  - 수집된 뉴스 없음"
@@ -61,7 +61,10 @@ def _build_prompt(data: DomesticMarketData, global_risk_score: int = 5) -> str:
 {news_lines}
 
 ## 분석 요청
+{"장 전 오버나이트 요약 모드: 전날 장 마감 이후 글로벌 변화가 오늘 국내 장에 미칠 영향을 중심으로 평가하세요." if morning_summary else "현재 장중 상황을 평가하세요."}
 1. **시장 점수** (-1.0 약세 ~ +1.0 강세): 현재 시장의 방향성 수치화
+   - 스캘핑·단타 관점: 변동성이 있어도 거래 가능하면 중립 이상으로 평가
+   - bearish(-0.5 이하)는 진짜 큰 악재(전쟁·금융위기·서킷브레이커) 수준에만 사용
 2. **시장 방향** (bullish / neutral / bearish)
 3. **시장 판단 근거** (최대 3가지, 각 20자 이내)
 4. **주도 주체** (foreign / institutional / individual / mixed): 오늘 시장 주도 세력
@@ -77,7 +80,7 @@ def _build_prompt(data: DomesticMarketData, global_risk_score: int = 5) -> str:
 }}"""
 
 
-def analyze(data: DomesticMarketData, global_risk_score: int = 5) -> dict:
+def analyze(data: DomesticMarketData, global_risk_score: int = 5, morning_summary: bool = False) -> dict:
     """
     Claude에 국내 시황 분석 요청.
 
@@ -94,7 +97,8 @@ def analyze(data: DomesticMarketData, global_risk_score: int = 5) -> dict:
             "summary": str,
         }
     """
-    logger.info("Claude 국내 시황 분석 시작")
+    label = "오버나이트 요약" if morning_summary else "정기 분석"
+    logger.info(f"Claude 국내 시황 분석 시작 ({label})")
 
     try:
         response = _client.messages.create(
@@ -102,7 +106,7 @@ def analyze(data: DomesticMarketData, global_risk_score: int = 5) -> dict:
             max_tokens=256,
             temperature=settings.CLAUDE_TEMPERATURE,
             messages=[
-                {"role": "user", "content": _build_prompt(data, global_risk_score)}
+                {"role": "user", "content": _build_prompt(data, global_risk_score, morning_summary=morning_summary)}
             ],
         )
         raw = response.content[0].text.strip()

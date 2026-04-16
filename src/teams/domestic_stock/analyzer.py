@@ -4,7 +4,7 @@ analyzer.py — 국내 주식팀 Claude 분석 모듈
 후보 종목 목록을 Claude에 보내 Hot List 여부를 판단한다.
 후보가 많으면 배치로 분할하여 처리.
 
-모델: claude-sonnet-4-6 (temperature=0)
+모델: claude-haiku-4-5 (temperature=0) — 비용 최적화
 출력: hot_list 테이블에 저장할 종목 목록
 
 토큰 최적화:
@@ -92,7 +92,7 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - RSI 75↑ AND BB위치 0.95↑: 단기 과열 — 진입 시 손실 위험
 - 가격 하락 중 + MACD 히스토그램 하락: 명확한 하락 추세
 - 거래량 없이 가격만 급등 (거래량비율 < 1.5): 유동성 부족
-- 글로벌 리스크 8↑ 시: RSI 60↑ 종목만 선정 (보수 모드)
+- 글로벌 리스크 9↑ 시: RSI 60↑ 종목만 선정 (전쟁·금융위기급 보수 모드)
 - 외인+기관 동시 순매도: 기술적 신호와 무관하게 선정 보류 (세력 이탈 가능성)
 - 외인 단독 강한 순매도 (음수 규모가 거래량의 10%↑): 기술적 신호만으로 선정 불가
 
@@ -210,8 +210,8 @@ def analyze(
 
     try:
         response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_MAIN,
-            max_tokens=512,
+            model=settings.CLAUDE_MODEL_FAST,  # Haiku — 비용 최적화 (Gate 5에서 Sonnet 재검증)
+            max_tokens=256,
             temperature=settings.CLAUDE_TEMPERATURE,
             system=[
                 {
