@@ -61,7 +61,7 @@ class Settings:
 
     # ── 트레일링 스톱 ─────────────────────────────
     # 초기 손절선: 매수가 대비 -N% (.env에서 조정 가능 — 권장 5~10%)
-    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "5.0"))
+    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "3.0"))
     # 손절선 올리기 시작 조건: 매수가 대비 +N% 이상 수익 시
     TRAILING_TRIGGER_PCT: float = float(os.getenv("TRAILING_TRIGGER_PCT", "10.0"))
     # 손절선 위치: 현재가 대비 -N% (트레일링 간격)
@@ -79,7 +79,7 @@ class Settings:
     # MACD 조기 손절: True이면 포지션 진입 후 MACD 역행 시 즉시 청산
     MACD_EARLY_EXIT_ENABLED: bool = os.getenv("MACD_EARLY_EXIT_ENABLED", "true").lower() == "true"
     # MACD 조기 손절 발동 최소 손실률 (이 이상 손실 + MACD 역행 시 청산)
-    MACD_EARLY_EXIT_MIN_LOSS_PCT: float = float(os.getenv("MACD_EARLY_EXIT_MIN_LOSS_PCT", "0.5"))
+    MACD_EARLY_EXIT_MIN_LOSS_PCT: float = float(os.getenv("MACD_EARLY_EXIT_MIN_LOSS_PCT", "0.0"))
 
     def validate(self) -> None:
         """필수 환경 변수 누락 시 경고."""

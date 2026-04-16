@@ -298,8 +298,9 @@ class PositionMonitorEngine:
         self._macd_hist_prev[ticker] = hist_3m_now
 
         # ── 1. MACD 조기 손절 (최우선) ─────────
+        # 1a. MACD 역행 (bearish) + 손익 ≥ 기준선 → 즉시 컷
         if settings.MACD_EARLY_EXIT_ENABLED and macd_bearish:
-            min_loss = settings.MACD_EARLY_EXIT_MIN_LOSS_PCT
+            min_loss = settings.MACD_EARLY_EXIT_MIN_LOSS_PCT  # 기본 0.0 → 브레이크이븐에서 컷
             if pnl_pct <= -min_loss:
                 logger.warning(
                     f"[MACD 조기손절] {ticker} | MACD 역행 + 손익 {pnl_pct:+.2f}% | "
@@ -308,15 +309,36 @@ class PositionMonitorEngine:
                 _delete_trailing_stop(ticker)
                 from src.utils.notifier import notify
                 notify(
-                    f"⚡ <b>[MACD 조기손절]</b> {ticker}\n"
+                    f"⚡ <b>[MACD 조기손절]</b> {name}({ticker})\n"
                     f"분봉 MACD 역행 감지 + 손익 {pnl_pct:+.2f}%\n"
                     f"{quantity}주 즉시 청산"
                 )
                 return self._place_sell(
                     ticker=ticker, quantity=quantity, current_price=current_price,
-                    action="stop_loss", reason=f"MACD 조기손절 (sell_pre, 손익 {pnl_pct:+.2f}%)",
+                    action="stop_loss", reason=f"MACD 조기손절 (bearish, 손익 {pnl_pct:+.2f}%)",
                     avg_price=avg_price, name=name,
                 )
+
+        # 1b. MACD 중립 (bullish 아님) + 손실 -2% 초과 → 모멘텀 소멸 조기 컷
+        #     트레일링 -3%까지 기다리지 않고 모멘텀 없는 손실은 빠르게 정리
+        _neutral_cut_pct = _p("neutral_cut_pct", 2.0)
+        if not macd_bullish and pnl_pct <= -_neutral_cut_pct:
+            logger.warning(
+                f"[중립 조기컷] {ticker} | MACD 비강세({macd_sig}) + 손익 {pnl_pct:+.2f}% | "
+                f"기준 -{_neutral_cut_pct:.1f}% | {quantity}주 전량 청산"
+            )
+            _delete_trailing_stop(ticker)
+            from src.utils.notifier import notify
+            notify(
+                f"✂️ <b>[모멘텀 소멸 컷]</b> {name}({ticker})\n"
+                f"MACD {macd_sig} + 손익 {pnl_pct:+.2f}%\n"
+                f"모멘텀 없는 손실 — {quantity}주 조기 청산"
+            )
+            return self._place_sell(
+                ticker=ticker, quantity=quantity, current_price=current_price,
+                action="stop_loss", reason=f"중립 조기컷 (MACD {macd_sig}, 손익 {pnl_pct:+.2f}%)",
+                avg_price=avg_price, name=name,
+            )
 
         # ── 2. 트레일링 스톱 ────────────────────
         ts = _load_trailing_stop(ticker)
