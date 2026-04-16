@@ -39,6 +39,6 @@ fi
 
 # 2. 재시작
 echo "DQT 시작 중..."
-bash "$WORKSPACE/run.sh" "$@" >> "$LOG" 2>&1 &
+bash "$WORKSPACE/run.sh" "$@" >> "$WORKSPACE/logs/stdout.log" 2>&1 &
 NEW_PID=$!
 echo "DQT 시작 완료 (PID $NEW_PID)"

@@ -179,6 +179,13 @@ class TradingEngine:
         """
         # ── Gate 0: 오프닝 게이트 ───────────────
         now = datetime.now()
+
+        # 장 종료 전 신규 매수 차단 (15:20 이후 — 장마감 청산 시간대)
+        _hm = now.hour * 100 + now.minute
+        if _hm >= 1520:
+            logger.debug(f"장마감 시간대 ({now.strftime('%H:%M')}) — 신규 매수 차단")
+            return []
+
         if not self._opening_gate_checked:
             # 첫 사이클에서 시황 평가 후 즉시 매수 or 9:10 대기 결정
             self._opening_gate_checked = True

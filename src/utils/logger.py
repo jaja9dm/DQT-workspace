@@ -6,6 +6,7 @@ logger.py
 
 import logging
 import sys
+import threading
 from pathlib import Path
 
 LOG_DIR = Path(__file__).parent.parent.parent / "logs"
@@ -13,6 +14,7 @@ LOG_DIR.mkdir(exist_ok=True)
 
 _FMT = "%(asctime)s | %(levelname)-8s | %(name)-30s | %(message)s"
 _DATE_FMT = "%Y-%m-%d %H:%M:%S"
+_lock = threading.Lock()
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -20,6 +22,9 @@ def get_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
     if logger.handlers:
         return logger
+    with _lock:
+        if logger.handlers:  # 락 획득 후 재확인 (double-checked locking)
+            return logger
 
     logger.setLevel(logging.DEBUG)
 
