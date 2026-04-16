@@ -97,8 +97,9 @@ class StockSnapshot:
     # 거래대금 (잡주 필터용)
     trading_value: int = 0        # 당일 누적 거래대금 (원) — 10억 미만 = 잡주
 
-    # 수급 (외인 순매수 — KIS 현재가 응답에서 추출, 없으면 0)
+    # 수급 (외인·기관 순매수 — KIS 현재가 응답에서 추출, 없으면 0)
     frgn_net_buy: int = 0         # 외국인 순매수량 (주) — 양수=매수우위, 음수=매도우위
+    inst_net_buy: int = 0         # 기관 순매수량 (주) — orgn_ntby_qty 필드, 없으면 0
 
     error: str = ""               # 수집 오류 메시지
 
@@ -117,12 +118,12 @@ class UniverseScan:
 
 # ── KIS 현재가 조회 ───────────────────────────────────────────
 
-def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int]:
+def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int]:
     """
-    KIS API로 현재가·등락률·거래량·거래대금·외인순매수 조회.
+    KIS API로 현재가·등락률·거래량·거래대금·외인순매수·기관순매수 조회.
 
     Returns:
-        (current_price, change_pct, volume, trading_value, frgn_net_buy)
+        (current_price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy)
     """
     gw = KISGateway()
     try:
@@ -141,11 +142,12 @@ def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int]:
         change_pct = float(output.get("prdy_ctrt", 0) or 0)
         volume = int(output.get("acml_vol", 0) or 0)
         trading_value = int(output.get("acml_tr_pbmn", 0) or 0)  # 누적 거래대금
-        frgn_net_buy = int(output.get("frgn_ntby_qty", 0) or 0)  # 외국인 순매수량
-        return price, change_pct, volume, trading_value, frgn_net_buy
+        frgn_net_buy = int(output.get("frgn_ntby_qty", 0) or 0)   # 외국인 순매수량
+        inst_net_buy = int(output.get("orgn_ntby_qty", 0) or 0)   # 기관 순매수량 (없으면 0)
+        return price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy
     except Exception as e:
         logger.debug(f"KIS 현재가 실패 [{ticker}]: {e}")
-        return 0.0, 0.0, 0, 0, 0
+        return 0.0, 0.0, 0, 0, 0, 0
 
 
 # ── FDR 기술지표 계산 ─────────────────────────────────────────
@@ -293,12 +295,13 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap = StockSnapshot(ticker=ticker, name=name)
 
     # 1. KIS 현재가
-    price, change_pct, volume, trading_value, frgn_net_buy = _fetch_price_from_kis(ticker)
+    price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy = _fetch_price_from_kis(ticker)
     snap.current_price = price
     snap.change_pct = change_pct
     snap.volume = volume
     snap.trading_value = trading_value
     snap.frgn_net_buy = frgn_net_buy
+    snap.inst_net_buy = inst_net_buy
 
     # 2. 기술지표 (FDR + pandas-ta)
     ind = _compute_indicators(ticker, price, volume)
