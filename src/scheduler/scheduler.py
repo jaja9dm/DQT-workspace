@@ -284,8 +284,7 @@ class DQTScheduler:
         try:
             # 오프닝 게이트 해제 (이제 무조건 매수 허용)
             if self._trading is not None:
-                self._trading._buy_allowed_from = None
-                logger.info("오프닝 게이트 해제 — 매수 재개")
+                self._trading.reset_opening_gate()
 
             # 국내 주식팀 즉시 스캔 (Hot List 갱신)
             if self._domestic_stock is not None:

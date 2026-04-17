@@ -23,6 +23,7 @@ param_tuner.py — 자동 파라미터 튜닝 모듈
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime, timedelta
 
 import anthropic
@@ -38,6 +39,18 @@ _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 # 1회 조정 시 기본값 대비 최대 변동 비율 (20%)
 _MAX_ADJUST_RATIO = 0.20
+
+
+def _extract_json(raw: str) -> str:
+    """Claude 응답에서 JSON 블록 추출. 코드 펜스·앞뒤 텍스트 제거."""
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw)
+    if m:
+        return m.group(1)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1:
+        return raw[start : end + 1]
+    return raw
 
 
 # ──────────────────────────────────────────────
@@ -186,17 +199,14 @@ def _ask_claude_adjustments(
             model=settings.CLAUDE_MODEL_MAIN,  # Sonnet — 비용 최적화
             max_tokens=1024,
             temperature=0,
+            timeout=30.0,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        result = json.loads(raw)
+        result = json.loads(_extract_json(raw))
         return result
     except Exception as e:
-        logger.error(f"Claude 파라미터 튜닝 분석 실패: {e}")
+        logger.error(f"Claude 파라미터 튜닝 분석 실패: {type(e).__name__}: {e}")
         return []
 
 

@@ -334,8 +334,10 @@ class KISGateway:
             body=body or {},
         )
         self._queue.put(req)
-        req.event.wait(timeout=30)
+        signaled = req.event.wait(timeout=30)
 
+        if not signaled:
+            raise TimeoutError(f"KIS API 요청 타임아웃 (30s): {req.path}")
         if req.error:
             raise req.error
         return req.result or {}
@@ -344,6 +346,9 @@ class KISGateway:
         """큐에서 요청을 꺼내 순서대로 실행하는 워커 스레드."""
         while True:
             req = self._queue.get()
+            if req is None:  # 종료 sentinel
+                self._queue.task_done()
+                break
             try:
                 self._rate_limit_wait()
                 token = self._get_token()

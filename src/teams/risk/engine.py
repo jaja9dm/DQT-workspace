@@ -27,6 +27,7 @@ from src.config.settings import settings
 from src.infra.database import execute, fetch_all, fetch_one
 from src.infra.kis_gateway import KISGateway, RequestPriority
 from src.utils.logger import get_logger
+from src.utils.notifier import notify_risk
 
 logger = get_logger(__name__)
 
@@ -64,6 +65,7 @@ class RiskEngine:
         )
         self._last_global_risk: int = 0
         self._last_kospi_change: float = 0.0
+        self._last_level: int = 1
 
     def start(self) -> None:
         logger.info("위기 관리팀 엔진 시작")
@@ -116,6 +118,12 @@ class RiskEngine:
             f"리스크 평가 완료 — 점수={score} | 레벨={level} | "
             f"{_LEVEL_SPEC[level][3]}"
         )
+
+        # 7. 레벨 변경 시 Telegram 알림
+        if level != self._last_level:
+            notify_risk(level, alerts)
+            self._last_level = level
+
         return row
 
     # ──────────────────────────────────────────

@@ -24,6 +24,7 @@ engine.py — 일일 매매 복기 팀
 from __future__ import annotations
 
 import json
+import re
 from datetime import date, datetime
 
 import anthropic
@@ -36,6 +37,18 @@ from src.utils.notifier import notify
 logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+
+def _extract_json(raw: str) -> str:
+    """Claude 응답에서 JSON 블록 추출. 코드 펜스·앞뒤 텍스트 제거."""
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", raw)
+    if m:
+        return m.group(1)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1:
+        return raw[start : end + 1]
+    return raw
 
 
 # ──────────────────────────────────────────────
@@ -255,7 +268,7 @@ def _load_snapshots_context(today: str, tickers: list[str]) -> dict[str, list[di
 
 def _calc_stats(trades: list[dict]) -> dict:
     """매매 기초 통계 + 종목별 매수/매도 페어링."""
-    sell_trades = [t for t in trades if t["action"] in ("sell", "stop_loss", "take_profit", "time_cut", "time_cut")]
+    sell_trades = [t for t in trades if t["action"] in ("sell", "stop_loss", "take_profit", "time_cut")]
     buy_trades  = [t for t in trades if t["action"] == "buy"]
 
     win_trades  = [t for t in sell_trades if (t.get("pnl_pct") or 0) > 0]
@@ -453,16 +466,13 @@ JSON만 응답:
             model=settings.CLAUDE_MODEL_MAIN,
             max_tokens=1024,
             temperature=0,
+            timeout=30.0,
             messages=[{"role": "user", "content": prompt}],
         )
         raw = response.content[0].text.strip()
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        return json.loads(raw)
+        return json.loads(_extract_json(raw))
     except Exception as e:
-        logger.error(f"Claude 복기 분석 실패: {e}")
+        logger.error(f"Claude 복기 분석 실패: {type(e).__name__}: {e}")
         # Claude 실패 시 — 데이터 기반 자동 생성 (빈 결과 대신)
         return _fallback_review(stats)
 

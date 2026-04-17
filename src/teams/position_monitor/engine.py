@@ -1398,7 +1398,7 @@ def _calc_volume_pressure(ticker: str) -> str:
         """,
         (ticker,),
     )
-    if len(rows) < 10:
+    if len(rows) < 15:
         return "neutral"
 
     recent  = rows[:5]

@@ -163,6 +163,11 @@ class TradingEngine:
         self._thread.join(timeout=15)
         logger.info("매매팀 엔진 종료")
 
+    def reset_opening_gate(self) -> None:
+        """오프닝 게이트 해제 — 09:10 재점검 시 스케줄러가 호출."""
+        self._buy_allowed_from = None
+        logger.info("오프닝 게이트 해제 — 매수 재개")
+
     # ──────────────────────────────────────────
     # 메인 루프
     # ──────────────────────────────────────────

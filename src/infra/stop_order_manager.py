@@ -48,11 +48,14 @@ def place_stop_order(ticker: str, quantity: int, stop_price: float) -> bool:
         True  → 주문 정상 제출 및 DB 저장
         False → 실패 (로그 기록됨)
     """
-    # 이미 존재하는 주문이 있으면 먼저 취소
+    # 이미 존재하는 주문이 있으면 먼저 취소 — 실패 시 이중 매도 방지를 위해 중단
     existing = _get_stop_order(ticker)
     if existing:
         logger.info(f"[Stop Order] {ticker} 기존 주문 취소 후 재제출")
-        _cancel_on_kis(existing)
+        if not _cancel_on_kis(existing):
+            logger.error(f"[Stop Order] {ticker} 기존 주문 취소 실패 — 이중 매도 방지를 위해 신규 제출 중단")
+            return False
+        _delete_stop_order(ticker)
 
     gw = KISGateway()
     tr_id = "VTTC0801U" if settings.KIS_MODE == "paper" else "TTTC0801U"
