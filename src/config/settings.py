@@ -60,8 +60,8 @@ class Settings:
     POSITION_MAX_HOLD_DAYS: int = int(os.getenv("POSITION_MAX_HOLD_DAYS", "5"))
 
     # ── 트레일링 스톱 ─────────────────────────────
-    # 초기 손절선: 매수가 대비 -N% (.env에서 조정 가능 — 권장 5~10%)
-    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "3.0"))
+    # 초기 손절선: 매수가 대비 -N% (.env에서 조정 가능 — 권장 2~5%)
+    TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "2.0"))
     # 손절선 올리기 시작 조건: 매수가 대비 +N% 이상 수익 시
     TRAILING_TRIGGER_PCT: float = float(os.getenv("TRAILING_TRIGGER_PCT", "10.0"))
     # 손절선 위치: 현재가 대비 -N% (트레일링 간격)
