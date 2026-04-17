@@ -398,15 +398,13 @@ JSON만 응답:
         try:
             response = _client.messages.create(
                 model=settings.CLAUDE_MODEL_FAST,
-                max_tokens=128,
+                max_tokens=200,
                 temperature=0,
+                timeout=30.0,
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text.strip()
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+            raw = _extract_json(raw)
             result = json.loads(raw)
             immediate = bool(result.get("immediate", False))
             reason    = result.get("reason", "")
@@ -481,6 +479,7 @@ JSON만 응답:
                 model=settings.CLAUDE_MODEL_MAIN,
                 max_tokens=512,
                 temperature=settings.CLAUDE_TEMPERATURE,
+                timeout=30.0,
                 system=[
                     {
                         "type": "text",
@@ -491,10 +490,7 @@ JSON만 응답:
                 messages=[{"role": "user", "content": user_content}],
             )
             raw = response.content[0].text.strip()
-            if "```" in raw:
-                raw = raw.split("```")[1]
-                if raw.startswith("json"):
-                    raw = raw[4:]
+            raw = _extract_json(raw)
             result = json.loads(raw)
 
             # 캐시 히트 로깅
@@ -710,6 +706,18 @@ JSON만 응답:
 # ──────────────────────────────────────────────
 # DB / KIS 데이터 로드 헬퍼
 # ──────────────────────────────────────────────
+
+def _extract_json(raw: str) -> str:
+    """Claude 응답에서 JSON 부분만 추출 (코드블록·순수 JSON 모두 처리)."""
+    import re
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw)
+    if m:
+        return m.group(1).strip()
+    start, end = raw.find("{"), raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start:end + 1]
+    return raw
+
 
 def _load_global_context() -> dict:
     row = fetch_one(

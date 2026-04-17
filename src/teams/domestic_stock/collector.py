@@ -437,11 +437,22 @@ def collect(max_workers: int = 10) -> UniverseScan:
         except Exception as e:
             logger.debug(f"체크포인트 저장 실패 [{ticker}]: {e}")
 
-    # 후보 필터 1: 신호가 하나라도 있는 종목
+    # 후보 필터 1: 복합 신호 (2개 이상) 충족 종목만 후보 등록
+    # 단일 신호(거래량만, 가격만, BB돌파만)는 신뢰도 낮아 제외
+    # 예외: 거래량 5배↑ 이상 폭발적 급증은 단독으로도 허용 (세력 집결 가능성)
+    def _signal_count(s: StockSnapshot) -> int:
+        return int(s.is_volume_surge) + int(s.is_price_surge) + int(s.is_breakout)
+
     raw_candidates = [
         s for s in scan.snapshots
-        if s.is_volume_surge or s.is_price_surge or s.is_breakout
+        if _signal_count(s) >= 2 or (s.is_volume_surge and s.volume_ratio >= 5.0)
     ]
+    single_signal_skipped = sum(
+        1 for s in scan.snapshots
+        if (_signal_count(s) == 1 and not (s.is_volume_surge and s.volume_ratio >= 5.0))
+    )
+    if single_signal_skipped:
+        logger.info(f"단일 신호 필터: {single_signal_skipped}종목 제외 (복합 조건 미충족)")
 
     # 후보 필터 2: 잡주 제외 — 당일 거래대금 기준
     # 장중에는 최종 거래대금이 낮을 수 있으므로:

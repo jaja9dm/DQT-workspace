@@ -229,8 +229,9 @@ def analyze(
     try:
         response = _client.messages.create(
             model=settings.CLAUDE_MODEL_FAST,  # Haiku — 비용 최적화 (Gate 5에서 Sonnet 재검증)
-            max_tokens=256,
+            max_tokens=512,   # 10종목 × ~40토큰 + JSON 구조 = 여유 있게 512
             temperature=settings.CLAUDE_TEMPERATURE,
+            timeout=30.0,     # 30초 타임아웃 (무한 대기 방지)
             system=[
                 {
                     "type": "text",
@@ -249,12 +250,7 @@ def analyze(
             ],
         )
         raw = response.content[0].text.strip()
-
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-
+        raw = _extract_json(raw)
         result = json.loads(raw)
         hot_list = result.get("hot_list", [])
 
@@ -271,13 +267,32 @@ def analyze(
         return hot_list[:_MAX_HOT_LIST]
 
     except json.JSONDecodeError as e:
-        logger.error(f"Claude 응답 파싱 실패: {e}")
+        raw_preview = locals().get("raw", "")[:200]
+        logger.error(f"Claude 응답 파싱 실패: {e} | raw='{raw_preview}'")
         return _fallback_hot_list(candidates_sorted)
     except Exception as e:
-        logger.error(f"Claude API 오류: {e}")
+        logger.error(f"Claude API 오류: {type(e).__name__}: {e}")
         from src.utils.notifier import check_claude_error
         check_claude_error(e, "국내 주식 Hot List")
         return _fallback_hot_list(candidates_sorted)
+
+
+def _extract_json(raw: str) -> str:
+    """
+    Claude 응답에서 JSON 부분만 추출.
+    코드블록(```json ... ```) 또는 순수 JSON 양쪽 모두 처리.
+    """
+    import re
+    # 코드블록 안 JSON 우선 추출
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", raw)
+    if m:
+        return m.group(1).strip()
+    # 중괄호 범위 직접 추출 (첫 { 부터 마지막 } 까지)
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        return raw[start:end + 1]
+    return raw
 
 
 def _fallback_hot_list(candidates: list[StockSnapshot]) -> list[dict]:
