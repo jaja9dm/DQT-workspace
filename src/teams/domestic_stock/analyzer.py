@@ -125,6 +125,7 @@ def _build_user_message(
     market_score: float,
     global_risk_score: int,
     max_hot_list: int,
+    semiconductor_alert: str = "",
 ) -> str:
     """동적 부분만 담은 사용자 메시지 구성."""
     lines = []
@@ -152,10 +153,12 @@ def _build_user_message(
         )
     stock_block = "\n".join(lines)
 
+    semiconductor_line = f"\n- ⚠️ {semiconductor_alert}" if semiconductor_alert else ""
     return (
         f"## 현재 시장 컨텍스트\n"
         f"- 국내 시장점수: {market_score:+.2f}\n"
-        f"- 글로벌 리스크: {global_risk_score}/10\n\n"
+        f"- 글로벌 리스크: {global_risk_score}/10"
+        f"{semiconductor_line}\n\n"
         f"## 후보 종목 ({len(candidates)}개)\n"
         f"{stock_block}\n\n"
         f"위 종목 중 Hot List를 선정하세요. 최대 {max_hot_list}종목."
@@ -166,6 +169,7 @@ def analyze(
     scan: UniverseScan,
     market_score: float = 0.0,
     global_risk_score: int = 5,
+    global_key_events: list[str] | None = None,
 ) -> list[dict]:
     """
     후보 종목을 Claude에 보내 Hot List 판단.
@@ -182,6 +186,20 @@ def analyze(
     if not candidates:
         logger.info("후보 종목 없음 — Hot List 비어있음")
         return []
+
+    # ── 글로벌 반도체 약세 경보 ──────────────────────────────
+    # TSM·NVDA 등 글로벌 반도체가 -2% 이상 하락한 날은
+    # Claude에게 반도체·소재·장비 관련주 선정 자제 지시
+    semiconductor_alert = ""
+    if global_key_events:
+        semi_keywords = ("tsm", "nvda", "반도체", "semiconductor")
+        for event in global_key_events:
+            if any(k in event.lower() for k in semi_keywords) and "하락" in event:
+                semiconductor_alert = (
+                    "글로벌 반도체 약세 감지 — 반도체·소재·장비 관련 종목 선정 자제"
+                )
+                logger.info(f"반도체 약세 경보: {event}")
+                break
 
     # ── 일봉 MACD 필터 ──────────────────────────────────────
     if settings.MACD_DAILY_FILTER:
@@ -224,7 +242,8 @@ def analyze(
                 {
                     "role": "user",
                     "content": _build_user_message(
-                        batch, market_score, global_risk_score, _MAX_HOT_LIST
+                        batch, market_score, global_risk_score, _MAX_HOT_LIST,
+                        semiconductor_alert=semiconductor_alert,
                     ),
                 }
             ],

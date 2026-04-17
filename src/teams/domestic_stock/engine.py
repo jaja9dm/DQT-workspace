@@ -99,7 +99,8 @@ class DomesticStockEngine:
             return []
 
         # 5. Claude Hot List 판단
-        hot_list = analyze(scan, market_score, global_risk_score)
+        key_events = _get_global_key_events()
+        hot_list = analyze(scan, market_score, global_risk_score, global_key_events=key_events)
 
         # 6. DB 저장
         saved = _save_hot_list(hot_list, scan)
@@ -227,6 +228,20 @@ def _get_global_risk_score() -> int:
         return int(row["global_risk_score"]) if row else 5
     except Exception:
         return 5
+
+
+def _get_global_key_events() -> list[str]:
+    """글로벌 시황 DB에서 key_events JSON 배열 반환."""
+    import json as _json
+    try:
+        row = fetch_one(
+            "SELECT key_events FROM global_condition ORDER BY created_at DESC LIMIT 1"
+        )
+        if row and row["key_events"]:
+            return _json.loads(row["key_events"])
+        return []
+    except Exception:
+        return []
 
 
 def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:

@@ -231,6 +231,17 @@ class TradingEngine:
             logger.info(f"Gate 3 차단: 국내 시황 점수 {market_score:.2f} — 진입 보류")
             return []
 
+        # ── Gate 3.5: 장중 실시간 지수 방향 ──────
+        # DB에 저장된 최신 시황 데이터에서 KOSPI/KOSDAQ 당일 등락률 확인.
+        # 시장이 실제로 하락 중이면 시황 점수와 무관하게 신규 진입 차단.
+        kospi_live = _load_live_index_change()
+        if kospi_live is not None and kospi_live < -0.5:
+            logger.info(
+                f"Gate 3.5 차단: 장중 KOSPI {kospi_live:+.2f}% — "
+                f"실시간 하락 중 신규 진입 보류"
+            )
+            return []
+
         # ── Gate 4: Hot List ─────────────────────
         hot_list = _load_hot_list()
         if not hot_list:
@@ -670,6 +681,26 @@ def _load_market_context() -> dict:
         "SELECT market_score, market_direction FROM market_condition ORDER BY created_at DESC LIMIT 1"
     )
     return dict(row) if row else {"market_score": 0.0, "market_direction": "neutral"}
+
+
+def _load_live_index_change() -> float | None:
+    """
+    DB에서 가장 최근 국내 시황 기록의 KOSPI 당일 등락률 반환.
+    market_condition.summary JSON의 'kospi' 필드 사용.
+    데이터 없거나 파싱 실패 시 None 반환 (게이트 통과 처리).
+    """
+    import json as _json
+    row = fetch_one(
+        "SELECT summary FROM market_condition ORDER BY created_at DESC LIMIT 1"
+    )
+    if not row or not row["summary"]:
+        return None
+    try:
+        summary = _json.loads(row["summary"])
+        val = summary.get("kospi")
+        return float(val) if val is not None else None
+    except Exception:
+        return None
 
 
 def _load_hot_list() -> list[dict]:
