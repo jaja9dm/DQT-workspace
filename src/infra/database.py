@@ -24,6 +24,14 @@ def init_db() -> None:
     schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
     with get_conn() as conn:
         conn.executescript(schema_sql)
+        # 기존 DB 마이그레이션: trailing_stop 동적 파라미터 컬럼 추가
+        for col, default in [("trigger_pct", "3.0"), ("floor_pct", "2.5")]:
+            try:
+                conn.execute(
+                    f"ALTER TABLE trailing_stop ADD COLUMN {col} REAL NOT NULL DEFAULT {default}"
+                )
+            except Exception:
+                pass  # 이미 존재하면 무시
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

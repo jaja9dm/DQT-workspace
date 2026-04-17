@@ -1362,13 +1362,17 @@ def _update_trailing_floor(
     new_highest = max(highest, current_price)
 
     gain_pct = (current_price / avg_price - 1) * 100
-    floor_gap = _TRAILING_TIGHT_FLOOR if tight else _TRAILING_FLOOR
 
-    if gain_pct >= _TRAILING_TRIGGER:
+    # 종목별 동적 파라미터 (진입 시 _calc_dynamic_trail_params로 설정된 값)
+    trigger = float(ts.get("trigger_pct") or _TRAILING_TRIGGER)
+    floor_base = float(ts.get("floor_pct") or _TRAILING_FLOOR)
+    floor_gap = (floor_base / 2) if tight else floor_base   # MACD bearish 시 절반으로 타이트
+
+    if gain_pct >= trigger:
         candidate_floor = current_price * (1 - floor_gap / 100)
         new_floor = max(current_floor, candidate_floor)
     elif tight and gain_pct > 0:
-        # MACD 약화 + 수익권: 수익 전액 기준으로도 타이트하게
+        # MACD 약화 + 수익권: 즉시 타이트하게 추적
         candidate_floor = current_price * (1 - floor_gap / 100)
         new_floor = max(current_floor, candidate_floor)
     else:

@@ -170,6 +170,8 @@ CREATE TABLE IF NOT EXISTS trailing_stop (
     dip_buy_count    INTEGER NOT NULL DEFAULT 0,   -- 스마트 물타기 횟수 (일시 눌림 + 조건 충족 시)
     scalp_exit_price REAL DEFAULT NULL,            -- 부분 익절(스캘핑) 실행 가격 (재진입 기준선)
     scalp_exit_qty   INTEGER DEFAULT 0,            -- 부분 익절 시 매도 수량 (재진입 목표 수량)
+    trigger_pct      REAL NOT NULL DEFAULT 3.0,    -- 트레일링 시작 수익률 (%) — 종목·시황별 동적 설정
+    floor_pct        REAL NOT NULL DEFAULT 2.5,    -- 트레일링 간격 (%) — 종목 변동성별 동적 설정
     updated_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

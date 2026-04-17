@@ -62,12 +62,12 @@ class Settings:
     # ── 트레일링 스톱 ─────────────────────────────
     # 초기 손절선: 매수가 대비 -N% (.env에서 조정 가능 — 권장 2~5%)
     TRAILING_INITIAL_STOP_PCT: float = float(os.getenv("TRAILING_INITIAL_STOP_PCT", "2.0"))
-    # 손절선 올리기 시작 조건: 매수가 대비 +N% 이상 수익 시
-    TRAILING_TRIGGER_PCT: float = float(os.getenv("TRAILING_TRIGGER_PCT", "10.0"))
-    # 손절선 위치: 현재가 대비 -N% (트레일링 간격)
-    TRAILING_FLOOR_PCT: float = float(os.getenv("TRAILING_FLOOR_PCT", "5.0"))
+    # 손절선 올리기 시작 조건: 매수가 대비 +N% 이상 수익 시 (동적 계산 기본값)
+    TRAILING_TRIGGER_PCT: float = float(os.getenv("TRAILING_TRIGGER_PCT", "3.0"))
+    # 손절선 위치: 현재가 대비 -N% (트레일링 간격, 동적 계산 기본값)
+    TRAILING_FLOOR_PCT: float = float(os.getenv("TRAILING_FLOOR_PCT", "2.5"))
     # 사다리 매수 발동 조건: 매수가 대비 -N% 하락 시
-    LADDER_TRIGGER_PCT: float = float(os.getenv("LADDER_TRIGGER_PCT", "20.0"))
+    LADDER_TRIGGER_PCT: float = float(os.getenv("LADDER_TRIGGER_PCT", "10.0"))
     # 사다리 매수 수량 비율 (기존 보유 수량의 N배)
     LADDER_QTY_RATIO: float = float(os.getenv("LADDER_QTY_RATIO", "1.0"))
 
