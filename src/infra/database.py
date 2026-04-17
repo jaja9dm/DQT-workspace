@@ -32,6 +32,23 @@ def init_db() -> None:
                 )
             except Exception:
                 pass  # 이미 존재하면 무시
+        # 기존 DB 마이그레이션: intraday_candles 테이블 생성
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS intraday_candles (
+                ticker   TEXT NOT NULL,
+                bar_time TEXT NOT NULL,
+                open     REAL NOT NULL,
+                high     REAL NOT NULL,
+                low      REAL NOT NULL,
+                close    REAL NOT NULL,
+                volume   INTEGER NOT NULL,
+                saved_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (ticker, bar_time)
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_intraday_candles ON intraday_candles(ticker, bar_time DESC)"
+        )
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

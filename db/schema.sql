@@ -176,6 +176,25 @@ CREATE TABLE IF NOT EXISTS trailing_stop (
 );
 
 -- ────────────────────────────────────────
+-- 장중 분봉 캔들 (ATR·거래량 압력 계산용)
+-- IntradayMACDEngine이 분봉 수집 시 저장 (종목별 최근 30봉 유지)
+-- PositionMonitor가 ATR·거래량 압력 산출에 활용 (추가 API 호출 없음)
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS intraday_candles (
+    ticker     TEXT NOT NULL,
+    bar_time   TEXT NOT NULL,   -- HHmmss (1분봉 시각)
+    open       REAL NOT NULL,
+    high       REAL NOT NULL,
+    low        REAL NOT NULL,
+    close      REAL NOT NULL,
+    volume     INTEGER NOT NULL,
+    saved_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ticker, bar_time)
+);
+
+CREATE INDEX IF NOT EXISTS idx_intraday_candles ON intraday_candles(ticker, bar_time DESC);
+
+-- ────────────────────────────────────────
 -- 장중 MACD 신호: 분봉 MACD Pre-Cross 감지 결과
 -- IntradayMACDEngine이 3분 주기로 기록
 -- TradingEngine·PositionMonitor가 참조

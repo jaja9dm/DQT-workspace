@@ -54,7 +54,7 @@ from src.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
-_INTERVAL_SEC = 90          # 1분 30초 (1~2분 주기)
+_INTERVAL_SEC = 60          # 1분 주기
 
 # KIS API 경로
 _KIS_BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
@@ -404,8 +404,10 @@ class PositionMonitorEngine:
                 )
 
             # ── 3. 스마트 물타기 (일시 눌림 반등 기대) ──
+            # dip_max: ATR·거래량 압력 기반 동적 트리거 (-N% 이상 하락 시 발동)
             dip_min  = _p("dip_buy_min_loss",  _DIP_BUY_MIN_LOSS)
-            dip_max  = _p("dip_buy_max_loss",  _DIP_BUY_MAX_LOSS)
+            dip_max_dynamic = -_get_dynamic_ladder_pct(ticker, ts)
+            dip_max  = max(dip_max_dynamic, _p("dip_buy_max_loss", _DIP_BUY_MAX_LOSS))
             dip_max_count = int(_p("dip_buy_max_count", _DIP_BUY_MAX))
             dip_buy_count = int(ts.get("dip_buy_count", 0))
             if (
@@ -1345,6 +1347,130 @@ def _load_trailing_stop(ticker: str) -> dict | None:
         return None
 
 
+def _calc_atr(ticker: str, n: int = 14) -> float | None:
+    """
+    intraday_candles에서 ATR(n) 계산 (True Range 평균).
+    데이터 부족(< n+1봉)이면 None 반환.
+    """
+    rows = fetch_all(
+        """
+        SELECT high, low, close FROM intraday_candles
+        WHERE ticker = ?
+        ORDER BY bar_time DESC
+        LIMIT ?
+        """,
+        (ticker, n + 1),
+    )
+    if len(rows) < n + 1:
+        return None
+
+    true_ranges = []
+    for i in range(len(rows) - 1):
+        curr = rows[i]
+        prev = rows[i + 1]
+        tr = max(
+            float(curr["high"]) - float(curr["low"]),
+            abs(float(curr["high"]) - float(prev["close"])),
+            abs(float(curr["low"])  - float(prev["close"])),
+        )
+        true_ranges.append(tr)
+
+    atr = sum(true_ranges) / len(true_ranges)
+    ref_price = float(rows[0]["close"])
+    return (atr / ref_price * 100) if ref_price > 0 else None
+
+
+def _calc_volume_pressure(ticker: str) -> str:
+    """
+    최근 분봉 거래량 추세로 매수·매도 압력 판단.
+
+    Returns:
+        "bearish" — 최근 5봉 거래량이 이전 10봉 평균 대비 1.5배↑ + 가격 하락
+        "bullish" — 최근 5봉 거래량이 이전 10봉 평균 대비 1.5배↑ + 가격 상승
+        "neutral" — 그 외
+    """
+    rows = fetch_all(
+        """
+        SELECT close, volume FROM intraday_candles
+        WHERE ticker = ?
+        ORDER BY bar_time DESC
+        LIMIT 15
+        """,
+        (ticker,),
+    )
+    if len(rows) < 10:
+        return "neutral"
+
+    recent  = rows[:5]
+    base    = rows[5:15]
+
+    avg_recent = sum(int(r["volume"]) for r in recent) / len(recent)
+    avg_base   = sum(int(r["volume"]) for r in base)   / len(base)
+
+    if avg_base == 0 or avg_recent < avg_base * 1.5:
+        return "neutral"
+
+    price_now   = float(recent[0]["close"])
+    price_start = float(recent[-1]["close"])
+    if price_now < price_start:
+        return "bearish"   # 거래량 급증 + 가격 하락 = 매도 압력
+    return "bullish"       # 거래량 급증 + 가격 상승 = 매수 압력
+
+
+def _get_dynamic_floor_pct(ticker: str, ts: dict, macd_tight: bool) -> float:
+    """
+    ATR·거래량 압력·MACD 기반 동적 trailing floor 간격 결정.
+
+    우선순위:
+      1. ATR 기반: 실제 변동성에 비례 (noise에 걸리지 않을 최소 간격)
+      2. MACD bearish: 절반으로 타이트하게
+      3. 거래량 매도 압력: 추가 타이트
+      4. trailing_stop 테이블의 floor_pct를 하한으로 사용
+    """
+    stored_floor = float(ts.get("floor_pct") or _TRAILING_FLOOR)
+    atr_pct = _calc_atr(ticker)
+
+    if atr_pct is not None:
+        # ATR 기반: 변동성이 크면 간격 넓히고 (노이즈 방지), 작으면 좁힘
+        # 예: ATR=0.5% → floor=1.5%, ATR=1.5% → floor=2.5%, ATR=3% → floor=4%
+        atr_floor = max(1.5, min(4.0, atr_pct * 1.2))
+    else:
+        atr_floor = stored_floor  # ATR 계산 불가 시 진입 시 설정값 사용
+
+    vol_pressure = _calc_volume_pressure(ticker)
+
+    if macd_tight:
+        floor = atr_floor / 2    # MACD bearish: 절반 간격으로 바짝 추적
+    elif vol_pressure == "bearish":
+        floor = atr_floor * 0.7  # 매도 압력: 손절선 더 빠르게 올리기
+    else:
+        floor = atr_floor
+
+    # 진입 시 설정한 floor_pct보다 최소 절반은 유지 (너무 타이트해서 noise 손절 방지)
+    return round(max(stored_floor * 0.4, floor), 2)
+
+
+def _get_dynamic_ladder_pct(ticker: str, ts: dict) -> float:
+    """
+    ATR·거래량 압력 기반 사다리 매수 트리거 % 동적 결정.
+
+    - ATR이 클수록: 더 큰 하락에서만 추가 진입 (노이즈 구분)
+    - 거래량 매도 압력 감지 시: 사다리 매수 스킵 신호 반환 (999%)
+    - 기본: settings.LADDER_TRIGGER_PCT
+    """
+    vol_pressure = _calc_volume_pressure(ticker)
+    if vol_pressure == "bearish":
+        return 999.0  # 매도 압력 급등 시 사다리 매수 전면 차단
+
+    atr_pct = _calc_atr(ticker)
+    base = float(_p("ladder_trigger_pct", _LADDER_TRIGGER))
+    if atr_pct is not None:
+        # ATR × 3~4배 지점에서 물타기 (의미 있는 하락인지 구분)
+        dynamic = max(5.0, min(15.0, atr_pct * 3.5))
+        return round(min(base, dynamic), 1)  # 더 보수적인(큰) 값 사용
+    return base
+
+
 def _update_trailing_floor(
     ticker: str, ts: dict, current_price: float, avg_price: float, quantity: int,
     tight: bool = False,
@@ -1363,10 +1489,11 @@ def _update_trailing_floor(
 
     gain_pct = (current_price / avg_price - 1) * 100
 
-    # 종목별 동적 파라미터 (진입 시 _calc_dynamic_trail_params로 설정된 값)
+    # 동적 트리거: 진입 시 설정값 사용
     trigger = float(ts.get("trigger_pct") or _TRAILING_TRIGGER)
-    floor_base = float(ts.get("floor_pct") or _TRAILING_FLOOR)
-    floor_gap = (floor_base / 2) if tight else floor_base   # MACD bearish 시 절반으로 타이트
+
+    # 동적 floor: ATR·거래량 압력·MACD 기반 실시간 계산
+    floor_gap = _get_dynamic_floor_pct(ticker, ts, macd_tight=tight)
 
     if gain_pct >= trigger:
         candidate_floor = current_price * (1 - floor_gap / 100)

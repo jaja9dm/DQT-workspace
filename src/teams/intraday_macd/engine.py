@@ -128,6 +128,9 @@ class IntradayMACDEngine:
                 else:
                     final_signal = "hold"
 
+                # 분봉 캔들 저장 (ATR·거래량 압력 계산용 — 종목별 최근 30봉 유지)
+                _save_candles(ticker, candles_1m[:30])
+
                 # DB 기록
                 execute(
                     """
@@ -310,3 +313,42 @@ def get_macd_details(ticker: str, max_age_minutes: int = 6) -> dict:
             "hist_5m": row["hist_5m"],
         }
     return {"signal": "hold", "hist_3m": None, "hist_5m": None}
+
+
+# ──────────────────────────────────────────────
+# 분봉 캔들 저장 (ATR·거래량 계산용)
+# ──────────────────────────────────────────────
+
+def _save_candles(ticker: str, candles: list[dict]) -> None:
+    """
+    1분봉 캔들을 intraday_candles 테이블에 저장.
+    종목별 최근 30봉만 유지 (오래된 것 자동 삭제).
+    """
+    if not candles:
+        return
+    try:
+        for c in candles:
+            execute(
+                """
+                INSERT OR REPLACE INTO intraday_candles
+                    (ticker, bar_time, open, high, low, close, volume)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (ticker, c["time"], c["open"], c["high"], c["low"], c["close"], c["volume"]),
+            )
+        # 30봉 초과분 삭제
+        execute(
+            """
+            DELETE FROM intraday_candles
+            WHERE ticker = ?
+              AND bar_time NOT IN (
+                  SELECT bar_time FROM intraday_candles
+                  WHERE ticker = ?
+                  ORDER BY bar_time DESC
+                  LIMIT 30
+              )
+            """,
+            (ticker, ticker),
+        )
+    except Exception as e:
+        logger.debug(f"캔들 저장 오류 [{ticker}]: {e}")
