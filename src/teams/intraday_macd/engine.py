@@ -121,9 +121,19 @@ class IntradayMACDEngine:
                 sig_5m = get_signal(df_5m["hist"], n=n)
 
                 # 최종 신호 결합
-                if sig_3m == MACDSignal.BUY_PRE and sig_5m == MACDSignal.BUY_PRE:
+                #
+                # buy_pre  : 3분봉 OR 5분봉 중 하나만 BUY_PRE여도 진입 신호
+                #            (AND → OR: 히스토그램 저점 반등 초기에 더 빠르게 포착)
+                # sell_pre : 3분봉 AND 5분봉 모두 SELL_PRE일 때만 청산 신호
+                #            (OR → AND: 어느 하나만 약해도 섣불리 청산하는 오류 방지)
+                #            → 첫 번째 신호 = 스캘핑 부분 익절 트리거
+                #              두 번째 이상 연속 = 전량 청산 트리거 (연속 횟수로 판단)
+                raw_sig_3m = sig_3m.value   # "buy_pre"|"sell_pre"|"hold"
+                raw_sig_5m = sig_5m.value
+
+                if sig_3m == MACDSignal.BUY_PRE or sig_5m == MACDSignal.BUY_PRE:
                     final_signal = "buy_pre"
-                elif sig_3m == MACDSignal.SELL_PRE or sig_5m == MACDSignal.SELL_PRE:
+                elif sig_3m == MACDSignal.SELL_PRE and sig_5m == MACDSignal.SELL_PRE:
                     final_signal = "sell_pre"
                 else:
                     final_signal = "hold"
@@ -131,13 +141,14 @@ class IntradayMACDEngine:
                 # 분봉 캔들 저장 (ATR·거래량 압력 계산용 — 종목별 최근 30봉 유지)
                 _save_candles(ticker, candles_1m[:30])
 
-                # DB 기록
+                # DB 기록 (sig_3m/sig_5m: 타임프레임별 개별 신호 저장)
                 execute(
                     """
                     INSERT INTO intraday_macd_signal
                         (ticker, signal, hist_3m, hist_5m,
-                         macd_3m, signal_3m, macd_5m, signal_5m)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                         macd_3m, signal_3m, macd_5m, signal_5m,
+                         sig_3m, sig_5m)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ticker,
@@ -148,6 +159,8 @@ class IntradayMACDEngine:
                         round(float(df_3m["signal"].iloc[-1]), 6),
                         round(float(df_5m["macd"].iloc[-1]), 6),
                         round(float(df_5m["signal"].iloc[-1]), 6),
+                        raw_sig_3m,
+                        raw_sig_5m,
                     ),
                 )
 
@@ -256,6 +269,36 @@ def _load_watch_tickers() -> list[str]:
 # ──────────────────────────────────────────────
 # 외부 조회 헬퍼 (position_monitor, trading 팀용)
 # ──────────────────────────────────────────────
+
+def get_consecutive_sell_pre(ticker: str, max_age_minutes: int = 20) -> int:
+    """
+    최근 max_age_minutes 이내에서 가장 최근부터 연속으로 sell_pre가 몇 번 나왔는지 반환.
+
+    예: [sell_pre, sell_pre, hold, sell_pre] → 2 (가장 최신 연속만 카운트)
+
+    position_monitor가 "파란 바 누적" 판단에 사용:
+      - 1회: 스캘핑 부분 익절 소진도 가산
+      - 2회: 본격 청산 검토
+      - 3회+: 전량 청산 트리거 가능
+    """
+    rows = fetch_all(
+        """
+        SELECT signal FROM intraday_macd_signal
+        WHERE ticker = ?
+          AND created_at >= datetime('now', ?)
+        ORDER BY created_at DESC
+        LIMIT 6
+        """,
+        (ticker, f"-{max_age_minutes} minutes"),
+    )
+    count = 0
+    for r in rows:
+        if r["signal"] == "sell_pre":
+            count += 1
+        else:
+            break  # 연속이 끊기면 종료
+    return count
+
 
 def get_latest_macd_signal(ticker: str, max_age_minutes: int = 5) -> str:
     """

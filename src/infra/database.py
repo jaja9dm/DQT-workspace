@@ -32,6 +32,14 @@ def init_db() -> None:
                 )
             except Exception:
                 pass  # 이미 존재하면 무시
+        # 기존 DB 마이그레이션: intraday_macd_signal 타임프레임별 개별 신호 컬럼 추가
+        for col in ["sig_3m", "sig_5m"]:
+            try:
+                conn.execute(
+                    f"ALTER TABLE intraday_macd_signal ADD COLUMN {col} TEXT NOT NULL DEFAULT 'hold'"
+                )
+            except Exception:
+                pass  # 이미 존재하면 무시
         # 기존 DB 마이그레이션: intraday_candles 테이블 생성
         conn.execute("""
             CREATE TABLE IF NOT EXISTS intraday_candles (

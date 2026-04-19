@@ -286,6 +286,36 @@ class TradingEngine:
         if not candidates:
             return []
 
+        # ── Gate 4.5: MACD 히스토그램 방향 필터 ──
+        # 히스토그램이 양수지만 하강 중(sell_pre): 수급 이탈 초기 징후 → 진입 금지
+        # 09:30 이전에는 MACD 데이터 부족 → hold 상태이므로 이 필터는 sell_pre만 차단
+        # (hold = 데이터 없거나 방향 불명확 = 진입 허용, 후속 Claude 판단에 위임)
+        from src.teams.intraday_macd.engine import get_latest_macd_signal as _get_macd
+        now_hm = now.hour * 100 + now.minute
+        gated_candidates = []
+        for c in candidates:
+            tk = c["ticker"]
+            macd_now = _get_macd(tk, max_age_minutes=6)
+            if macd_now == "sell_pre":
+                logger.info(
+                    f"Gate 4.5 차단: {tk} MACD sell_pre "
+                    f"(히스토그램 양수 하강 중 — 수급 이탈 신호) — 진입 보류"
+                )
+                continue
+            # 09:30 이전: 장 초반 변동성 구간 — MACD 데이터가 충분하지 않으므로
+            # buy_pre 신호가 있을 때만 진입 허용 (단, 재진입 종목은 예외)
+            if now_hm < 930 and macd_now != "buy_pre" and tk not in self._macd_reentry_ok:
+                logger.info(
+                    f"Gate 4.5 차단: {tk} 장 초반({now.strftime('%H:%M')}) MACD 미확인 ({macd_now}) "
+                    f"— 09:30 이후 또는 buy_pre 신호 대기"
+                )
+                continue
+            gated_candidates.append(c)
+        candidates = gated_candidates
+
+        if not candidates:
+            return []
+
         # ── 가용 예수금 조회 ─────────────────────
         available_cash = _fetch_available_cash()
         if available_cash <= 0:

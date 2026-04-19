@@ -497,10 +497,13 @@ class PositionMonitorEngine:
                 exhaustion  = 0.0
                 exh_signals = []
 
-                # MACD 히스토그램 방향 (핵심 — 분봉 기준 실시간 모멘텀 판단)
+                # MACD 히스토그램 방향 + 연속 sell_pre 누적 (핵심 모멘텀 소진 판단)
+                from src.teams.intraday_macd.engine import get_consecutive_sell_pre
+                consec_sell = get_consecutive_sell_pre(ticker, max_age_minutes=20)
+
                 if macd_bearish:
-                    # sell_pre/sell: 추세가 이미 역전, 즉시 비중 축소
-                    exhaustion += 0.50
+                    # sell_pre: 3분봉+5분봉 모두 히스토그램 하강 (AND 조건) → 비중 축소
+                    exhaustion += 0.45
                     exh_signals.append(f"MACD역행({macd_sig})")
                 elif hist_3m_now < 0 and hist_3m_prev >= 0:
                     # 히스토그램이 양수→음수 전환 (모멘텀 반전 확인)
@@ -510,6 +513,13 @@ class PositionMonitorEngine:
                     # 양수 구간에서 감소 (피크 지남 = 모멘텀 약화 시작)
                     exhaustion += 0.25
                     exh_signals.append("MACD피크감소")
+
+                # 연속 sell_pre 누적: "파란 바가 하나둘 생긴다" = 수급 이탈 중
+                # 사이클 1회(3분)마다 sell_pre가 반복되면 소진도 추가 가산
+                if consec_sell >= 2:
+                    bonus = min(0.30, 0.12 * (consec_sell - 1))  # 최대 +0.30
+                    exhaustion += bonus
+                    exh_signals.append(f"연속sell_pre {consec_sell}회(+{bonus:.2f})")
 
                 # 수익률 자체도 반영 (고수익 = 수익 잠금 urgency)
                 if pnl_pct >= 7.0:
