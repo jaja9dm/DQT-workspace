@@ -286,10 +286,11 @@ class TradingEngine:
         if not candidates:
             return []
 
-        # ── Gate 4.5: MACD 히스토그램 방향 필터 ──
-        # 히스토그램이 양수지만 하강 중(sell_pre): 수급 이탈 초기 징후 → 진입 금지
-        # 09:30 이전에는 MACD 데이터 부족 → hold 상태이므로 이 필터는 sell_pre만 차단
-        # (hold = 데이터 없거나 방향 불명확 = 진입 허용, 후속 Claude 판단에 위임)
+        # ── Gate 4.5: MACD 방향 필터 + 장초반 진입 품질 체크 ──
+        # [공통] MACD sell_pre: 히스토그램 양수에서 하강 중 → 수급 이탈 초기 → 진입 금지
+        # [09:30 전] 단순 시간 대기 대신 지표 기반 유동 판단:
+        #   ① MACD buy_pre 필수 (히스토그램 음수에서 상승 = 반등 확인)
+        #   ② 진입 품질: 눌림 확인(현재가 < 시가×0.99) + 매도 소진 or 바닥 형성
         from src.teams.intraday_macd.engine import get_latest_macd_signal as _get_macd
         now_hm = now.hour * 100 + now.minute
         gated_candidates = []
@@ -302,14 +303,26 @@ class TradingEngine:
                     f"(히스토그램 양수 하강 중 — 수급 이탈 신호) — 진입 보류"
                 )
                 continue
-            # 09:30 이전: 장 초반 변동성 구간 — MACD 데이터가 충분하지 않으므로
-            # buy_pre 신호가 있을 때만 진입 허용 (단, 재진입 종목은 예외)
-            if now_hm < 930 and macd_now != "buy_pre" and tk not in self._macd_reentry_ok:
+            # 09:30 이전: 장 초반 변동성 구간 — 단순 시간 대기 대신 지표 기반 유동 판단
+            if now_hm < 930 and tk not in self._macd_reentry_ok:
+                # ① MACD buy_pre 필수: 히스토그램이 음수에서 상승 중이어야 함
+                if macd_now != "buy_pre":
+                    logger.info(
+                        f"Gate 4.5 차단: {tk} 장초반 MACD 미확인 ({macd_now}) "
+                        f"— buy_pre 신호 대기"
+                    )
+                    continue
+                # ② 진입 품질 체크: 눌림 확인 + 매도 소진 or 바닥 형성
+                quality_ok, quality_reason = _check_opening_dip_quality(tk)
+                if not quality_ok:
+                    logger.info(
+                        f"Gate 4.5 차단: {tk} 장초반 진입 품질 미충족 — {quality_reason}"
+                    )
+                    continue
                 logger.info(
-                    f"Gate 4.5 차단: {tk} 장 초반({now.strftime('%H:%M')}) MACD 미확인 ({macd_now}) "
-                    f"— 09:30 이후 또는 buy_pre 신호 대기"
+                    f"Gate 4.5 통과: {tk} 장초반 진입 품질 확인 ({now.strftime('%H:%M')}) "
+                    f"— {quality_reason}"
                 )
-                continue
             gated_candidates.append(c)
         candidates = gated_candidates
 
@@ -752,6 +765,71 @@ def _extract_json(raw: str) -> str:
     if start != -1 and end != -1 and end > start:
         return raw[start:end + 1]
     return raw
+
+
+def _check_opening_dip_quality(ticker: str) -> tuple[bool, str]:
+    """
+    장 초반(09:30 전) buy_pre 신호 발생 시 추가 진입 품질 검증.
+
+    단순 시간 대기가 아니라 지표 기반으로 유동적 판단:
+      조건 1. 현재가 < 당일 시가 × 0.99  — 시초 고점 매수 방지, 눌림 후 반등 확인
+      조건 2a. 매도 소진: 최근 3봉 평균 거래량 < 개장 초기 5봉 평균 × 0.75
+      조건 2b. 바닥 확인: 최근 3봉 연속 저가 상승 (higher lows)
+      → 2a 또는 2b 중 하나 충족 시 통과
+
+    intraday_candles 테이블의 당일 봉(bar_time >= 090000) 사용.
+    데이터 부족(<5봉)이면 대기(False) 반환.
+
+    Returns:
+        (통과 여부, 사유 문자열)
+    """
+    rows = fetch_all(
+        """
+        SELECT bar_time, open, high, low, close, volume
+        FROM intraday_candles
+        WHERE ticker = ?
+          AND bar_time >= '090000'
+        ORDER BY bar_time ASC
+        """,
+        (ticker,),
+    )
+    if len(rows) < 5:
+        return False, f"장초반 데이터 부족 ({len(rows)}봉 < 5봉)"
+
+    opening_price = float(rows[0]["open"])
+    current_price = float(rows[-1]["close"])
+
+    # 조건 1: 시가 대비 눌림 확인 (1% 이상 하락 후 반등이어야 함)
+    if current_price >= opening_price * 0.99:
+        return False, (
+            f"눌림 미확인 — 현재가 {current_price:,.0f} ≥ 시가 {opening_price:,.0f} × 0.99 "
+            f"(시초 고점권 진입 방지)"
+        )
+
+    # 조건 2a: 매도 소진 — 개장 초기 급등 거래량이 최근 봉에서 감소
+    early_avg  = sum(float(r["volume"]) for r in rows[:5]) / 5
+    recent_avg = sum(float(r["volume"]) for r in rows[-3:]) / 3
+    vol_exhausted = early_avg > 0 and recent_avg < early_avg * 0.75
+
+    # 조건 2b: 바닥 확인 — 최근 3봉 저가가 연속으로 상승 (매도 압력 약화)
+    higher_lows = False
+    if len(rows) >= 3:
+        lows = [float(r["low"]) for r in rows[-3:]]
+        higher_lows = lows[0] < lows[1] < lows[2]
+
+    if not (vol_exhausted or higher_lows):
+        ratio = recent_avg / early_avg if early_avg > 0 else 0
+        return False, (
+            f"매도 미소진 & 바닥 미확인 "
+            f"(거래량비 {ratio:.2f}x, higher_lows={higher_lows})"
+        )
+
+    parts = []
+    if vol_exhausted:
+        parts.append(f"거래량 소진({recent_avg/early_avg:.2f}x)")
+    if higher_lows:
+        parts.append("연속 저가 상승")
+    return True, " + ".join(parts)
 
 
 def _load_global_context() -> dict:
