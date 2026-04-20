@@ -35,6 +35,7 @@ def init_db() -> None:
             ("hot_list_rsi_hot_limit", 72.0,  72.0,  65.0,  80.0,  "Hot List RSI 과열 포지션50% 시작선"),
             ("hot_list_min_rsi",       35.0,  35.0,  20.0,  45.0,  "Hot List RSI 붕괴 하한 (35↓=과매도 차단)"),
             ("hot_list_min_obv_slope",  0.0,   0.0,  -1.0,   1.0,  "Hot List OBV기울기 최소값 (0=방향무관)"),
+            ("max_positions",           3.0,   3.0,   1.0,   5.0,  "최대 동시 보유 종목 수 (집중 투자)"),
         ]
         for row in _seed_params:
             try:
@@ -82,6 +83,15 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_intraday_candles ON intraday_candles(ticker, bar_time DESC)"
         )
+        # 기존 DB 마이그레이션: hot_list 모멘텀 컬럼 추가
+        for col, typedef in [
+            ("momentum_score", "REAL DEFAULT 0.0"),
+            ("obv_slope",      "REAL DEFAULT 0.0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE hot_list ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

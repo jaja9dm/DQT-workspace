@@ -49,6 +49,8 @@ CREATE TABLE IF NOT EXISTS hot_list (
     rsi              REAL,
     sector           TEXT,
     reason           TEXT,           -- Claude 판단 근거 요약
+    momentum_score   REAL DEFAULT 0.0,  -- 종합 모멘텀 점수 (0~100)
+    obv_slope        REAL DEFAULT 0.0,  -- OBV 5봉 기울기
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

@@ -259,8 +259,9 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
             """
             INSERT INTO hot_list
                 (ticker, name, signal_type, volume_ratio,
-                 price_change_pct, rsi, sector, reason)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                 price_change_pct, rsi, sector, reason,
+                 momentum_score, obv_slope)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticker,
@@ -269,8 +270,10 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
                 snap.volume_ratio,
                 snap.change_pct,
                 snap.rsi,
-                None,           # sector: 향후 업종 정보 추가 시 채움
+                None,
                 item.get("reason", ""),
+                getattr(snap, "momentum_score", 0.0),
+                getattr(snap, "obv_slope", 0.0),
             ),
         )
         saved.append({
@@ -281,6 +284,8 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
             "change_pct": snap.change_pct,
             "rsi": snap.rsi,
             "reason": item.get("reason", ""),
+            "momentum_score": getattr(snap, "momentum_score", 0.0),
+            "obv_slope": getattr(snap, "obv_slope", 0.0),
         })
 
     return saved
