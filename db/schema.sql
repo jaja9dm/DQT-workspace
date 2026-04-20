@@ -195,6 +195,8 @@ CREATE TABLE IF NOT EXISTS intraday_candles (
 CREATE INDEX IF NOT EXISTS idx_intraday_candles ON intraday_candles(ticker, bar_time DESC);
 
 -- ────────────────────────────────────────
+-- hot_list_max_rsi: 82↑ 완전차단 / hot_list_rsi_hot_limit: 72~82 포지션50% / hot_list_min_obv_slope: OBV 역행 차단
+
 -- 장중 MACD 신호: 분봉 MACD Pre-Cross 감지 결과
 -- IntradayMACDEngine이 3분 주기로 기록
 -- TradingEngine·PositionMonitor가 참조

@@ -289,31 +289,55 @@ class TradingEngine:
             return []
 
         # ── Gate 4.2: Hot List 품질 필터 (복합 AND 조건) ──────────
-        # 단일 신호 진입 시 승률 0~13% 수준으로 낮음 — RSI·거래량·모멘텀 동시 충족 요구
-        # 파라미터는 strategy_params에서 동적으로 읽어 자동 튜닝 가능
+        # RSI 과열 구간: 완전 차단 대신 포지션 축소(rsi_hot 플래그)로 모멘텀 참여
+        #   RSI 72~82 → 진입 허용, 1차 매수 50%·손절 1.5%로 제한
+        #   RSI 82 초과 → 완전 차단 (극단적 과열)
+        # OBV 역행 고RSI → 수급 없는 가짜 상승 → 차단
         from src.teams.research.param_tuner import get_param as _gp
-        _min_vol  = _gp("hot_list_min_vol_ratio", 2.0)   # 최소 거래량 비율
-        _max_rsi  = _gp("hot_list_max_rsi",       72.0)  # RSI 과열 상한 (이상이면 차단)
-        _min_rsi  = _gp("hot_list_min_rsi",       28.0)  # RSI 붕괴 하한 (이하이면 차단)
+        _min_vol      = _gp("hot_list_min_vol_ratio", 2.0)
+        _max_rsi_hard = _gp("hot_list_max_rsi",       82.0)  # 완전 차단 상한 (82)
+        _max_rsi_soft = _gp("hot_list_rsi_hot_limit", 72.0)  # 포지션 축소 시작 (72)
+        _min_rsi      = _gp("hot_list_min_rsi",       35.0)  # 붕괴 하한 (35로 상향)
 
         filtered_candidates = []
         for c in candidates:
-            tk          = c["ticker"]
-            vol_ratio   = c.get("volume_ratio")   or 0.0
-            price_chg   = c.get("price_change_pct") or 0.0
-            rsi         = c.get("rsi")            or 50.0
+            tk        = c["ticker"]
+            vol_ratio = c.get("volume_ratio")    or 0.0
+            price_chg = c.get("price_change_pct") or 0.0
+            rsi       = c.get("rsi")             or 50.0
+            obv_slope = c.get("obv_slope")       or 0.0
+            reason    = c.get("reason")          or ""
 
+            # 완전 차단 조건
             fails = []
             if vol_ratio < _min_vol:
                 fails.append(f"거래량비 {vol_ratio:.1f}x < {_min_vol:.1f}x")
             if price_chg <= 0:
-                fails.append(f"등락률 {price_chg:+.2f}% ≤ 0 (음수 모멘텀)")
-            if not (_min_rsi <= rsi <= _max_rsi):
-                fails.append(f"RSI {rsi:.0f} (허용 {_min_rsi:.0f}~{_max_rsi:.0f})")
+                fails.append(f"등락률 {price_chg:+.2f}% ≤ 0")
+            if rsi > _max_rsi_hard:
+                fails.append(f"RSI {rsi:.0f} > {_max_rsi_hard:.0f} (극단 과열)")
+            if rsi < _min_rsi:
+                fails.append(f"RSI {rsi:.0f} < {_min_rsi:.0f} (과매도 붕괴)")
+            if obv_slope < 0 and rsi > 70:
+                fails.append(f"OBV 역행+고RSI {rsi:.0f} (수급 없는 상승)")
 
             if fails:
                 logger.info(f"Gate 4.2 차단: {tk} — {' | '.join(fails)}")
                 continue
+
+            # RSI 과열 구간(72~82): 진입 허용하되 포지션 축소 플래그
+            rsi_hot = rsi > _max_rsi_soft
+            c = dict(c)
+            c["rsi_hot"] = rsi_hot
+            if rsi_hot:
+                logger.info(
+                    f"Gate 4.2 RSI 과열 허용: {tk} RSI {rsi:.0f} "
+                    f"→ 1차 매수 50% + 손절 1.5% 적용"
+                )
+            # Claude reason에 "RSI과열_포지션50%" 포함 시 자동 인식
+            if rsi_hot and "RSI과열_포지션50%" not in reason:
+                c["reason"] = (reason + " [RSI과열_포지션50%]").strip()
+
             filtered_candidates.append(c)
 
         candidates = filtered_candidates
@@ -399,8 +423,10 @@ class TradingEngine:
             # 종목당 투자 한도
             max_invest = usable_cash * max_single_pct / 100
 
-            # 분할 매수 1차 (40%)
-            tranche1_amt = max_invest * _TRANCHE_RATIOS[0]
+            # RSI 과열 종목: 1차 매수 비중 50%로 축소 (40% → 20% 실효)
+            rsi_hot = item.get("rsi_hot", False)
+            t1_ratio = _TRANCHE_RATIOS[0] * (0.5 if rsi_hot else 1.0)
+            tranche1_amt = max_invest * t1_ratio
             qty = max(1, int(tranche1_amt / current_price))
 
             result = self._place_buy(
@@ -410,18 +436,19 @@ class TradingEngine:
                 current_price=current_price,
                 tranche=1,
                 decision=decision,
+                tight_stop=rsi_hot,   # RSI 과열 → 손절선 1.5%로 타이트
             )
             if result:
                 orders.append(result)
                 self._today_tickers.add(ticker)
-                self._macd_reentry_ok.add(ticker)  # 이 종목은 MACD 손절 후 재진입 허용
+                self._macd_reentry_ok.add(ticker)
 
-                # 2차·3차 분할 매수 예약 (별도 스레드로 지연 실행)
+                # RSI 과열 종목은 2·3차 분할 매수 비중도 50% 축소
                 self._schedule_tranches(
                     ticker=ticker,
                     name=item.get("name", ""),
                     entry_price=current_price,
-                    max_invest=max_invest,
+                    max_invest=max_invest * (0.5 if rsi_hot else 1.0),
                     decision=decision,
                 )
 
@@ -690,6 +717,7 @@ JSON만 응답:
         current_price: float,
         tranche: int,
         decision: dict,
+        tight_stop: bool = False,   # RSI 과열 종목 → 손절선 1.5%로 타이트
     ) -> dict | None:
         """KIS API 시장가 매수 주문 + trades 테이블 저장."""
         if quantity <= 0:
@@ -761,6 +789,11 @@ JSON만 응답:
                     stop_pct=decision.get("stop_pct", 2.0),
                     market_score=decision.get("market_score", 0.0),
                 )
+                # RSI 과열 → 손절선 강제 1.5% (동적 계산값보다 타이트하게)
+                if tight_stop:
+                    from src.teams.research.param_tuner import get_param as _gp2
+                    stop_pct = _gp2("initial_stop_min_pct", 1.5)
+                    logger.info(f"RSI 과열 타이트 손절 적용: {ticker} → {stop_pct}%")
                 _init_trailing_stop(
                     ticker, current_price,
                     stop_pct=stop_pct,

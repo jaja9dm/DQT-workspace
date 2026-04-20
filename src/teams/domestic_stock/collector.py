@@ -101,6 +101,13 @@ class StockSnapshot:
     frgn_net_buy: int = 0         # 외국인 순매수량 (주) — 양수=매수우위, 음수=매도우위
     inst_net_buy: int = 0         # 기관 순매수량 (주) — orgn_ntby_qty 필드, 없으면 0
 
+    # 추가 보조지표
+    obv_slope: float = 0.0        # OBV 5봉 기울기 — 양수=매수세 유입, 음수=매도세
+    bb_width: float = 0.0         # 볼린저밴드 폭 (upper-lower)/mid — 확대=변동성 폭발
+    bb_width_ratio: float = 1.0   # 현재 BB폭 / 20봉 평균 BB폭 — 1.3↑=스퀴즈 돌파
+    stoch_rsi: float = 50.0       # Stochastic RSI(14,14) — 80↑=단기 과매수, 20↓=과매도
+    momentum_score: float = 0.0   # 종합 모멘텀 점수 (0~100) — Gate 4.2 순위 기준
+
     error: str = ""               # 수집 오류 메시지
 
 
@@ -227,6 +234,71 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
         bb_position = round((ref - bb_lower) / bb_range, 3) if bb_range > 0 else 0.5
         bb_position = max(0.0, min(1.0, bb_position))
 
+        # ── 추가 보조지표 계산 ──────────────────────────────────
+
+        # OBV (On-Balance Volume): 거래량이 매수세인지 매도세인지 확인
+        # 가격 상승 시 거래량 누적(+), 하락 시 차감(-) → 5봉 기울기로 방향 판단
+        obv_slope = 0.0
+        try:
+            vol_s = df["Volume"].astype(float)
+            close_s = df["Close"].astype(float)
+            direction = close_s.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+            obv = (direction * vol_s).cumsum()
+            if len(obv) >= 5:
+                obv_slope = float(obv.iloc[-1] - obv.iloc[-5]) / (float(vol_s.iloc[-5:].mean()) + 1e-9)
+        except Exception:
+            obv_slope = 0.0
+
+        # BB Width: 볼린저밴드 폭 — 스퀴즈 후 폭발 패턴 감지
+        # bb_width_ratio > 1.2: 현재 폭이 최근 20봉 평균보다 20% 이상 확대 → 변동성 폭발
+        bb_width = 0.0
+        bb_width_ratio = 1.0
+        try:
+            ma20_s = close.rolling(_BB_PERIOD).mean()
+            std20_s = close.rolling(_BB_PERIOD).std()
+            bb_up_s = ma20_s + _BB_STD * std20_s
+            bb_lo_s = ma20_s - _BB_STD * std20_s
+            width_s = (bb_up_s - bb_lo_s) / ma20_s.replace(0, float("nan"))
+            if len(width_s.dropna()) >= 20:
+                bb_width = float(width_s.iloc[-1]) if not _isnan(float(width_s.iloc[-1])) else 0.0
+                avg_width = float(width_s.dropna().iloc[-20:].mean())
+                bb_width_ratio = round(bb_width / avg_width, 3) if avg_width > 0 else 1.0
+        except Exception:
+            bb_width = 0.0
+            bb_width_ratio = 1.0
+
+        # Stochastic RSI (14,14): RSI의 스토캐스틱 — 더 민감한 단기 과매수/과매도
+        stoch_rsi = 50.0
+        try:
+            delta = close.diff()
+            gain  = delta.clip(lower=0).rolling(_RSI_PERIOD).mean()
+            loss  = (-delta.clip(upper=0)).rolling(_RSI_PERIOD).mean()
+            rs    = gain / loss.replace(0, float("nan"))
+            rsi_s = 100 - (100 / (1 + rs))
+            rsi_14 = rsi_s.dropna()
+            if len(rsi_14) >= _RSI_PERIOD:
+                rsi_window = rsi_14.rolling(_RSI_PERIOD)
+                rsi_min = rsi_window.min()
+                rsi_max = rsi_window.max()
+                rsi_range = rsi_max - rsi_min
+                stoch = (rsi_14 - rsi_min) / rsi_range.replace(0, float("nan")) * 100
+                stoch_rsi_val = float(stoch.iloc[-1])
+                stoch_rsi = round(stoch_rsi_val, 1) if not _isnan(stoch_rsi_val) else 50.0
+        except Exception:
+            stoch_rsi = 50.0
+
+        # 종합 모멘텀 점수 (0~100): Gate 4.2에서 종목 우선순위 결정에 사용
+        # 거래량(35%) + MACD 히스토그램 방향·강도(25%) + BB Width 확대(20%) + OBV 방향(20%)
+        try:
+            vol_score   = min(volume_ratio / 5.0, 1.0) * 35         # 최대 5배 → 35점
+            macd_score  = (25 if macd_hist > 0 and macd_hist > macd_hist_prev else
+                           15 if macd_hist > macd_hist_prev else 0)   # 히스토그램 상승·양수
+            bbw_score   = min((bb_width_ratio - 1.0) / 0.5, 1.0) * 20 if bb_width_ratio > 1.0 else 0.0
+            obv_score   = 20 if obv_slope > 0 else 0.0              # OBV 방향 상승이면 20점
+            momentum_score = round(vol_score + macd_score + bbw_score + obv_score, 1)
+        except Exception:
+            momentum_score = 0.0
+
         return {
             "rsi": round(rsi, 2) if not _isnan(rsi) else 50.0,
             "macd": round(macd, 4) if not _isnan(macd) else 0.0,
@@ -243,6 +315,12 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
             "volume_ratio": volume_ratio,
             "is_breakout": bool(ref > bb_upper > 0),
             "above_ma20": bool(ref > ma20 > 0),
+            # 추가 지표
+            "obv_slope": round(obv_slope, 4),
+            "bb_width": round(bb_width, 4),
+            "bb_width_ratio": bb_width_ratio,
+            "stoch_rsi": stoch_rsi,
+            "momentum_score": momentum_score,
         }
 
     except Exception as e:
@@ -320,6 +398,11 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.volume_ratio = ind["volume_ratio"]
     snap.is_breakout = ind["is_breakout"]
     snap.above_ma20 = ind["above_ma20"]
+    snap.obv_slope      = ind.get("obv_slope", 0.0)
+    snap.bb_width       = ind.get("bb_width", 0.0)
+    snap.bb_width_ratio = ind.get("bb_width_ratio", 1.0)
+    snap.stoch_rsi      = ind.get("stoch_rsi", 50.0)
+    snap.momentum_score = ind.get("momentum_score", 0.0)
 
     # 일봉 MACD 강세 여부 (is_daily_macd_bullish 유틸 사용)
     from src.utils.macd import is_daily_macd_bullish

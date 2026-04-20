@@ -26,13 +26,15 @@ def init_db() -> None:
         conn.executescript(schema_sql)
         # strategy_params 초기 시드 (존재하면 건너뜀)
         _seed_params = [
-            # param_name               cur   default  min   max   description
-            ("initial_stop_pct",       2.0,  2.0,  1.0,  4.0,  "초기 손절선 기준 (%)"),
-            ("initial_stop_min_pct",   1.5,  1.5,  0.8,  2.5,  "초기 손절선 하한 (%)"),
-            ("initial_stop_max_pct",   3.5,  3.5,  2.0,  5.0,  "초기 손절선 상한 (%)"),
-            ("hot_list_min_vol_ratio", 2.0,  2.0,  1.2,  5.0,  "Hot List 최소 거래량 비율"),
-            ("hot_list_max_rsi",      72.0, 72.0, 60.0, 85.0,  "Hot List RSI 과열 상한"),
-            ("hot_list_min_rsi",      28.0, 28.0, 15.0, 40.0,  "Hot List RSI 붕괴 하한"),
+            # param_name                cur    default  min    max    description
+            ("initial_stop_pct",        2.0,   2.0,   1.0,   4.0,  "초기 손절선 기준 (%)"),
+            ("initial_stop_min_pct",    1.5,   1.5,   0.8,   2.5,  "초기 손절선 하한 (%)"),
+            ("initial_stop_max_pct",    3.5,   3.5,   2.0,   5.0,  "초기 손절선 상한 (%)"),
+            ("hot_list_min_vol_ratio",  2.0,   2.0,   1.2,   5.0,  "Hot List 최소 거래량 비율"),
+            ("hot_list_max_rsi",       82.0,  82.0,  75.0,  90.0,  "Hot List RSI 완전차단 상한 (82↑=극과열)"),
+            ("hot_list_rsi_hot_limit", 72.0,  72.0,  65.0,  80.0,  "Hot List RSI 과열 포지션50% 시작선"),
+            ("hot_list_min_rsi",       35.0,  35.0,  20.0,  45.0,  "Hot List RSI 붕괴 하한 (35↓=과매도 차단)"),
+            ("hot_list_min_obv_slope",  0.0,   0.0,  -1.0,   1.0,  "Hot List OBV기울기 최소값 (0=방향무관)"),
         ]
         for row in _seed_params:
             try:

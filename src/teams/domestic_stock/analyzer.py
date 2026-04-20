@@ -55,8 +55,12 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - RSI: 상대강도지수 (0~100). 30↓=과매도, 70↑=과열
 - MACD 히스토그램: 양수=강세, 음수=약세. 증가 중=모멘텀 축적
 - BB위치(볼린저밴드): 0.0=하단, 0.5=중앙, 1.0=상단, 1.0↑=돌파
+- BB폭비율: 현재 볼린저밴드 폭 / 최근 20봉 평균폭. 1.0=평균, 1.3↑=변동성 폭발(스퀴즈 돌파)
 - MA20: 20일 이동평균선. 현재가가 위=상승 추세, 아래=하락 추세
 - 거래량비율: 최근 20일 평균 대비 배수 (1.0=평균, 3.0=3배)
+- OBV기울기: 최근 5봉 On-Balance Volume 기울기. 양수=매수세 유입, 음수=매도세(가격 상승에도 OBV 하락=위험)
+- StochRSI: Stochastic RSI(14,14). 80↑=단기 과매수(주의), 20↓=과매도(반등 대기), 50~80=모멘텀 지속
+- 모멘텀점수: 거래량·MACD·BB폭·OBV 종합 점수(0~100). 높을수록 신호 품질 우수
 - 외인순매수: 당일 외국인 순매수량(주). 양수=외인 매수우위, 음수=외인 매도우위. 제공 시 수급 강도 판단에 활용
 - 기관순매수: 당일 기관 순매수량(주). 양수=기관 매수우위. 외인+기관 동시 양수=가장 강한 수급 신호
 - 조건 태그: 거래량N배 / 가격+N% / BB돌파 (동시 충족할수록 신호 강도 높음)
@@ -88,9 +92,16 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - 외인 순매도 + 기관 순매수: 상충 신호 — 기술적 지표 우선 판단
 - 순매수 규모가 거래량 대비 클수록 수급 신뢰도 높음
 
+## RSI 과열 구간별 처리 (차단 대신 포지션 조정)
+- RSI 72~82 구간: 선정 가능하나 reason에 "RSI과열_포지션50%" 명시 → 매매팀이 1차 매수 비중 50%로 축소, 손절 1.5%로 타이트하게
+- RSI 82↑: 완전 차단 (극단적 과열 — 폭락 리스크)
+- StochRSI 85↑: RSI와 관계없이 단기 과매수 주의 — reason에 "StochRSI과매수" 명시 (선정은 허용, 주의 표시)
+- OBV기울기 음수 + RSI 70↑: 가격 상승이 매수세 없이 공매도 세력에 의한 쇼트커버 가능성 → 선정 보류 권고
+
 ## 제외 기준 (하나라도 해당 시 선정 불가)
-- RSI 75↑ AND BB위치 0.95↑: 단기 과열 — 진입 시 손실 위험
+- RSI 82↑: 극단적 과열 — 즉각 하락 전환 위험 높음
 - 가격 하락 중 + MACD 히스토그램 하락: 명확한 하락 추세
+- OBV기울기 음수 + 가격 상승 + RSI 70↑: 수급 없는 가짜 상승
 - 거래량 없이 가격만 급등 (거래량비율 < 1.5): 유동성 부족
 - 글로벌 리스크 9↑ 시: RSI 60↑ 종목만 선정 (전쟁·금융위기급 보수 모드)
 - 외인+기관 동시 순매도: 기술적 신호와 무관하게 선정 보류 (세력 이탈 가능성)
@@ -145,11 +156,17 @@ def _build_user_message(
         if s.inst_net_buy != 0:
             supply_parts.append(f"기관{s.inst_net_buy:+,}")
         supply_str = f" | 수급({'/'.join(supply_parts)}주)" if supply_parts else ""
+        # 추가 보조지표 문자열
+        obv_str = f"OBV{'↑' if s.obv_slope > 0 else '↓'}{s.obv_slope:+.2f}"
+        bbw_str = f"BB폭{s.bb_width_ratio:.2f}x" + ("🔥" if s.bb_width_ratio >= 1.3 else "")
+        srsi_str = f"StochRSI {s.stoch_rsi:.0f}" + ("⚠️" if s.stoch_rsi >= 85 else "")
+        mscore_str = f"모멘텀{s.momentum_score:.0f}점"
         lines.append(
             f"- {s.ticker}({s.name}): "
             f"등락{s.change_pct:+.1f}% | RSI {s.rsi:.0f} | "
             f"MACD히스토그램 {s.macd_hist:+.4f} | BB위치 {s.bb_position:.2f} | "
-            f"MA20{'위' if s.above_ma20 else '아래'}{supply_str} | {flag_str}"
+            f"MA20{'위' if s.above_ma20 else '아래'} | {obv_str} | {bbw_str} | {srsi_str} | {mscore_str}"
+            f"{supply_str} | {flag_str}"
         )
     stock_block = "\n".join(lines)
 
@@ -212,13 +229,16 @@ def analyze(
             logger.info("일봉 MACD 필터 후 후보 없음 — Hot List 비어있음")
             return []
 
-    # 후보가 많으면 배치 분할 (신호 강도 우선: 거래량 급등 > 가격 급등 > BB돌파)
+    # 후보 정렬: momentum_score 우선 (OBV·BBWidth·MACD·거래량 종합), 없으면 vol_ratio
     candidates_sorted = sorted(
         candidates,
         key=lambda s: (
-            s.is_volume_surge and s.is_price_surge,  # 복합 신호 최우선
-            s.is_breakout,
-            s.volume_ratio,
+            s.momentum_score if s.momentum_score > 0 else (
+                (s.is_volume_surge and s.is_price_surge) * 50
+                + s.is_breakout * 20
+                + s.volume_ratio * 5
+                + (s.obv_slope > 0) * 10
+            )
         ),
         reverse=True,
     )
@@ -296,17 +316,24 @@ def _extract_json(raw: str) -> str:
 
 
 def _fallback_hot_list(candidates: list[StockSnapshot]) -> list[dict]:
-    """Claude 실패 시 신호 강도 기준 상위 5종목 자동 선정."""
-    top = [
+    """Claude 실패 시 momentum_score 기준 상위 5종목 자동 선정."""
+    # RSI 82 초과·OBV 역행 종목 제외, 나머지를 momentum_score로 정렬
+    eligible = [
         s for s in candidates
-        if s.is_volume_surge and s.is_price_surge and not (s.rsi > 70 and s.bb_position > 0.9)
-    ][:5]
+        if s.rsi <= 82
+        and not (s.obv_slope < 0 and s.rsi > 70)
+        and s.is_price_surge
+    ]
+    top = sorted(eligible, key=lambda s: s.momentum_score, reverse=True)[:5]
 
     return [
         {
             "ticker": s.ticker,
             "signal_type": "volume_surge",
-            "reason": f"거래량{s.volume_ratio:.1f}배·가격{s.change_pct:+.1f}% (자동선정)",
+            "reason": (
+                f"모멘텀{s.momentum_score:.0f}점·거래량{s.volume_ratio:.1f}배"
+                f"{'·RSI과열_포지션50%' if s.rsi > 72 else ''} (자동선정)"
+            ),
         }
         for s in top
     ]
