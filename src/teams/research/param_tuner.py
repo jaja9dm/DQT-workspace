@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime, timedelta
 
 import anthropic
@@ -194,19 +195,29 @@ def _ask_claude_adjustments(
   ]
 }}"""
 
+    response = None
+    for attempt in range(1, 4):
+        try:
+            response = _client.messages.create(
+                model=settings.CLAUDE_MODEL_MAIN,
+                max_tokens=1024,
+                temperature=0,
+                timeout=60.0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as e:
+            if attempt == 3:
+                logger.error(f"Claude 파라미터 튜닝 최종 실패 ({attempt}회): {type(e).__name__}: {e}")
+                return []
+            logger.warning(f"Claude 파라미터 튜닝 재시도 {attempt}/3: {type(e).__name__}: {e}")
+            time.sleep(5 * attempt)
     try:
-        response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_MAIN,  # Sonnet — 비용 최적화
-            max_tokens=1024,
-            temperature=0,
-            timeout=30.0,
-            messages=[{"role": "user", "content": prompt}],
-        )
         raw = response.content[0].text.strip()
         result = json.loads(_extract_json(raw))
         return result
     except Exception as e:
-        logger.error(f"Claude 파라미터 튜닝 분석 실패: {type(e).__name__}: {e}")
+        logger.error(f"Claude 파라미터 튜닝 응답 파싱 실패: {type(e).__name__}: {e}")
         return []
 
 

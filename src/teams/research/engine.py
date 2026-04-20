@@ -16,6 +16,7 @@ engine.py — 연구소 엔진
 from __future__ import annotations
 
 import json
+import time
 from datetime import date, datetime, timedelta
 
 import FinanceDataReader as fdr
@@ -234,13 +235,26 @@ def _ask_claude_opus(perf: list[dict], deep: bool = False) -> list[dict]:
   ]
 }}"""
 
+    response = None
+    for attempt in range(1, 4):
+        try:
+            response = _client.messages.create(
+                model=settings.CLAUDE_MODEL_MAIN,
+                max_tokens=1024,
+                temperature=settings.CLAUDE_TEMPERATURE,
+                timeout=60.0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as e:
+            if attempt == 3:
+                logger.error(f"Claude 전략 분석 최종 실패 ({attempt}회): {type(e).__name__}: {e}")
+                return [{"strategy_id": p["strategy_id"], "action": "keep",
+                         "reason": "분석 실패 — 현행 유지", "params": p["current_params"]}
+                        for p in perf]
+            logger.warning(f"Claude 전략 분석 재시도 {attempt}/3: {type(e).__name__}: {e}")
+            time.sleep(5 * attempt)
     try:
-        response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_MAIN,  # Sonnet — 비용 최적화
-            max_tokens=1024,
-            temperature=settings.CLAUDE_TEMPERATURE,
-            messages=[{"role": "user", "content": prompt}],
-        )
         raw = response.content[0].text.strip()
         if "```" in raw:
             raw = raw.split("```")[1]
@@ -248,7 +262,7 @@ def _ask_claude_opus(perf: list[dict], deep: bool = False) -> list[dict]:
                 raw = raw[4:]
         return json.loads(raw).get("recommendations", [])
     except Exception as e:
-        logger.error(f"Claude 분석 오류: {e}")
+        logger.error(f"Claude 전략 분석 응답 파싱 실패: {type(e).__name__}: {e}")
         return [{"strategy_id": p["strategy_id"], "action": "keep",
                  "reason": "분석 실패 — 현행 유지", "params": p["current_params"]}
                 for p in perf]

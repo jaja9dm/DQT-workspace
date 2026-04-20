@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, datetime
 
 import anthropic
@@ -461,19 +462,28 @@ JSON만 응답:
   "summary":       "..."
 }}"""
 
+    response = None
+    for attempt in range(1, 4):
+        try:
+            response = _client.messages.create(
+                model=settings.CLAUDE_MODEL_MAIN,
+                max_tokens=1024,
+                temperature=0,
+                timeout=60.0,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except Exception as e:
+            if attempt == 3:
+                logger.error(f"Claude 복기 분석 최종 실패 ({attempt}회): {type(e).__name__}: {e}")
+                return _fallback_review(stats)
+            logger.warning(f"Claude 복기 분석 재시도 {attempt}/3: {type(e).__name__}: {e}")
+            time.sleep(5 * attempt)
     try:
-        response = _client.messages.create(
-            model=settings.CLAUDE_MODEL_MAIN,
-            max_tokens=1024,
-            temperature=0,
-            timeout=30.0,
-            messages=[{"role": "user", "content": prompt}],
-        )
         raw = response.content[0].text.strip()
         return json.loads(_extract_json(raw))
     except Exception as e:
-        logger.error(f"Claude 복기 분석 실패: {type(e).__name__}: {e}")
-        # Claude 실패 시 — 데이터 기반 자동 생성 (빈 결과 대신)
+        logger.error(f"Claude 복기 응답 파싱 실패: {type(e).__name__}: {e}")
         return _fallback_review(stats)
 
 
