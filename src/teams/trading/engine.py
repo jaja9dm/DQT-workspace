@@ -6,12 +6,14 @@ engine.py — 매매팀 메인 엔진
   Claude에 최종 매수 판단을 요청하고 KIS API로 주문을 실행한다.
 
 게이트 구조 (순서대로, 하나라도 실패 시 진입 차단):
-  Gate 0. 장 시작 오프닝 게이트 — 9:00 즉시 매수 vs 9:10 대기 판단 (Claude)
-  Gate 1. 리스크 레벨 — Level 4↑이면 신규 진입 제한
-  Gate 2. 글로벌 시황 — korea_market_outlook == 'negative'이면 차단
-  Gate 3. 국내 시황 — market_score < -0.3이면 차단
-  Gate 4. Hot List — DB에서 최신 Hot List 읽기
-  Gate 5. Claude 최종 판단 — 매수 여부 + 예상 목표가·손절가
+  Gate 0.  장 시작 오프닝 게이트 — 9:00 즉시 매수 vs 9:10 대기 판단 (Claude)
+  Gate 1.  리스크 레벨 — Level 4↑이면 신규 진입 제한
+  Gate 2.  글로벌 시황 — korea_market_outlook == 'negative'이면 차단
+  Gate 3.  국내 시황 — market_score < -0.3이면 차단
+  Gate 4.  Hot List — DB에서 최신 Hot List 읽기
+  Gate 4.2 Hot List 품질 필터 — 거래량비·RSI·모멘텀 복합 AND 조건
+  Gate 4.5 MACD 방향 필터 + 장초반 진입 품질 — sell_pre 차단, 09:30 전 눌림·소진 확인
+  Gate 5.  Claude 최종 판단 — 매수 여부 + 예상 목표가·손절가
 
 오프닝 게이트 (Gate 0):
   9:00 직후 첫 사이클에서 Claude가 시황을 평가.
@@ -284,6 +286,39 @@ class TradingEngine:
                     candidates.append(h)
 
         if not candidates:
+            return []
+
+        # ── Gate 4.2: Hot List 품질 필터 (복합 AND 조건) ──────────
+        # 단일 신호 진입 시 승률 0~13% 수준으로 낮음 — RSI·거래량·모멘텀 동시 충족 요구
+        # 파라미터는 strategy_params에서 동적으로 읽어 자동 튜닝 가능
+        from src.teams.research.param_tuner import get_param as _gp
+        _min_vol  = _gp("hot_list_min_vol_ratio", 2.0)   # 최소 거래량 비율
+        _max_rsi  = _gp("hot_list_max_rsi",       72.0)  # RSI 과열 상한 (이상이면 차단)
+        _min_rsi  = _gp("hot_list_min_rsi",       28.0)  # RSI 붕괴 하한 (이하이면 차단)
+
+        filtered_candidates = []
+        for c in candidates:
+            tk          = c["ticker"]
+            vol_ratio   = c.get("volume_ratio")   or 0.0
+            price_chg   = c.get("price_change_pct") or 0.0
+            rsi         = c.get("rsi")            or 50.0
+
+            fails = []
+            if vol_ratio < _min_vol:
+                fails.append(f"거래량비 {vol_ratio:.1f}x < {_min_vol:.1f}x")
+            if price_chg <= 0:
+                fails.append(f"등락률 {price_chg:+.2f}% ≤ 0 (음수 모멘텀)")
+            if not (_min_rsi <= rsi <= _max_rsi):
+                fails.append(f"RSI {rsi:.0f} (허용 {_min_rsi:.0f}~{_max_rsi:.0f})")
+
+            if fails:
+                logger.info(f"Gate 4.2 차단: {tk} — {' | '.join(fails)}")
+                continue
+            filtered_candidates.append(c)
+
+        candidates = filtered_candidates
+        if not candidates:
+            logger.debug("Gate 4.2: 복합 조건 통과 종목 없음")
             return []
 
         # ── Gate 4.5: MACD 방향 필터 + 장초반 진입 품질 체크 ──
@@ -972,16 +1007,22 @@ def _calc_dynamic_trail_params(
         - floor_pct: 트레일링 손절선 간격 (현재가 대비 %)
     """
     # ── 초기 손절선 ─────────────────────────────────────────────
-    # Claude가 제시한 stop_pct를 베이스로 RSI·시황 보정
-    initial_stop = max(1.5, min(3.5, stop_pct))
+    # Claude 제시 stop_pct를 베이스로 RSI·시황 보정
+    # 기준값·하한·상한을 strategy_params에서 읽어 자동 튜닝 가능
+    from src.teams.research.param_tuner import get_param as _gp
+    _stop_base = _gp("initial_stop_pct",     2.0)  # 기준 초기 손절 %
+    _stop_min  = _gp("initial_stop_min_pct", 1.5)  # 하한 (이 아래로 안 내림)
+    _stop_max  = _gp("initial_stop_max_pct", 3.5)  # 상한 (이 위로 안 올림)
+
+    initial_stop = max(_stop_min, min(_stop_max, stop_pct if stop_pct else _stop_base))
 
     if rsi > 65:
-        initial_stop = min(initial_stop, 1.5)   # 과열권 — 빠른 반전 대비 타이트
+        initial_stop = min(initial_stop, _stop_min)   # 과열권 — 타이트
     elif rsi < 45:
-        initial_stop = min(initial_stop + 0.5, 3.0)  # 약한 모멘텀 — 조금 여유
+        initial_stop = min(initial_stop + 0.5, _stop_max * 0.86)  # 약한 모멘텀 — 여유
 
     if market_score < -0.1:
-        initial_stop = min(initial_stop, 1.5)   # 하락장 — 손실 최소화 우선
+        initial_stop = min(initial_stop, _stop_min)   # 하락장 — 손실 최소화
 
     # ── 트레일링 시작 수익률 ─────────────────────────────────
     # 목표의 절반 지점부터 손절선 올리기 시작 (목표에 가까울수록 수익 보호)

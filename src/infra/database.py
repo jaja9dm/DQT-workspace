@@ -24,6 +24,29 @@ def init_db() -> None:
     schema_sql = _SCHEMA_PATH.read_text(encoding="utf-8")
     with get_conn() as conn:
         conn.executescript(schema_sql)
+        # strategy_params 초기 시드 (존재하면 건너뜀)
+        _seed_params = [
+            # param_name               cur   default  min   max   description
+            ("initial_stop_pct",       2.0,  2.0,  1.0,  4.0,  "초기 손절선 기준 (%)"),
+            ("initial_stop_min_pct",   1.5,  1.5,  0.8,  2.5,  "초기 손절선 하한 (%)"),
+            ("initial_stop_max_pct",   3.5,  3.5,  2.0,  5.0,  "초기 손절선 상한 (%)"),
+            ("hot_list_min_vol_ratio", 2.0,  2.0,  1.2,  5.0,  "Hot List 최소 거래량 비율"),
+            ("hot_list_max_rsi",      72.0, 72.0, 60.0, 85.0,  "Hot List RSI 과열 상한"),
+            ("hot_list_min_rsi",      28.0, 28.0, 15.0, 40.0,  "Hot List RSI 붕괴 하한"),
+        ]
+        for row in _seed_params:
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO strategy_params
+                        (param_name, current_val, default_val, min_val, max_val, description, tuned_by)
+                    VALUES (?, ?, ?, ?, ?, ?, 'default')
+                    """,
+                    row,
+                )
+            except Exception:
+                pass
+
         # 기존 DB 마이그레이션: trailing_stop 동적 파라미터 컬럼 추가
         for col, default in [("trigger_pct", "3.0"), ("floor_pct", "2.5")]:
             try:
