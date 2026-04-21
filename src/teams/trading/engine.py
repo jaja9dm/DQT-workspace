@@ -226,6 +226,44 @@ class TradingEngine:
             logger.debug(f"오프닝 게이트 대기 중 — {self._buy_allowed_from.strftime('%H:%M')}까지 신규 매수 차단")
             return []
 
+        # ── Gate 0.5: 일일 손실 한도 / 연속 손절 차단 ──────────────
+        # 복리의 적: 하루 큰 손실. 아래 중 하나라도 해당하면 신규 진입 중단.
+        #   ① 당일 실현 P&L 합계 ≤ -2% (예수금 기준)
+        #   ② 당일 stop_loss 횟수 ≥ 2회 (오늘은 시장이 맞지 않는 날)
+        _daily_pnl_limit_pct = -2.0  # 당일 누적 손실 -2% 이상이면 신규 진입 금지
+        _daily_stoploss_limit = 2    # 당일 손절 2회 이상이면 신규 진입 금지
+        today_str = str(date.today())
+
+        # 당일 손절 횟수
+        sl_row = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM trades WHERE date=? AND action='stop_loss'",
+            (today_str,),
+        )
+        daily_sl_count = int(sl_row["cnt"]) if sl_row else 0
+        if daily_sl_count >= _daily_stoploss_limit:
+            logger.info(
+                f"Gate 0.5 차단: 당일 손절 {daily_sl_count}회 ≥ {_daily_stoploss_limit}회 "
+                f"— 오늘 신규 진입 중단"
+            )
+            return []
+
+        # 당일 실현 P&L 합계 (매수 예수금 기준 근사: pnl 합계 / 초기 예수금)
+        pnl_row = fetch_one(
+            "SELECT COALESCE(SUM(pnl), 0) AS total_pnl FROM trades WHERE date=? AND pnl IS NOT NULL",
+            (today_str,),
+        )
+        daily_pnl = float(pnl_row["total_pnl"]) if pnl_row else 0.0
+        if daily_pnl < 0:
+            avail = _fetch_available_cash()
+            if avail > 0:
+                daily_pnl_pct = daily_pnl / avail * 100
+                if daily_pnl_pct <= _daily_pnl_limit_pct:
+                    logger.info(
+                        f"Gate 0.5 차단: 당일 실현 손익 {daily_pnl_pct:+.2f}% ≤ {_daily_pnl_limit_pct}% "
+                        f"— 오늘 신규 진입 중단 (손실 보호)"
+                    )
+                    return []
+
         # ── Gate 1: 리스크 레벨 ─────────────────
         risk = get_current_risk()
         level = risk.get("risk_level", 1)

@@ -57,7 +57,7 @@ class Settings:
     STOP_LOSS_LEVEL4_PCT: float = float(os.getenv("STOP_LOSS_LEVEL4_PCT", "1.0"))
     TAKE_PROFIT_1_PCT: float = float(os.getenv("TAKE_PROFIT_1_PCT", "5.0"))
     TAKE_PROFIT_2_PCT: float = float(os.getenv("TAKE_PROFIT_2_PCT", "10.0"))
-    POSITION_MAX_HOLD_DAYS: int = int(os.getenv("POSITION_MAX_HOLD_DAYS", "5"))
+    POSITION_MAX_HOLD_DAYS: int = int(os.getenv("POSITION_MAX_HOLD_DAYS", "3"))
 
     # ── 트레일링 스톱 ─────────────────────────────
     # 초기 손절선: 매수가 대비 -N% (.env에서 조정 가능 — 권장 2~5%)

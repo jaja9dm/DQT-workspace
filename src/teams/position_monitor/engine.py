@@ -378,8 +378,11 @@ class PositionMonitorEngine:
         # ── 2. 트레일링 스톱 ────────────────────
         ts = _load_trailing_stop(ticker)
         if ts:
-            # MACD bearish면 trailing 간격 절반으로 타이트하게
-            tight = macd_bearish
+            # tight 조건: MACD bearish OR 14:00 이후 (장마감 전 수익 보호 가속)
+            _now_hm = datetime.now().hour * 100 + datetime.now().minute
+            tight = macd_bearish or (_now_hm >= 1400 and pnl_pct > 0)
+            if _now_hm >= 1400 and pnl_pct > 0 and not macd_bearish:
+                logger.debug(f"[14:00 이후 타이트] {ticker} 수익 {pnl_pct:+.2f}% — 트레일링 간격 절반 적용")
             updated_floor = _update_trailing_floor(
                 ticker, ts, current_price, avg_price, quantity, tight=tight
             )
@@ -405,6 +408,13 @@ class PositionMonitorEngine:
 
             # ── 3. 스마트 물타기 (일시 눌림 반등 기대) ──
             # dip_max: ATR·거래량 압력 기반 동적 트리거 (-N% 이상 하락 시 발동)
+            # 단, 당일 손절 1회 이상 발생 시 물타기 금지 (추가 리스크 차단)
+            _today_sl = fetch_one(
+                "SELECT COUNT(*) AS cnt FROM trades WHERE date=? AND action='stop_loss'",
+                (str(date.today()),),
+            )
+            _today_sl_cnt = int(_today_sl["cnt"]) if _today_sl else 0
+
             dip_min  = _p("dip_buy_min_loss",  _DIP_BUY_MIN_LOSS)
             dip_max_dynamic = -_get_dynamic_ladder_pct(ticker, ts)
             dip_max  = max(dip_max_dynamic, _p("dip_buy_max_loss", _DIP_BUY_MAX_LOSS))
@@ -415,6 +425,7 @@ class PositionMonitorEngine:
                 and not macd_bearish
                 and dip_buy_count < dip_max_count
                 and risk_level < 4
+                and _today_sl_cnt == 0   # 당일 손절 이력 없을 때만 물타기 허용
             ):
                 hot = _check_hotlist_for_dip(ticker)
                 if hot:
@@ -776,12 +787,23 @@ class PositionMonitorEngine:
             )
 
         # ── 6. 동적 익절 (MACD 연동) ─────────────
+        # 13:30 이후: 익절 목표를 50%로 낮춤 (장마감 전 수익 확정 우선)
+        # 예: +5% 목표 → 13:30 이후 +2.5%부터 익절 시작
+        _now_hm2 = datetime.now().hour * 100 + datetime.now().minute
+        _closing_phase = _now_hm2 >= 1330  # 13:30 이후 = 수익 확정 우선 구간
+        _tp1 = _TAKE_PROFIT_1_PCT * (0.5 if _closing_phase else 1.0)
+        _tp2 = _TAKE_PROFIT_2_PCT * (0.5 if _closing_phase else 1.0)
+        if _closing_phase and pnl_pct > 0:
+            logger.debug(
+                f"[수익 확정 구간] {ticker} 13:30↑ — 익절 목표 {_TAKE_PROFIT_1_PCT}%→{_tp1:.1f}% 적용"
+            )
+
         # 익절 목표 도달 시:
         #   - MACD bullish  → 익절 보류. 대신 손절선을 매수가+1% 이상으로 강제 상향 (수익 보호)
         #   - MACD bearish/neutral → 즉시 분할 매도
         for tp_pct, tp_label, tp_cond in [
-            (_TAKE_PROFIT_2_PCT, "2차", partial_sold >= 1),
-            (_TAKE_PROFIT_1_PCT, "1차", partial_sold == 0),
+            (_tp2, "2차", partial_sold >= 1),
+            (_tp1, "1차", partial_sold == 0),
         ]:
             if pnl_pct >= tp_pct and tp_cond:
                 if macd_bullish and ts:
