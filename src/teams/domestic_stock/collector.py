@@ -42,8 +42,8 @@ RSI_OVERBOUGHT = 70.0
 RSI_OVERSOLD = 30.0
 
 # 잡주 필터: 당일 거래대금 최소 기준 (원)
-# 10억 미만 → 유동성 부족, 세력 조작 가능성 높음
-MIN_TRADING_VALUE = 1_000_000_000   # 10억원
+# 30억 미만 → 유동성 부족 (3종목 집중 투자 — 체결 슬리피지 최소화)
+MIN_TRADING_VALUE = 3_000_000_000   # 30억원
 
 # 기술지표 파라미터
 _RSI_PERIOD = 14
@@ -108,6 +108,11 @@ class StockSnapshot:
     stoch_rsi: float = 50.0       # Stochastic RSI(14,14) — 80↑=단기 과매수, 20↓=과매도
     momentum_score: float = 0.0   # 종합 모멘텀 점수 (0~100) — Gate 4.2 순위 기준
 
+    # 당일 가격 범위
+    day_high: float = 0.0         # 당일 고가 (KIS stck_hgpr)
+    day_low: float = 0.0          # 당일 저가 (KIS stck_lwpr)
+    day_range_pos: float = 0.5    # (현재가-저가)/(고가-저가) — 0=저가권, 1=고가권
+
     error: str = ""               # 수집 오류 메시지
 
 
@@ -125,12 +130,12 @@ class UniverseScan:
 
 # ── KIS 현재가 조회 ───────────────────────────────────────────
 
-def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int]:
+def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int, float, float]:
     """
-    KIS API로 현재가·등락률·거래량·거래대금·외인순매수·기관순매수 조회.
+    KIS API로 현재가·등락률·거래량·거래대금·외인순매수·기관순매수·당일고가·당일저가 조회.
 
     Returns:
-        (current_price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy)
+        (current_price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low)
     """
     gw = KISGateway()
     try:
@@ -148,13 +153,15 @@ def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int
         price = float(output.get("stck_prpr", 0) or 0)
         change_pct = float(output.get("prdy_ctrt", 0) or 0)
         volume = int(output.get("acml_vol", 0) or 0)
-        trading_value = int(output.get("acml_tr_pbmn", 0) or 0)  # 누적 거래대금
-        frgn_net_buy = int(output.get("frgn_ntby_qty", 0) or 0)   # 외국인 순매수량
-        inst_net_buy = int(output.get("orgn_ntby_qty", 0) or 0)   # 기관 순매수량 (없으면 0)
-        return price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy
+        trading_value = int(output.get("acml_tr_pbmn", 0) or 0)
+        frgn_net_buy = int(output.get("frgn_ntby_qty", 0) or 0)
+        inst_net_buy = int(output.get("orgn_ntby_qty", 0) or 0)
+        day_high = float(output.get("stck_hgpr", 0) or 0)
+        day_low  = float(output.get("stck_lwpr", 0) or 0)
+        return price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low
     except Exception as e:
         logger.debug(f"KIS 현재가 실패 [{ticker}]: {e}")
-        return 0.0, 0.0, 0, 0, 0, 0
+        return 0.0, 0.0, 0, 0, 0, 0, 0.0, 0.0
 
 
 # ── FDR 기술지표 계산 ─────────────────────────────────────────
@@ -373,13 +380,18 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap = StockSnapshot(ticker=ticker, name=name)
 
     # 1. KIS 현재가
-    price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy = _fetch_price_from_kis(ticker)
+    price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low = _fetch_price_from_kis(ticker)
     snap.current_price = price
     snap.change_pct = change_pct
     snap.volume = volume
     snap.trading_value = trading_value
     snap.frgn_net_buy = frgn_net_buy
     snap.inst_net_buy = inst_net_buy
+    snap.day_high = day_high
+    snap.day_low  = day_low
+    # 당일 가격 범위 내 현재 위치 (0=저가권, 1=고가권)
+    day_range = day_high - day_low
+    snap.day_range_pos = round((price - day_low) / day_range, 3) if day_range > 0 else 0.5
 
     # 2. 기술지표 (FDR + pandas-ta)
     ind = _compute_indicators(ticker, price, volume)

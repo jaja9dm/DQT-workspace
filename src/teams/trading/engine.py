@@ -284,10 +284,19 @@ class TradingEngine:
                 candidates.append(h)
             elif ticker in self._macd_reentry_ok:
                 # 재진입 허용 종목: MACD buy_pre 신호 확인 후 진입
+                # 단, 당일 손절(stop_loss) 발생 종목은 재진입 완전 차단
+                was_stopped = fetch_one(
+                    "SELECT id FROM trades WHERE ticker=? AND date=? AND action='stop_loss' LIMIT 1",
+                    (ticker, str(date.today())),
+                )
+                if was_stopped:
+                    logger.info(f"[재진입 차단] {ticker} — 당일 손절 이력 있음, MACD 재진입 불가")
+                    self._macd_reentry_ok.discard(ticker)
+                    continue
                 macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
                 if macd_sig == "buy_pre" and not _has_open_position(ticker):
                     logger.info(f"[MACD 재진입] {ticker} — MACD buy_pre 복귀, 재매수 허용")
-                    self._today_tickers.discard(ticker)   # 재진입 허용
+                    self._today_tickers.discard(ticker)
                     self._macd_reentry_ok.discard(ticker)
                     candidates.append(h)
 
@@ -314,6 +323,8 @@ class TradingEngine:
             obv_slope = c.get("obv_slope")       or 0.0
             reason    = c.get("reason")          or ""
 
+            day_range_pos = c.get("day_range_pos") or 0.5
+
             # 완전 차단 조건
             fails = []
             if vol_ratio < _min_vol:
@@ -326,6 +337,11 @@ class TradingEngine:
                 fails.append(f"RSI {rsi:.0f} < {_min_rsi:.0f} (과매도 붕괴)")
             if obv_slope < 0 and rsi > 70:
                 fails.append(f"OBV 역행+고RSI {rsi:.0f} (수급 없는 상승)")
+            # 당일 고가권 추격 매수 차단 (등락 +3%↑ + 당일 범위 위치 0.90↑)
+            if price_chg >= 3.0 and day_range_pos >= 0.90 and obv_slope <= 0:
+                fails.append(
+                    f"고가권 추격 차단 (등락 {price_chg:+.1f}% + 범위위치 {day_range_pos:.2f} + OBV↓)"
+                )
 
             if fails:
                 logger.info(f"Gate 4.2 차단: {tk} — {' | '.join(fails)}")
@@ -591,12 +607,18 @@ JSON만 응답:
         for item in items:
             ticker = item["ticker"]
             sentiment = _load_sentiment(ticker)
+            mscore = item.get("momentum_score") or 0.0
+            drp    = item.get("day_range_pos") or 0.5
+            obv    = item.get("obv_slope") or 0.0
             stock_lines.append(
                 f"- 티커: {ticker} ({item.get('name', '')})\n"
                 f"  신호: {item.get('signal_type', '')} | "
                 f"등락: {item.get('price_change_pct', 0):+.1f}% | "
                 f"거래량: {item.get('volume_ratio', 0):.1f}배 | "
-                f"RSI: {item.get('rsi', 50):.0f}\n"
+                f"RSI: {item.get('rsi', 50):.0f} | "
+                f"모멘텀점수: {mscore:.0f}/100 | "
+                f"당일범위위치: {drp:.2f} | "
+                f"OBV기울기: {'↑' if obv > 0 else '↓'}{obv:+.2f}\n"
                 f"  선정근거: {item.get('reason', '')} | "
                 f"감성: {sentiment.get('avg_score', 0):+.2f}({sentiment.get('direction', 'neutral')})"
             )
@@ -969,7 +991,8 @@ def _load_hot_list() -> list[dict]:
         """
         SELECT ticker, name, signal_type, volume_ratio, price_change_pct, rsi, reason,
                COALESCE(momentum_score, 0.0) AS momentum_score,
-               COALESCE(obv_slope, 0.0) AS obv_slope
+               COALESCE(obv_slope, 0.0) AS obv_slope,
+               COALESCE(day_range_pos, 0.5) AS day_range_pos
         FROM hot_list
         WHERE created_at >= datetime('now', '-10 minutes')
         ORDER BY COALESCE(momentum_score, 0.0) DESC, volume_ratio DESC

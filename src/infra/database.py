@@ -87,6 +87,7 @@ def init_db() -> None:
         for col, typedef in [
             ("momentum_score", "REAL DEFAULT 0.0"),
             ("obv_slope",      "REAL DEFAULT 0.0"),
+            ("day_range_pos",  "REAL DEFAULT 0.5"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE hot_list ADD COLUMN {col} {typedef}")

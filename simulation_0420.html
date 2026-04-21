@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DQT 시뮬레이션 — 2026-04-20</title>
+<style>
+:root {
+  --bg: #0f1117; --bg2: #1a1d27; --bg3: #232635;
+  --text: #e4e6ef; --text2: #8b8fa8; --text3: #555875;
+  --accent: #7b8cff; --green: #00d4aa; --red: #ff5566;
+  --yellow: #ffd166; --orange: #ff9a3c;
+  --border: #2e3145; --shadow: rgba(0,0,0,0.4);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:'Segoe UI',system-ui,sans-serif; background:var(--bg); color:var(--text); line-height:1.6; }
+.container { max-width:1280px; margin:0 auto; padding:24px 16px; }
+h1 { font-size:1.8rem; font-weight:700; color:var(--accent); margin-bottom:6px; }
+.subtitle { color:var(--text2); font-size:.95rem; margin-bottom:28px; }
+.section { background:var(--bg2); border:1px solid var(--border); border-radius:12px; padding:20px; margin-bottom:20px; }
+.section h2 { font-size:1.05rem; font-weight:600; color:var(--text2); text-transform:uppercase; letter-spacing:.06em; margin-bottom:16px; border-bottom:1px solid var(--border); padding-bottom:10px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.grid3 { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; }
+.grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:16px; }
+.kpi { background:var(--bg3); border-radius:8px; padding:16px; text-align:center; }
+.kpi-label { font-size:.75rem; color:var(--text3); text-transform:uppercase; letter-spacing:.08em; margin-bottom:6px; }
+.kpi-val { font-size:1.8rem; font-weight:700; }
+.kpi-sub { font-size:.78rem; color:var(--text2); margin-top:4px; }
+.pos { color:var(--green); }
+.neg { color:var(--red); }
+.neu { color:var(--text2); }
+.tag { display:inline-block; font-size:.68rem; font-weight:600; padding:2px 7px; border-radius:4px; margin:2px; }
+.tag-g { background:rgba(0,212,170,.15); color:var(--green); }
+.tag-r { background:rgba(255,85,102,.15); color:var(--red); }
+.tag-y { background:rgba(255,209,102,.15); color:var(--yellow); }
+.tag-b { background:rgba(123,140,255,.15); color:var(--accent); }
+.tag-o { background:rgba(255,154,60,.15); color:var(--orange); }
+table { width:100%; border-collapse:collapse; font-size:.85rem; }
+th { background:var(--bg3); color:var(--text2); font-weight:600; padding:10px 12px; text-align:left; font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; }
+td { padding:10px 12px; border-bottom:1px solid var(--border); vertical-align:middle; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:rgba(255,255,255,.02); }
+.badge { display:inline-block; font-size:.68rem; font-weight:700; padding:2px 8px; border-radius:20px; }
+.badge-g { background:rgba(0,212,170,.2); color:var(--green); }
+.badge-r { background:rgba(255,85,102,.2); color:var(--red); }
+.badge-y { background:rgba(255,209,102,.2); color:var(--yellow); }
+.badge-n { background:rgba(85,88,117,.3); color:var(--text2); }
+.badge-b { background:rgba(123,140,255,.2); color:var(--accent); }
+.scenario-box { display:grid; grid-template-columns:1fr 1fr; gap:20px; }
+.scenario { border-radius:10px; padding:18px; }
+.scenario-a { background:rgba(255,85,102,.07); border:1px solid rgba(255,85,102,.25); }
+.scenario-b { background:rgba(0,212,170,.07); border:1px solid rgba(0,212,170,.25); }
+.scenario h3 { font-size:.9rem; margin-bottom:14px; font-weight:700; }
+.scenario-a h3 { color:var(--red); }
+.scenario-b h3 { color:var(--green); }
+.alert { background:rgba(255,209,102,.08); border:1px solid rgba(255,209,102,.25); border-radius:8px; padding:14px 16px; margin-bottom:14px; font-size:.87rem; color:var(--yellow); }
+.note { color:var(--text3); font-size:.78rem; margin-top:8px; }
+.flow { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:12px; }
+.flow-item { background:var(--bg3); border:1px solid var(--border); border-radius:6px; padding:8px 12px; font-size:.82rem; }
+.flow-arrow { color:var(--text3); }
+</style>
+</head>
+<body>
+<div class="container">
+<h1>DQT 시뮬레이션 — 2026-04-20 (월)</h1>
+<div class="subtitle">신호일: 2026-04-17(금) | 매매일: 2026-04-20(월) | 운용자금: 1,500,000원</div>
+
+
+<div class="section">
+<h2>장 시작 전 시황 (4/17 금요일 종가 기준)</h2>
+<div class="grid4">
+  <div class="kpi"><div class="kpi-label">VIX</div><div class="kpi-val pos">17.5</div><div class="kpi-sub">공포지수</div></div>
+  <div class="kpi"><div class="kpi-label">S&amp;P500</div><div class="kpi-val pos">+1.20%</div><div class="kpi-sub">전일 대비</div></div>
+  <div class="kpi"><div class="kpi-label">KOSPI</div><div class="kpi-val neg">-0.55%</div><div class="kpi-sub">4/17 등락</div></div>
+  <div class="kpi"><div class="kpi-label">KOSDAQ</div><div class="kpi-val pos">+0.61%</div><div class="kpi-sub">4/17 등락</div></div>
+</div>
+<div style="margin-top:16px" class="grid3">
+  <div class="kpi"><div class="kpi-label">국내 시황 점수</div><div class="kpi-val neg">-0.043</div><div class="kpi-sub">-1(약세) ~ +1(강세)</div></div>
+  <div class="kpi"><div class="kpi-label">글로벌 리스크</div><div class="kpi-val pos">3/10</div><div class="kpi-sub">VIX·S&P500 기반</div></div>
+  <div class="kpi"><div class="kpi-label">리스크 레벨</div><div class="kpi-val">2/5</div><div class="kpi-sub">포지션 한도 100%</div></div>
+</div>
+<div class="alert" style="margin-top:16px">
+⚙️ <strong>오프닝 게이트 판단</strong>: 시황점수 -0.043 · 리스크레벨 2/5
+— <strong style="color:var(--yellow)">WAIT</strong> (09:10까지 관망 후 MACD 재확인)
+</div>
+</div>
+<div class="section">
+<h2>종목 스캔 — Gate 4.2 필터 (신 로직)</h2>
+<div class="flow">
+  <div class="flow-item">유니버스 92종목</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-item">MACD 히스토그램 상승 필터</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-item"><strong>92</strong>개 신호</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-item" style="border-color:var(--green)">Gate 4.2<br>vol≥2x + 상승 + RSI 28~72</div>
+  <div class="flow-arrow">→</div>
+  <div class="flow-item" style="border-color:var(--green)"><strong>17</strong>개 통과</div>
+</div>
+
+<div class="grid2" style="margin-top:16px; gap:20px">
+<div>
+<div style="margin-bottom:10px; font-size:.85rem; color:var(--red)">❌ Gate 4.2 차단 (상위 10개)</div>
+<table>
+<thead><tr><th>코드</th><th>종목명</th><th>신호</th><th>등락</th><th>거래량</th><th>RSI</th><th>차단 사유</th></tr></thead>
+<tbody><tr>
+        <td><strong>077970</strong></td>
+        <td>STX엔진</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량18.9x</span><span class="tag tag-g">급등+30.0%</span></td>
+        <td class="pos">+30.0%</td>
+        <td>18.9x</td>
+        <td class="neg">77.8</td>
+        <td class="neg">RSI 과열 77.8</td>
+        </tr><tr>
+        <td><strong>096530</strong></td>
+        <td>씨젠</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량17.0x</span><span class="tag tag-g">급등+9.8%</span></td>
+        <td class="pos">+9.8%</td>
+        <td>17.0x</td>
+        <td class="neg">78.1</td>
+        <td class="neg">RSI 과열 78.1</td>
+        </tr><tr>
+        <td><strong>009580</strong></td>
+        <td>무림P&P</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량14.2x</span><span class="tag tag-r">하락-2.2%</span></td>
+        <td class="neg">-2.2%</td>
+        <td>14.2x</td>
+        <td class="neg">74.2</td>
+        <td class="neg">RSI 과열 74.2</td>
+        </tr><tr>
+        <td><strong>082740</strong></td>
+        <td>한화엔진</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량12.3x</span><span class="tag tag-g">급등+16.4%</span></td>
+        <td class="pos">+16.4%</td>
+        <td>12.3x</td>
+        <td class="neg">75.7</td>
+        <td class="neg">RSI 과열 75.7</td>
+        </tr><tr>
+        <td><strong>098460</strong></td>
+        <td>고영</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량11.6x</span><span class="tag tag-g">급등+11.5%</span></td>
+        <td class="pos">+11.5%</td>
+        <td>11.6x</td>
+        <td class="neg">72.5</td>
+        <td class="neg">RSI 과열 72.5</td>
+        </tr><tr>
+        <td><strong>015260</strong></td>
+        <td>에이엔피</td>
+        <td><span class="tag tag-g">거래량9.3x</span><span class="tag tag-r">하락-6.2%</span></td>
+        <td class="neg">-6.2%</td>
+        <td>9.3x</td>
+        <td class="neu">62.7</td>
+        <td class="neg">등락률 ≤0</td>
+        </tr><tr>
+        <td><strong>071970</strong></td>
+        <td>HD현대마린엔진</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량7.4x</span><span class="tag tag-g">급등+6.7%</span></td>
+        <td class="pos">+6.7%</td>
+        <td>7.4x</td>
+        <td class="neg">80.4</td>
+        <td class="neg">RSI 과열 80.4</td>
+        </tr><tr>
+        <td><strong>093370</strong></td>
+        <td>후성</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량6.0x</span><span class="tag tag-g">급등+22.3%</span></td>
+        <td class="pos">+22.3%</td>
+        <td>6.0x</td>
+        <td class="neg">82.7</td>
+        <td class="neg">RSI 과열 82.7</td>
+        </tr><tr>
+        <td><strong>319400</strong></td>
+        <td>현대무벡스</td>
+        <td><span class="tag tag-g">거래량4.2x</span><span class="tag tag-g">급등+4.7%</span></td>
+        <td class="pos">+4.7%</td>
+        <td>4.2x</td>
+        <td class="neg">77.7</td>
+        <td class="neg">RSI 과열 77.7</td>
+        </tr><tr>
+        <td><strong>100790</strong></td>
+        <td>미래에셋벤처투자</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량3.6x</span><span class="tag tag-g">급등+19.6%</span></td>
+        <td class="pos">+19.6%</td>
+        <td>3.6x</td>
+        <td class="neg">73.5</td>
+        <td class="neg">RSI 과열 73.5</td>
+        </tr></tbody>
+</table>
+</div>
+<div>
+<div style="margin-bottom:10px; font-size:.85rem; color:var(--green)">✅ Gate 4.2 통과 (17개)</div>
+<table>
+<thead><tr><th>코드</th><th>종목명</th><th>신호</th><th>등락(4/17)</th><th>거래량</th><th>RSI</th><th>4/20 실제등락</th></tr></thead>
+<tbody><tr>
+        <td><strong>457190</strong></td>
+        <td>이수스페셜티케미컬</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량4.7x</span><span class="tag tag-g">급등+8.0%</span></td>
+        <td class="pos">+8.0%</td>
+        <td>4.7x</td>
+        <td>70.7</td>
+        <td class="neg">-0.36%</td>
+        </tr><tr>
+        <td><strong>033240</strong></td>
+        <td>자화전자</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량3.2x</span><span class="tag tag-g">급등+8.3%</span></td>
+        <td class="pos">+8.3%</td>
+        <td>3.2x</td>
+        <td>66.6</td>
+        <td class="pos">+5.62%</td>
+        </tr><tr>
+        <td><strong>466100</strong></td>
+        <td>클로봇</td>
+        <td><span class="tag tag-g">거래량3.1x</span><span class="tag tag-g">급등+7.8%</span></td>
+        <td class="pos">+7.8%</td>
+        <td>3.1x</td>
+        <td>51.2</td>
+        <td class="neg">-1.92%</td>
+        </tr><tr>
+        <td><strong>302440</strong></td>
+        <td>SK바이오사이언스</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-g">거래량3.1x</span><span class="tag tag-g">급등+4.4%</span></td>
+        <td class="pos">+4.4%</td>
+        <td>3.1x</td>
+        <td>66.3</td>
+        <td class="neg">-3.35%</td>
+        </tr><tr>
+        <td><strong>018880</strong></td>
+        <td>한온시스템</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-y">거래량2.9x</span><span class="tag tag-y">상승+1.8%</span></td>
+        <td class="pos">+1.8%</td>
+        <td>2.9x</td>
+        <td>63.4</td>
+        <td class="neg">-1.56%</td>
+        </tr><tr>
+        <td><strong>476060</strong></td>
+        <td>온코닉테라퓨틱스</td>
+        <td><span class="tag tag-y">거래량2.9x</span><span class="tag tag-y">상승+1.9%</span></td>
+        <td class="pos">+1.9%</td>
+        <td>2.9x</td>
+        <td>55.4</td>
+        <td class="neg">-1.41%</td>
+        </tr><tr>
+        <td><strong>222080</strong></td>
+        <td>씨아이에스</td>
+        <td><span class="tag tag-y">거래량2.7x</span><span class="tag tag-y">상승+1.8%</span></td>
+        <td class="pos">+1.8%</td>
+        <td>2.7x</td>
+        <td>59.6</td>
+        <td class="neg">-1.95%</td>
+        </tr><tr>
+        <td><strong>388210</strong></td>
+        <td>씨엠티엑스</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-y">거래량2.6x</span><span class="tag tag-g">급등+7.0%</span></td>
+        <td class="pos">+7.0%</td>
+        <td>2.6x</td>
+        <td>61.6</td>
+        <td class="neg">-5.37%</td>
+        </tr><tr>
+        <td><strong>003670</strong></td>
+        <td>포스코퓨처엠</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-y">거래량2.6x</span><span class="tag tag-g">급등+4.9%</span></td>
+        <td class="pos">+4.9%</td>
+        <td>2.6x</td>
+        <td>66.7</td>
+        <td class="pos">+0.21%</td>
+        </tr><tr>
+        <td><strong>295310</strong></td>
+        <td>에이치브이엠</td>
+        <td><span class="tag tag-y">거래량2.5x</span><span class="tag tag-g">급등+10.2%</span></td>
+        <td class="pos">+10.2%</td>
+        <td>2.5x</td>
+        <td>57.3</td>
+        <td class="neg">-4.59%</td>
+        </tr><tr>
+        <td><strong>005490</strong></td>
+        <td>POSCO홀딩스</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-y">거래량2.5x</span><span class="tag tag-g">급등+4.0%</span></td>
+        <td class="pos">+4.0%</td>
+        <td>2.5x</td>
+        <td>71.4</td>
+        <td class="pos">+0.78%</td>
+        </tr><tr>
+        <td><strong>281740</strong></td>
+        <td>레이크머티리얼즈</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-y">거래량2.5x</span><span class="tag tag-g">급등+3.2%</span></td>
+        <td class="pos">+3.2%</td>
+        <td>2.5x</td>
+        <td>65.8</td>
+        <td class="pos">+1.11%</td>
+        </tr><tr>
+        <td><strong>020150</strong></td>
+        <td>롯데에너지머티리얼즈</td>
+        <td><span class="tag tag-b">BB돌파</span><span class="tag tag-y">거래량2.4x</span><span class="tag tag-g">급등+8.3%</span></td>
+        <td class="pos">+8.3%</td>
+        <td>2.4x</td>
+        <td>70.4</td>
+        <td class="neg">-1.32%</td>
+        </tr><tr>
+        <td><strong>005070</strong></td>
+        <td>코스모신소재</td>
+        <td><span class="tag tag-y">거래량2.4x</span><span class="tag tag-g">급등+3.4%</span></td>
+        <td class="pos">+3.4%</td>
+        <td>2.4x</td>
+        <td>66.4</td>
+        <td class="pos">+2.77%</td>
+        </tr><tr>
+        <td><strong>027360</strong></td>
+        <td>아주IB투자</td>
+        <td><span class="tag tag-y">거래량2.4x</span><span class="tag tag-g">급등+8.8%</span></td>
+        <td class="pos">+8.8%</td>
+        <td>2.4x</td>
+        <td>64.3</td>
+        <td class="pos">+1.93%</td>
+        </tr><tr>
+        <td><strong>066970</strong></td>
+        <td>엘앤에프</td>
+        <td><span class="tag tag-y">거래량2.2x</span><span class="tag tag-g">급등+9.5%</span></td>
+        <td class="pos">+9.5%</td>
+        <td>2.2x</td>
+        <td>66.1</td>
+        <td class="neg">-0.49%</td>
+        </tr><tr>
+        <td><strong>450080</strong></td>
+        <td>에코프로머티</td>
+        <td><span class="tag tag-y">거래량2.1x</span><span class="tag tag-y">상승+2.8%</span></td>
+        <td class="pos">+2.8%</td>
+        <td>2.1x</td>
+        <td>52.5</td>
+        <td class="pos">+4.05%</td>
+        </tr></tbody>
+</table>
+</div>
+</div>
+</div>
+<div class="section">
+<h2>시나리오 비교 — A(구 로직) vs B(신 로직)</h2>
+<div class="scenario-box">
+  <div class="scenario scenario-a">
+    <h3>🔴 A. 구 로직 (기존 시스템)</h3>
+    <ul style="font-size:.82rem; color:var(--text2); margin-bottom:12px; padding-left:16px">
+      <li>Gate 4.2 없음 — 거래량·등락·RSI 개별 기준</li>
+      <li>MACD buy_pre: AND (3분봉 AND 5분봉)</li>
+      <li>MACD sell_pre: OR  (3분봉 OR  5분봉)</li>
+      <li>Gate 4.5 없음 — 장초반 즉각 하락 종목도 진입</li>
+    </ul>
+    <div class="grid2" style="gap:10px">
+      <div class="kpi"><div class="kpi-label">총 손익</div><div class="kpi-val pos">+9,180원</div></div>
+      <div class="kpi"><div class="kpi-label">평균 수익률</div><div class="kpi-val pos">+0.61%</div></div>
+      <div class="kpi"><div class="kpi-label">승/패</div><div class="kpi-val">1/4</div></div>
+      <div class="kpi"><div class="kpi-label">승률</div><div class="kpi-val neg">20%</div></div>
+    </div>
+    <table style="margin-top:14px">
+    <thead><tr><th>종목</th><th>신호(4/17)</th><th>매수가</th><th>수익률</th><th>청산사유</th><th>패턴</th></tr></thead>
+    <tbody><tr>
+        <td><strong>077970</strong><br><span style="font-size:.75rem;color:var(--text2)">STX엔진</span></td>
+        <td>+30.0% / 18.9x / RSI78</td>
+        <td>47,200</td>
+        <td class="neg"><span class="badge badge-r">▼1.50%</span></td>
+        <td class="neg">초기손절</td>
+        <td>즉각하락</td>
+        </tr><tr>
+        <td><strong>096530</strong><br><span style="font-size:.75rem;color:var(--text2)">씨젠</span></td>
+        <td>+9.8% / 17.0x / RSI78</td>
+        <td>26,000</td>
+        <td class="neg"><span class="badge badge-r">▼1.50%</span></td>
+        <td class="neg">초기손절</td>
+        <td>즉각하락</td>
+        </tr><tr>
+        <td><strong>009580</strong><br><span style="font-size:.75rem;color:var(--text2)">무림P&P</span></td>
+        <td>-2.2% / 14.2x / RSI74</td>
+        <td>3,705</td>
+        <td class="pos"><span class="badge badge-g">▲9.06%</span></td>
+        <td class="neu">트레일링스톱</td>
+        <td>눌림후회복</td>
+        </tr><tr>
+        <td><strong>082740</strong><br><span style="font-size:.75rem;color:var(--text2)">한화엔진</span></td>
+        <td>+16.4% / 12.3x / RSI76</td>
+        <td>55,600</td>
+        <td class="neg"><span class="badge badge-r">▼1.50%</span></td>
+        <td class="neg">초기손절</td>
+        <td>즉각하락</td>
+        </tr><tr>
+        <td><strong>098460</strong><br><span style="font-size:.75rem;color:var(--text2)">고영</span></td>
+        <td>+11.5% / 11.6x / RSI72</td>
+        <td>33,000</td>
+        <td class="neg"><span class="badge badge-r">▼1.50%</span></td>
+        <td class="neg">초기손절</td>
+        <td>즉각하락</td>
+        </tr></tbody>
+    </table>
+  </div>
+  <div class="scenario scenario-b">
+    <h3>🟢 B. 신 로직 (현재 시스템)</h3>
+    <ul style="font-size:.82rem; color:var(--text2); margin-bottom:12px; padding-left:16px">
+      <li>Gate 4.2: vol≥2x AND 상승 AND RSI 28~72 (<strong style="color:var(--green)">17개 통과</strong>)</li>
+      <li>MACD buy_pre: OR  (3분봉 OR  5분봉 히스토그램 상승)</li>
+      <li>MACD sell_pre: AND (3분봉 AND 5분봉 동시 하강)</li>
+      <li>Gate 4.5: 즉각 하락 종목 장초반 차단</li>
+    </ul>
+    <div class="grid2" style="gap:10px">
+      <div class="kpi"><div class="kpi-label">총 손익</div><div class="kpi-val pos">+9,330원</div></div>
+      <div class="kpi"><div class="kpi-label">평균 수익률</div><div class="kpi-val pos">+1.56%</div></div>
+      <div class="kpi"><div class="kpi-label">승/패</div><div class="kpi-val">1/1</div></div>
+      <div class="kpi"><div class="kpi-label">승률</div><div class="kpi-val neu">50%</div></div>
+    </div>
+    <table style="margin-top:14px">
+    <thead><tr><th>종목</th><th>신호(4/17)</th><th>매수가</th><th>수익률</th><th>청산사유</th><th>패턴</th></tr></thead>
+    <tbody><tr>
+        <td><strong>457190</strong><br><span style="font-size:.75rem;color:var(--text2)">이수스페셜티케미컬</span></td>
+        <td>+8.0% / 4.7x / RSI71</td>
+        <td>112,000</td>
+        <td class="neg"><span class="badge badge-r">▼1.50%</span></td>
+        <td class="neg">초기손절</td>
+        <td>혼조</td>
+        </tr><tr>
+        <td><strong>033240</strong><br><span style="font-size:.75rem;color:var(--text2)">자화전자</span></td>
+        <td>+8.3% / 3.2x / RSI67</td>
+        <td>40,900</td>
+        <td class="pos"><span class="badge badge-g">▲4.61%</span></td>
+        <td class="neu">트레일링스톱</td>
+        <td>모멘텀</td>
+        </tr><tr style="opacity:.55">
+            <td><strong>295310</strong><br><span style="font-size:.75rem;color:var(--text2)">에이치브이엠</span></td>
+            <td>+10.2% / 2.5x / RSI57</td>
+            <td>—</td>
+            <td><span class="badge badge-n">미진입</span></td>
+            <td class="neg">Gate4.5 차단 (즉각하락)</td>
+            <td>-</td>
+            </tr><tr style="opacity:.55">
+            <td><strong>466100</strong><br><span style="font-size:.75rem;color:var(--text2)">클로봇</span></td>
+            <td>+7.8% / 3.1x / RSI51</td>
+            <td>—</td>
+            <td><span class="badge badge-n">미진입</span></td>
+            <td class="neg">Gate4.5 차단 (즉각하락)</td>
+            <td>-</td>
+            </tr><tr style="opacity:.55">
+            <td><strong>020150</strong><br><span style="font-size:.75rem;color:var(--text2)">롯데에너지머티리얼즈</span></td>
+            <td>+8.3% / 2.4x / RSI70</td>
+            <td>—</td>
+            <td><span class="badge badge-n">미진입</span></td>
+            <td class="neg">Gate4.5 차단 (즉각하락)</td>
+            <td>-</td>
+            </tr></tbody>
+    </table>
+  </div>
+</div>
+<div class="kpi" style="margin-top:16px; padding:16px">
+  <div class="kpi-label">신 로직 개선 효과 (A→B 차이)</div>
+  <div class="kpi-val pos">+0.01%p</div>
+  <div class="kpi-sub">총 손익 차이: +150원</div>
+</div>
+</div>
+<div class="section">
+<h2>핵심 인사이트 — 신 로직 기준</h2>
+<div class="grid3">
+  <div>
+    <div style="color:var(--green);font-weight:600;margin-bottom:8px">✅ 수익 종목</div>
+    <ul style="font-size:.85rem;padding-left:16px;line-height:2"><li><strong>자화전자</strong>(033240): <span class="badge badge-g">▲4.61%</span> — 트레일링스톱</li></ul>
+  </div>
+  <div>
+    <div style="color:var(--red);font-weight:600;margin-bottom:8px">⚠️ 손실 종목</div>
+    <ul style="font-size:.85rem;padding-left:16px;line-height:2"><li><strong>이수스페셜티케미컬</strong>(457190): <span class="badge badge-r">▼1.50%</span> — 초기손절</li></ul>
+  </div>
+  <div>
+    <div style="color:var(--yellow);font-weight:600;margin-bottom:8px">🚫 Gate 4.5 차단</div>
+    <ul style="font-size:.85rem;padding-left:16px;line-height:2"><li>에이치브이엠</li><li>클로봇</li><li>롯데에너지머티리얼즈</li></ul>
+    <div class="note" style="margin-top:6px">즉각 하락 패턴 → 장초반 MACD 매수 신호 없음 → 미진입</div>
+  </div>
+</div>
+<div class="alert" style="margin-top:16px">
+💡 <strong>시뮬레이션 한계</strong>: 실제 분봉 데이터 없이 일봉 OHLCV + 패턴 근사로 매매 시점을 추정했습니다.
+실제 시스템은 3분봉·5분봉 MACD를 3분 주기로 체크하므로 진입·청산 타이밍이 달라질 수 있습니다.
+특히 "눌림→회복" 패턴 종목의 정확한 진입 시점은 분봉 데이터로만 확인 가능합니다.
+</div>
+</div>
+
+</div>
+</body>
+</html>

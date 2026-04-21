@@ -27,11 +27,11 @@ logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
-# 1회 Claude 호출당 처리할 최대 종목 수
-_BATCH_SIZE = 20
+# 1회 Claude 호출당 처리할 최대 종목 수 (max_positions=3 → 상위 10개면 충분)
+_BATCH_SIZE = 10
 
-# Hot List 최대 종목 수 (max_positions와 맞춤 — 5종목 집중)
-_MAX_HOT_LIST = 5
+# Hot List 최대 종목 수 (max_positions=3과 일치 — 3종목 집중)
+_MAX_HOT_LIST = 3
 
 # ─────────────────────────────────────────────────────────────────────
 # 정적 시스템 프롬프트 — 캐시 대상 (1024 토큰 이상, 5분마다 재사용)
@@ -61,6 +61,7 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - OBV기울기: 최근 5봉 On-Balance Volume 기울기. 양수=매수세 유입, 음수=매도세(가격 상승에도 OBV 하락=위험)
 - StochRSI: Stochastic RSI(14,14). 80↑=단기 과매수(주의), 20↓=과매도(반등 대기), 50~80=모멘텀 지속
 - 모멘텀점수: 거래량·MACD·BB폭·OBV 종합 점수(0~100). 높을수록 신호 품질 우수
+- 당일범위위치(day_range): (현재가-당일저가)/(당일고가-당일저가). 0=저가권(눌림 반등 유리), 0.9↑=고가권(추격 주의)
 - 외인순매수: 당일 외국인 순매수량(주). 양수=외인 매수우위, 음수=외인 매도우위. 제공 시 수급 강도 판단에 활용
 - 기관순매수: 당일 기관 순매수량(주). 양수=기관 매수우위. 외인+기관 동시 양수=가장 강한 수급 신호
 - 조건 태그: 거래량N배 / 가격+N% / BB돌파 (동시 충족할수록 신호 강도 높음)
@@ -106,6 +107,8 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - 글로벌 리스크 9↑ 시: RSI 60↑ 종목만 선정 (전쟁·금융위기급 보수 모드)
 - 외인+기관 동시 순매도: 기술적 신호와 무관하게 선정 보류 (세력 이탈 가능성)
 - 외인 단독 강한 순매도 (음수 규모가 거래량의 10%↑): 기술적 신호만으로 선정 불가
+- 당일범위위치(day_range) 0.90↑ + 등락 +3%↑: 당일 고가권 추격 매수 — 선정 자제
+  (예외: BB돌파 + OBV↑ 동반 시 선정 가능, reason에 "고가권돌파" 명시)
 
 ## 시장 상황별 선정 강도 조절
 - 시장점수 +0.5↑: 적극 선정 (최대 10종목까지 허용)
@@ -157,15 +160,17 @@ def _build_user_message(
             supply_parts.append(f"기관{s.inst_net_buy:+,}")
         supply_str = f" | 수급({'/'.join(supply_parts)}주)" if supply_parts else ""
         # 추가 보조지표 문자열
-        obv_str = f"OBV{'↑' if s.obv_slope > 0 else '↓'}{s.obv_slope:+.2f}"
-        bbw_str = f"BB폭{s.bb_width_ratio:.2f}x" + ("🔥" if s.bb_width_ratio >= 1.3 else "")
-        srsi_str = f"StochRSI {s.stoch_rsi:.0f}" + ("⚠️" if s.stoch_rsi >= 85 else "")
+        obv_str   = f"OBV{'↑' if s.obv_slope > 0 else '↓'}{s.obv_slope:+.2f}"
+        bbw_str   = f"BB폭{s.bb_width_ratio:.2f}x" + ("🔥" if s.bb_width_ratio >= 1.3 else "")
+        srsi_str  = f"StochRSI {s.stoch_rsi:.0f}" + ("⚠️" if s.stoch_rsi >= 85 else "")
         mscore_str = f"모멘텀{s.momentum_score:.0f}점"
+        drp = getattr(s, "day_range_pos", 0.5)
+        drp_str = f"당일범위{drp:.2f}" + ("⚠️고가권" if drp >= 0.90 else ("↓저가권" if drp <= 0.20 else ""))
         lines.append(
             f"- {s.ticker}({s.name}): "
             f"등락{s.change_pct:+.1f}% | RSI {s.rsi:.0f} | "
             f"MACD히스토그램 {s.macd_hist:+.4f} | BB위치 {s.bb_position:.2f} | "
-            f"MA20{'위' if s.above_ma20 else '아래'} | {obv_str} | {bbw_str} | {srsi_str} | {mscore_str}"
+            f"MA20{'위' if s.above_ma20 else '아래'} | {obv_str} | {bbw_str} | {srsi_str} | {mscore_str} | {drp_str}"
             f"{supply_str} | {flag_str}"
         )
     stock_block = "\n".join(lines)

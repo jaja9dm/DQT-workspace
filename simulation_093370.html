@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>DQT 시뮬레이션 v2 — 후성(093370) 2026-04-17</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;
+     background:#f1f5f9;color:#1e293b;line-height:1.6}
+.wrap{max-width:1220px;margin:0 auto;padding:32px 16px}
+h1{font-size:24px;font-weight:900;color:#0f172a}
+.meta{color:#64748b;font-size:13px;margin-top:4px;margin-bottom:28px}
+.cmp{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-bottom:28px}
+.rbox{border-radius:16px;padding:24px;text-align:center;border:2px solid;background:#fff}
+.ra{border-color:#fca5a5}
+.rb{border-color:#86efac}
+.rd{border-color:#93c5fd}
+.r-title{font-size:10px;color:#94a3b8;font-weight:700;letter-spacing:1px;
+          text-transform:uppercase;margin-bottom:10px}
+.r-amt{font-size:38px;font-weight:900;margin:4px 0}
+.r-pct{font-size:20px;font-weight:700}
+.r-lbl{font-size:11px;color:#94a3b8;margin-top:10px;line-height:1.5}
+.tabs{display:flex;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+.tab{padding:8px 18px;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600;
+      border:1px solid #cbd5e1;color:#64748b;background:#fff;transition:.15s}
+.tab.active{background:#3b82f6;border-color:#3b82f6;color:#fff}
+.section{display:none}.section.active{display:block}
+.card{background:#fff;border-radius:12px;border:1px solid #e2e8f0;
+       margin-bottom:20px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,.05)}
+.ch{padding:14px 18px;border-bottom:1px solid #f1f5f9;font-weight:700;font-size:14px;color:#0f172a}
+.cb{padding:18px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{padding:9px 12px;text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.6px;
+    color:#94a3b8;background:#f8fafc;border-bottom:2px solid #f1f5f9;white-space:nowrap}
+td{border-bottom:1px solid #f8fafc;vertical-align:middle}
+tr:last-child td{border-bottom:none}
+.g3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px}
+.stat{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px;text-align:center}
+.stat .lbl{font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:.6px;font-weight:600}
+.stat .val{font-size:22px;font-weight:800;color:#0f172a;margin-top:2px}
+.note{background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:14px 18px;
+       font-size:12px;color:#1d4ed8;line-height:1.8;margin-top:16px}
+.warn{background:#fefce8;border:1px solid #fde047;border-radius:10px;padding:14px 18px;
+       font-size:12px;color:#713f12;line-height:1.8;margin-top:12px}
+@media(max-width:680px){.cmp,.g3,.g2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>🤖 DQT 시뮬레이션 v2 — 후성(093370)</h1>
+<div class="meta">
+  2026년 04월 17일 (금) &nbsp;·&nbsp; 1분봉 완전 재생 &nbsp;·&nbsp;
+  투자 원금 1,000,000원 &nbsp;·&nbsp;
+  <strong>구 로직 vs 신 로직 매매 비교</strong>
+</div>
+
+<div class="cmp">
+  <div class="rbox ra">
+    <div class="r-title">시나리오 A — 구 로직</div>
+    <div class="r-amt" style="color:#10b981">+17,001원</div>
+    <div class="r-pct" style="color:#10b981">+1.70%</div>
+    <div class="r-lbl">OR sell_pre (즉시 전량 청산)<br>AND buy_pre · Gate 4.5 없음</div>
+  </div>
+  <div class="rbox rb">
+    <div class="r-title">시나리오 B — 신 로직</div>
+    <div class="r-amt" style="color:#10b981">+21,050원</div>
+    <div class="r-pct" style="color:#10b981">+2.10%</div>
+    <div class="r-lbl">AND sell_pre (동적 부분 익절)<br>OR buy_pre · Gate 4.5 · 연속 추적</div>
+  </div>
+  <div class="rbox rd">
+    <div class="r-title">신 로직 개선폭</div>
+    <div class="r-amt" style="color:#3b82f6">▲ 4,049원</div>
+    <div class="r-pct" style="color:#3b82f6">+0.40%p</div>
+    <div class="r-lbl">신 로직이 더 유리한 결과<br>(이 종목/날짜 기준)</div>
+  </div>
+</div>
+
+<div class="tabs">
+  <button class="tab active" onclick="sw(this,'tc')">📊 차트</button>
+  <button class="tab" onclick="sw(this,'ta')">🅰 구 로직 상세</button>
+  <button class="tab" onclick="sw(this,'tb')">🅱 신 로직 상세</button>
+  <button class="tab" onclick="sw(this,'talgo')">⚡ 알고리즘 비교</button>
+  <button class="tab" onclick="sw(this,'ttl')">🕐 타임라인</button>
+  <button class="tab" onclick="sw(this,'tpar')">⚙ 파라미터</button>
+</div>
+
+<!-- 차트 -->
+<div id="tc" class="section active">
+  <div class="card">
+    <div class="ch">📈 후성(093370) 1분봉 가격 차트 — 매매 포인트 표시</div>
+    <div class="cb"><canvas id="cMain" height="100"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="ch">📊 MACD 히스토그램 (3분봉) &nbsp;
+      <span style="font-size:11px;font-weight:400;color:#64748b">
+        <span style="color:#10b981">■</span> buy_pre &nbsp;
+        <span style="color:#ef4444">■</span> sell_pre &nbsp;
+        <span style="color:#60a5fa">■</span> 양수/hold &nbsp;
+        <span style="color:#94a3b8">■</span> 음수/hold
+      </span>
+    </div>
+    <div class="cb"><canvas id="cMacd" height="70"></canvas></div>
+  </div>
+  <div class="g3">
+    <div class="stat"><div class="lbl">시가</div><div class="val">13,070원</div></div>
+    <div class="stat"><div class="lbl">종가</div><div class="val" style="color:#10b981">13,955원</div></div>
+    <div class="stat"><div class="lbl">일중 고가</div><div class="val">14,430원</div></div>
+    <div class="stat"><div class="lbl">일중 저가</div><div class="val" style="color:#ef4444">12,060원</div></div>
+    <div class="stat"><div class="lbl">당일 등락률</div><div class="val" style="color:#10b981">+6.77%</div></div>
+    <div class="stat"><div class="lbl">장중 최대 진폭</div><div class="val">+19.8%</div></div>
+  </div>
+</div>
+
+<!-- 시나리오 A -->
+<div id="ta" class="section">
+  <div class="card">
+    <div class="ch">🅰 구 로직 — OR sell_pre · AND buy_pre · 즉시 전량 청산</div>
+    <table>
+      <thead><tr><th>시각</th><th>유형</th><th>체결가</th><th>수량</th><th>사유</th><th>손익</th></tr></thead>
+      <tbody>
+        <tr style="background:#dcfce7">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">09:10</td>
+          <td style="padding:8px 12px"><span style="background:#10b981;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">1차 매수</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">12,420원</td>
+          <td style="padding:8px 12px;color:#374151">48</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">1차 매수 (60%) — Opening Gate 해제 <span style="color:#64748b;font-size:11px">평단 12,420원</span> <span style="color:#ef4444;font-size:11px">손절 12,172원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#fee2e2">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">09:15</td>
+          <td style="padding:8px 12px"><span style="background:#ef4444;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">손절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">12,172원</td>
+          <td style="padding:8px 12px;color:#374151">48</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">초기 손절 (−2%)</td>
+          <td style="padding:8px 12px"><span style="color:#ef4444;font-weight:800;">-11,904원&nbsp;(-2.00%)</span></td>
+        </tr>
+        <tr style="background:#d1fae5">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">09:40</td>
+          <td style="padding:8px 12px"><span style="background:#059669;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">재진입</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,030원</td>
+          <td style="padding:8px 12px;color:#374151">46</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">MACD 재진입 (vs 3.6배 / buy_pre·buy_pre) <span style="color:#64748b;font-size:11px">평단 13,030원</span> <span style="color:#ef4444;font-size:11px">손절 12,769원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#ede9fe">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">10:01</td>
+          <td style="padding:8px 12px"><span style="background:#8b5cf6;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">트레일링 활성</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,460원</td>
+          <td style="padding:8px 12px;color:#374151">—</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 활성 — 진입가 +3% 돌파 <span style="color:#64748b;font-size:11px">평단 13,030원</span> <span style="color:#ef4444;font-size:11px">손절 13,191원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#fee2e2">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">10:05</td>
+          <td style="padding:8px 12px"><span style="background:#ef4444;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">손절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,377원</td>
+          <td style="padding:8px 12px;color:#374151">46</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 손절 (−2%)</td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+15,962원&nbsp;(+2.66%)</span></td>
+        </tr>
+        <tr style="background:#d1fae5">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">11:15</td>
+          <td style="padding:8px 12px"><span style="background:#059669;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">재진입</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,870원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">MACD 재진입 (vs 2.8배 / buy_pre·buy_pre) <span style="color:#64748b;font-size:11px">평단 13,870원</span> <span style="color:#ef4444;font-size:11px">손절 13,593원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#ede9fe">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">12:01</td>
+          <td style="padding:8px 12px"><span style="background:#8b5cf6;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">트레일링 활성</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">14,430원</td>
+          <td style="padding:8px 12px;color:#374151">—</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 활성 — 진입가 +3% 돌파 <span style="color:#64748b;font-size:11px">평단 13,870원</span> <span style="color:#ef4444;font-size:11px">손절 14,141원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#fee2e2">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">12:10</td>
+          <td style="padding:8px 12px"><span style="background:#ef4444;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">손절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">14,141원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 손절 (−2%)</td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+11,653원&nbsp;(+1.95%)</span></td>
+        </tr>
+        <tr style="background:#d1fae5">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">14:50</td>
+          <td style="padding:8px 12px"><span style="background:#059669;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">재진입</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,930원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">MACD 재진입 (vs 2.8배 / buy_pre·buy_pre) <span style="color:#64748b;font-size:11px">평단 13,930원</span> <span style="color:#ef4444;font-size:11px">손절 13,651원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#f8fafc">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">14:59</td>
+          <td style="padding:8px 12px"><span style="background:#475569;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">장마감</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,960원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">장마감 (+0.2%)</td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+1,290원&nbsp;(+0.22%)</span></td>
+        </tr></tbody>
+    </table>
+  </div>
+  <div class="note">
+    💡 <strong>구 로직 특성:</strong>
+    두 타임프레임 중 하나만 하강(OR)해도 즉시 전량 청산 → 단기 노이즈에도 포지션이 청산됩니다.
+    buy_pre는 AND 조건(둘 다 상승)이어야 재진입 → 더 늦게 들어갑니다.
+  </div>
+</div>
+
+<!-- 시나리오 B -->
+<div id="tb" class="section">
+  <div class="card">
+    <div class="ch">🅱 신 로직 — AND sell_pre · OR buy_pre · 동적 부분 익절 · 연속 추적</div>
+    <table>
+      <thead><tr><th>시각</th><th>유형</th><th>체결가</th><th>수량</th><th>사유</th><th>손익</th></tr></thead>
+      <tbody>
+        <tr style="background:#dcfce7">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">09:10</td>
+          <td style="padding:8px 12px"><span style="background:#10b981;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">1차 매수</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">12,420원</td>
+          <td style="padding:8px 12px;color:#374151">48</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">1차 매수 (60%) — Opening Gate 해제 <span style="color:#64748b;font-size:11px">평단 12,420원</span> <span style="color:#ef4444;font-size:11px">손절 12,172원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#fee2e2">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">09:15</td>
+          <td style="padding:8px 12px"><span style="background:#ef4444;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">손절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">12,172원</td>
+          <td style="padding:8px 12px;color:#374151">48</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">초기 손절 (−2%)</td>
+          <td style="padding:8px 12px"><span style="color:#ef4444;font-weight:800;">-11,904원&nbsp;(-2.00%)</span></td>
+        </tr>
+        <tr style="background:#d1fae5">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">09:40</td>
+          <td style="padding:8px 12px"><span style="background:#059669;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">재진입</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,030원</td>
+          <td style="padding:8px 12px;color:#374151">46</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">MACD 재진입 (vs 3.6배 / buy_pre·buy_pre) <span style="color:#64748b;font-size:11px">평단 13,030원</span> <span style="color:#ef4444;font-size:11px">손절 12,769원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#ede9fe">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">10:01</td>
+          <td style="padding:8px 12px"><span style="background:#8b5cf6;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">트레일링 활성</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,460원</td>
+          <td style="padding:8px 12px;color:#374151">—</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 활성 — 진입가 +3% 돌파 <span style="color:#64748b;font-size:11px">평단 13,030원</span> <span style="color:#ef4444;font-size:11px">손절 13,191원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#dbeafe">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">10:02</td>
+          <td style="padding:8px 12px"><span style="background:#3b82f6;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">부분 익절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,430원</td>
+          <td style="padding:8px 12px;color:#374151">19</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">동적 부분익절 42% | 소진도 0.25 | MACD피크감소 <span style="color:#64748b;font-size:11px">평단 13,030원</span> <span style="color:#ef4444;font-size:11px">손절 13,191원</span></td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+7,600원&nbsp;(+3.07%)</span></td>
+        </tr>
+        <tr style="background:#fee2e2">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">10:05</td>
+          <td style="padding:8px 12px"><span style="background:#ef4444;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">손절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,377원</td>
+          <td style="padding:8px 12px;color:#374151">27</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 손절 (−2%)</td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+9,369원&nbsp;(+2.66%)</span></td>
+        </tr>
+        <tr style="background:#d1fae5">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">11:15</td>
+          <td style="padding:8px 12px"><span style="background:#059669;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">재진입</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,870원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">MACD 재진입 (vs 2.8배 / buy_pre·buy_pre) <span style="color:#64748b;font-size:11px">평단 13,870원</span> <span style="color:#ef4444;font-size:11px">손절 13,593원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#ede9fe">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">12:01</td>
+          <td style="padding:8px 12px"><span style="background:#8b5cf6;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">트레일링 활성</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">14,430원</td>
+          <td style="padding:8px 12px;color:#374151">—</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 활성 — 진입가 +3% 돌파 <span style="color:#64748b;font-size:11px">평단 13,870원</span> <span style="color:#ef4444;font-size:11px">손절 14,141원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#dbeafe">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">12:02</td>
+          <td style="padding:8px 12px"><span style="background:#3b82f6;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">부분 익절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">14,310원</td>
+          <td style="padding:8px 12px;color:#374151">18</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">동적 부분익절 42% | 소진도 0.25 | MACD피크감소 <span style="color:#64748b;font-size:11px">평단 13,870원</span> <span style="color:#ef4444;font-size:11px">손절 14,141원</span></td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+7,920원&nbsp;(+3.17%)</span></td>
+        </tr>
+        <tr style="background:#fee2e2">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">12:10</td>
+          <td style="padding:8px 12px"><span style="background:#ef4444;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">손절</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">14,141원</td>
+          <td style="padding:8px 12px;color:#374151">25</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">트레일링 손절 (−2%)</td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+6,775원&nbsp;(+1.95%)</span></td>
+        </tr>
+        <tr style="background:#d1fae5">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">14:50</td>
+          <td style="padding:8px 12px"><span style="background:#059669;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">재진입</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,930원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">MACD 재진입 (vs 2.8배 / buy_pre·buy_pre) <span style="color:#64748b;font-size:11px">평단 13,930원</span> <span style="color:#ef4444;font-size:11px">손절 13,651원</span></td>
+          <td style="padding:8px 12px"></td>
+        </tr>
+        <tr style="background:#f8fafc">
+          <td style="padding:8px 12px;font-weight:700;white-space:nowrap;color:#1e293b">14:59</td>
+          <td style="padding:8px 12px"><span style="background:#475569;color:#fff;padding:2px 10px;border-radius:12px;font-size:11px;font-weight:700;">장마감</span></td>
+          <td style="padding:8px 12px;font-weight:700;color:#1e293b">13,960원</td>
+          <td style="padding:8px 12px;color:#374151">43</td>
+          <td style="padding:8px 12px;color:#374151;font-size:12px">장마감 (+0.2%)</td>
+          <td style="padding:8px 12px"><span style="color:#10b981;font-weight:800;">+1,290원&nbsp;(+0.22%)</span></td>
+        </tr></tbody>
+    </table>
+  </div>
+  <div class="note">
+    💡 <strong>신 로직 특성:</strong>
+    sell_pre는 양쪽 타임프레임 모두 양수에서 하강해야 발동(AND) → 단기 노이즈에 덜 민감합니다.
+    소진도 점수로 부분 익절 비율을 동적 결정 → 잔여 포지션으로 추가 수익을 노립니다.
+    "파란 바" 3연속 누적 시 잔여 전량 청산.
+  </div>
+</div>
+
+<!-- 알고리즘 비교 -->
+<div id="talgo" class="section">
+  <div class="card">
+    <div class="ch">⚡ 알고리즘 변경 상세 비교</div>
+    <table>
+      <thead><tr>
+        <th style="width:22%">항목</th>
+        <th style="width:39%">🅰 구 로직 (이전)</th>
+        <th style="width:39%">🅱 신 로직 (현재)</th>
+      </tr></thead>
+      <tbody><tr>
+          <td style="padding:10px 14px;font-weight:600;color:#475569;font-size:13px">buy_pre 조합</td>
+          <td style="padding:10px 14px;color:#ef4444;font-size:13px">3m AND 5m 모두 상승</td>
+          <td style="padding:10px 14px;color:#10b981;font-size:13px">3m OR 5m 중 하나만 상승</td>
+        </tr><tr>
+          <td style="padding:10px 14px;font-weight:600;color:#475569;font-size:13px">sell_pre 조합</td>
+          <td style="padding:10px 14px;color:#ef4444;font-size:13px">3m OR 5m 하강 (부호 무관)</td>
+          <td style="padding:10px 14px;color:#10b981;font-size:13px">3m AND 5m 모두 양수 구간에서 하강</td>
+        </tr><tr>
+          <td style="padding:10px 14px;font-weight:600;color:#475569;font-size:13px">Gate 4.5</td>
+          <td style="padding:10px 14px;color:#ef4444;font-size:13px">없음 — 조건 없이 진입</td>
+          <td style="padding:10px 14px;color:#10b981;font-size:13px">sell_pre 차단 + 09:30 전 buy_pre 확인</td>
+        </tr><tr>
+          <td style="padding:10px 14px;font-weight:600;color:#475569;font-size:13px">청산 방식</td>
+          <td style="padding:10px 14px;color:#ef4444;font-size:13px">즉시 전량 청산</td>
+          <td style="padding:10px 14px;color:#10b981;font-size:13px">소진도 기반 동적 부분 익절</td>
+        </tr><tr>
+          <td style="padding:10px 14px;font-weight:600;color:#475569;font-size:13px">연속 sell_pre 추적</td>
+          <td style="padding:10px 14px;color:#ef4444;font-size:13px">없음</td>
+          <td style="padding:10px 14px;color:#10b981;font-size:13px">3사이클+ → 잔여 전량 청산</td>
+        </tr><tr>
+          <td style="padding:10px 14px;font-weight:600;color:#475569;font-size:13px">재진입 buy 조건</td>
+          <td style="padding:10px 14px;color:#ef4444;font-size:13px">AND (더 엄격)</td>
+          <td style="padding:10px 14px;color:#10b981;font-size:13px">OR (더 빠른 포착)</td>
+        </tr></tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="ch">📖 변경 배경 — 사용자 매매 직관 반영</div>
+    <div class="cb" style="font-size:13px;line-height:2;color:#374151">
+      <p><strong>① buy_pre OR 완화</strong>: 히스토그램이 음수 → 회복하는 초기에는 하나의 타임프레임이 먼저 반응합니다.
+      AND 조건은 두 타임프레임이 동시에 신호를 줄 때까지 기다리므로 진입이 늦어집니다.</p>
+      <br>
+      <p><strong>② sell_pre AND + 양수 제한</strong>: OR 조건에서는 단기 노이즈 하나에도 전량 청산.
+      양쪽 모두 양수 구간에서 하강할 때만 진짜 수급 이탈로 봅니다.
+      음수 구간 하락은 이미 데드크로스가 지난 후이므로 sell_pre에서 제외합니다.</p>
+      <br>
+      <p><strong>③ 동적 부분 익절</strong>: "히스토그램 피크 찍고 내려올 때 일부 익절, 나머지 홀드"를
+      소진도(0~1) 점수로 수치화. 소진도 낮으면 모멘텀 살아있음 → 익절 안 함.
+      소진도 높을수록 많은 비율 매도(최대 80%).</p>
+      <br>
+      <p><strong>④ 연속 sell_pre (파란 바 누적)</strong>: 3사이클(9분) 연속으로 양쪽 타임프레임이
+      하강하면 "이제 나갈 때"로 판단 → 잔여 포지션 전량 청산.</p>
+    </div>
+  </div>
+  <div class="warn">
+    ⚠️ 단일 종목·날짜 기준 결과입니다. 알고리즘의 실제 유효성은
+    충분한 종목과 기간에 걸친 백테스트로 검증해야 합니다.
+  </div>
+</div>
+
+<!-- 타임라인 -->
+<div id="ttl" class="section">
+  <div class="card">
+    <div class="ch">🕐 당일 주요 이벤트 타임라인</div>
+    <div class="cb">
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#3b82f6;font-size:13px">09:02</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">시가 형성</div>
+            <div style="font-size:12px;color:#64748b">전일 대비 강세 갭업 시작</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#10b981;font-size:13px">09:10</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">Opening Gate 해제</div>
+            <div style="font-size:12px;color:#64748b">DQT 1차 매수 집행 (60% 비중)</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#ef4444;font-size:13px">09:15</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">초기 손절 발동</div>
+            <div style="font-size:12px;color:#64748b">Low 하락 → 초기 손절선(−2%) 돌파</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#f59e0b;font-size:13px">09:37</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">거래량 급증</div>
+            <div style="font-size:12px;color:#64748b">평균 4배↑ 거래량 + MACD 반등 신호</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#8b5cf6;font-size:13px">09:40~41</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">1차 급등 피크</div>
+            <div style="font-size:12px;color:#64748b">거래량 절정, MACD 히스토그램 급격히 확대</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#8b5cf6;font-size:13px">10:04</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">2차 급등</div>
+            <div style="font-size:12px;color:#64748b">13,630원 돌파 — 트레일링 손절선 상승</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#8b5cf6;font-size:13px">11:58</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">3차 급등</div>
+            <div style="font-size:12px;color:#64748b">거래량 재급증 + 14,000원 대 돌파</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#10b981;font-size:13px">12:01</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">일중 최고가</div>
+            <div style="font-size:12px;color:#64748b">14,430원 — 시가 대비 +10.5%, 수급 절정</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#ef4444;font-size:13px">13:05</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">매도 압력 시작</div>
+            <div style="font-size:12px;color:#64748b">MACD 히스토그램 파란 바 출현 — 수급 이탈 시작</div>
+          </div>
+        </div>
+        <div style="display:flex;gap:16px;padding:10px 0;border-bottom:1px solid #f1f5f9">
+          <div style="min-width:52px;font-weight:700;color:#3b82f6;font-size:13px">14:47</div>
+          <div>
+            <div style="font-weight:600;font-size:13px;color:#1e293b">장마감 안정</div>
+            <div style="font-size:12px;color:#64748b">13,940원대 회복 후 횡보</div>
+          </div>
+        </div></div>
+  </div>
+</div>
+
+<!-- 파라미터 -->
+<div id="tpar" class="section">
+  <div class="card">
+    <div class="ch">⚙ 시뮬레이션 파라미터</div>
+    <div class="cb">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">투자 원금</span><span style="color:#0f172a;font-weight:700;font-size:13px">1,000,000원</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">1차 매수 비율</span><span style="color:#0f172a;font-weight:700;font-size:13px">60%</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">초기 손절</span><span style="color:#0f172a;font-weight:700;font-size:13px">진입가 −2%</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">트레일링 활성</span><span style="color:#0f172a;font-weight:700;font-size:13px">진입가 +3% 돌파</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">트레일링 플로어</span><span style="color:#0f172a;font-weight:700;font-size:13px">고점 −2%</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">거래량 급증 기준</span><span style="color:#0f172a;font-weight:700;font-size:13px">평균 대비 ×2.5</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">Opening Gate</span><span style="color:#0f172a;font-weight:700;font-size:13px">09:10</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">시간컷</span><span style="color:#0f172a;font-weight:700;font-size:13px">14:50 (수익권)</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">연속 sell_pre</span><span style="color:#0f172a;font-weight:700;font-size:13px">3사이클 → 잔여 전량 청산</span></div><div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center"><span style="color:#64748b;font-size:13px">수수료</span><span style="color:#0f172a;font-weight:700;font-size:13px">미반영 (~왕복 1,950원)</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+<script>
+function sw(btn, id) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  btn.classList.add('active');
+  document.getElementById(id).classList.add('active');
+}
+
+const pd = [{"time": "09:02", "close": 13070.0, "high": 13200.0, "low": 12910.0, "stop": null, "avg": null, "peak": null}, {"time": "09:03", "close": 12630.0, "high": 13100.0, "low": 12610.0, "stop": null, "avg": null, "peak": null}, {"time": "09:04", "close": 12580.0, "high": 12630.0, "low": 12320.0, "stop": null, "avg": null, "peak": null}, {"time": "09:05", "close": 12590.0, "high": 12610.0, "low": 12500.0, "stop": null, "avg": null, "peak": null}, {"time": "09:06", "close": 12700.0, "high": 12700.0, "low": 12550.0, "stop": null, "avg": null, "peak": null}, {"time": "09:07", "close": 12800.0, "high": 12800.0, "low": 12670.0, "stop": null, "avg": null, "peak": null}, {"time": "09:08", "close": 12660.0, "high": 12800.0, "low": 12650.0, "stop": null, "avg": null, "peak": null}, {"time": "09:09", "close": 12490.0, "high": 12660.0, "low": 12470.0, "stop": null, "avg": null, "peak": null}, {"time": "09:10", "close": 12420.0, "high": 12490.0, "low": 12270.0, "stop": null, "avg": null, "peak": null}, {"time": "09:11", "close": 12510.0, "high": 12510.0, "low": 12400.0, "stop": 12172, "avg": 12420, "peak": null}, {"time": "09:12", "close": 12440.0, "high": 12520.0, "low": 12440.0, "stop": 12172, "avg": 12420, "peak": null}, {"time": "09:13", "close": 12230.0, "high": 12460.0, "low": 12190.0, "stop": 12172, "avg": 12420, "peak": null}, {"time": "09:14", "close": 12200.0, "high": 12300.0, "low": 12200.0, "stop": 12172, "avg": 12420, "peak": null}, {"time": "09:15", "close": 12170.0, "high": 12210.0, "low": 12060.0, "stop": 12172, "avg": 12420, "peak": null}, {"time": "09:16", "close": 12160.0, "high": 12180.0, "low": 12070.0, "stop": null, "avg": null, "peak": null}, {"time": "09:17", "close": 12130.0, "high": 12210.0, "low": 12120.0, "stop": null, "avg": null, "peak": null}, {"time": "09:18", "close": 12210.0, "high": 12220.0, "low": 12120.0, "stop": null, "avg": null, "peak": null}, {"time": "09:19", "close": 12270.0, "high": 12310.0, "low": 12200.0, "stop": null, "avg": null, "peak": null}, {"time": "09:20", "close": 12350.0, "high": 12350.0, "low": 12250.0, "stop": null, "avg": null, "peak": null}, {"time": "09:21", "close": 12390.0, "high": 12450.0, "low": 12340.0, "stop": null, "avg": null, "peak": null}, {"time": "09:22", "close": 12350.0, "high": 12410.0, "low": 12350.0, "stop": null, "avg": null, "peak": null}, {"time": "09:23", "close": 12260.0, "high": 12370.0, "low": 12250.0, "stop": null, "avg": null, "peak": null}, {"time": "09:24", "close": 12330.0, "high": 12340.0, "low": 12250.0, "stop": null, "avg": null, "peak": null}, {"time": "09:25", "close": 12450.0, "high": 12450.0, "low": 12320.0, "stop": null, "avg": null, "peak": null}, {"time": "09:26", "close": 12410.0, "high": 12460.0, "low": 12410.0, "stop": null, "avg": null, "peak": null}, {"time": "09:27", "close": 12350.0, "high": 12420.0, "low": 12300.0, "stop": null, "avg": null, "peak": null}, {"time": "09:28", "close": 12370.0, "high": 12390.0, "low": 12330.0, "stop": null, "avg": null, "peak": null}, {"time": "09:29", "close": 12310.0, "high": 12380.0, "low": 12300.0, "stop": null, "avg": null, "peak": null}, {"time": "09:30", "close": 12280.0, "high": 12320.0, "low": 12270.0, "stop": null, "avg": null, "peak": null}, {"time": "09:31", "close": 12430.0, "high": 12450.0, "low": 12250.0, "stop": null, "avg": null, "peak": null}, {"time": "09:32", "close": 12440.0, "high": 12450.0, "low": 12380.0, "stop": null, "avg": null, "peak": null}, {"time": "09:33", "close": 12480.0, "high": 12500.0, "low": 12430.0, "stop": null, "avg": null, "peak": null}, {"time": "09:34", "close": 12460.0, "high": 12480.0, "low": 12440.0, "stop": null, "avg": null, "peak": null}, {"time": "09:35", "close": 12440.0, "high": 12470.0, "low": 12440.0, "stop": null, "avg": null, "peak": null}, {"time": "09:36", "close": 12430.0, "high": 12460.0, "low": 12390.0, "stop": null, "avg": null, "peak": null}, {"time": "09:37", "close": 12590.0, "high": 12620.0, "low": 12420.0, "stop": null, "avg": null, "peak": null}, {"time": "09:38", "close": 12760.0, "high": 12790.0, "low": 12560.0, "stop": null, "avg": null, "peak": null}, {"time": "09:39", "close": 12800.0, "high": 12900.0, "low": 12670.0, "stop": null, "avg": null, "peak": null}, {"time": "09:40", "close": 13030.0, "high": 13130.0, "low": 12760.0, "stop": null, "avg": null, "peak": null}, {"time": "09:41", "close": 13070.0, "high": 13130.0, "low": 12920.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:42", "close": 12960.0, "high": 13080.0, "low": 12910.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:43", "close": 13150.0, "high": 13300.0, "low": 12950.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:44", "close": 13080.0, "high": 13210.0, "low": 13070.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:45", "close": 13170.0, "high": 13210.0, "low": 13080.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:46", "close": 13020.0, "high": 13190.0, "low": 12970.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:47", "close": 12960.0, "high": 13130.0, "low": 12900.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:48", "close": 12960.0, "high": 12980.0, "low": 12850.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:49", "close": 12910.0, "high": 12970.0, "low": 12900.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:50", "close": 12950.0, "high": 13030.0, "low": 12890.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:51", "close": 13040.0, "high": 13040.0, "low": 12940.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:52", "close": 12950.0, "high": 13040.0, "low": 12920.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:53", "close": 12870.0, "high": 12970.0, "low": 12800.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:54", "close": 12980.0, "high": 12980.0, "low": 12820.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:55", "close": 13110.0, "high": 13140.0, "low": 12950.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:56", "close": 13080.0, "high": 13130.0, "low": 13050.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:57", "close": 13140.0, "high": 13180.0, "low": 13070.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:58", "close": 13380.0, "high": 13400.0, "low": 13100.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "09:59", "close": 13370.0, "high": 13400.0, "low": 13120.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "10:00", "close": 13280.0, "high": 13380.0, "low": 13220.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "10:01", "close": 13420.0, "high": 13460.0, "low": 13270.0, "stop": 12769, "avg": 13030, "peak": null}, {"time": "10:02", "close": 13430.0, "high": 13440.0, "low": 13360.0, "stop": 13191, "avg": 13030, "peak": 13460}, {"time": "10:03", "close": 13380.0, "high": 13460.0, "low": 13380.0, "stop": 13191, "avg": 13030, "peak": 13460}, {"time": "10:04", "close": 13630.0, "high": 13650.0, "low": 13380.0, "stop": 13191, "avg": 13030, "peak": 13460}, {"time": "10:05", "close": 13440.0, "high": 13650.0, "low": 13370.0, "stop": 13377, "avg": 13030, "peak": 13650}, {"time": "10:06", "close": 13275.0, "high": 13490.0, "low": 13270.0, "stop": null, "avg": null, "peak": null}, {"time": "10:07", "close": 13390.0, "high": 13420.0, "low": 13240.0, "stop": null, "avg": null, "peak": null}, {"time": "10:08", "close": 13330.0, "high": 13390.0, "low": 13230.0, "stop": null, "avg": null, "peak": null}, {"time": "10:09", "close": 13410.0, "high": 13470.0, "low": 13320.0, "stop": null, "avg": null, "peak": null}, {"time": "10:10", "close": 13440.0, "high": 13480.0, "low": 13350.0, "stop": null, "avg": null, "peak": null}, {"time": "10:11", "close": 13560.0, "high": 13630.0, "low": 13370.0, "stop": null, "avg": null, "peak": null}, {"time": "10:12", "close": 13590.0, "high": 13650.0, "low": 13540.0, "stop": null, "avg": null, "peak": null}, {"time": "10:13", "close": 13680.0, "high": 13730.0, "low": 13590.0, "stop": null, "avg": null, "peak": null}, {"time": "10:14", "close": 13675.0, "high": 13730.0, "low": 13660.0, "stop": null, "avg": null, "peak": null}, {"time": "10:15", "close": 13530.0, "high": 13690.0, "low": 13530.0, "stop": null, "avg": null, "peak": null}, {"time": "10:16", "close": 13610.0, "high": 13620.0, "low": 13420.0, "stop": null, "avg": null, "peak": null}, {"time": "10:17", "close": 13560.0, "high": 13615.0, "low": 13510.0, "stop": null, "avg": null, "peak": null}, {"time": "10:18", "close": 13540.0, "high": 13590.0, "low": 13520.0, "stop": null, "avg": null, "peak": null}, {"time": "10:19", "close": 13780.0, "high": 13800.0, "low": 13540.0, "stop": null, "avg": null, "peak": null}, {"time": "10:20", "close": 13780.0, "high": 13900.0, "low": 13730.0, "stop": null, "avg": null, "peak": null}, {"time": "10:21", "close": 13870.0, "high": 13890.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "10:22", "close": 13840.0, "high": 13890.0, "low": 13790.0, "stop": null, "avg": null, "peak": null}, {"time": "10:23", "close": 13840.0, "high": 13920.0, "low": 13810.0, "stop": null, "avg": null, "peak": null}, {"time": "10:24", "close": 13810.0, "high": 13850.0, "low": 13750.0, "stop": null, "avg": null, "peak": null}, {"time": "10:25", "close": 13720.0, "high": 13870.0, "low": 13690.0, "stop": null, "avg": null, "peak": null}, {"time": "10:26", "close": 13730.0, "high": 13790.0, "low": 13670.0, "stop": null, "avg": null, "peak": null}, {"time": "10:27", "close": 13790.0, "high": 13800.0, "low": 13650.0, "stop": null, "avg": null, "peak": null}, {"time": "10:28", "close": 13680.0, "high": 13810.0, "low": 13650.0, "stop": null, "avg": null, "peak": null}, {"time": "10:29", "close": 13530.0, "high": 13750.0, "low": 13520.0, "stop": null, "avg": null, "peak": null}, {"time": "10:30", "close": 13460.0, "high": 13630.0, "low": 13450.0, "stop": null, "avg": null, "peak": null}, {"time": "10:31", "close": 13445.0, "high": 13500.0, "low": 13440.0, "stop": null, "avg": null, "peak": null}, {"time": "10:32", "close": 13460.0, "high": 13495.0, "low": 13340.0, "stop": null, "avg": null, "peak": null}, {"time": "10:33", "close": 13530.0, "high": 13570.0, "low": 13450.0, "stop": null, "avg": null, "peak": null}, {"time": "10:34", "close": 13540.0, "high": 13590.0, "low": 13520.0, "stop": null, "avg": null, "peak": null}, {"time": "10:35", "close": 13600.0, "high": 13670.0, "low": 13530.0, "stop": null, "avg": null, "peak": null}, {"time": "10:36", "close": 13650.0, "high": 13660.0, "low": 13500.0, "stop": null, "avg": null, "peak": null}, {"time": "10:37", "close": 13630.0, "high": 13660.0, "low": 13510.0, "stop": null, "avg": null, "peak": null}, {"time": "10:38", "close": 13505.0, "high": 13640.0, "low": 13500.0, "stop": null, "avg": null, "peak": null}, {"time": "10:39", "close": 13475.0, "high": 13520.0, "low": 13420.0, "stop": null, "avg": null, "peak": null}, {"time": "10:40", "close": 13430.0, "high": 13490.0, "low": 13430.0, "stop": null, "avg": null, "peak": null}, {"time": "10:41", "close": 13540.0, "high": 13550.0, "low": 13380.0, "stop": null, "avg": null, "peak": null}, {"time": "10:42", "close": 13450.0, "high": 13530.0, "low": 13430.0, "stop": null, "avg": null, "peak": null}, {"time": "10:43", "close": 13300.0, "high": 13460.0, "low": 13300.0, "stop": null, "avg": null, "peak": null}, {"time": "10:44", "close": 13330.0, "high": 13330.0, "low": 13250.0, "stop": null, "avg": null, "peak": null}, {"time": "10:45", "close": 13250.0, "high": 13340.0, "low": 13250.0, "stop": null, "avg": null, "peak": null}, {"time": "10:46", "close": 13320.0, "high": 13350.0, "low": 13250.0, "stop": null, "avg": null, "peak": null}, {"time": "10:47", "close": 13230.0, "high": 13320.0, "low": 13230.0, "stop": null, "avg": null, "peak": null}, {"time": "10:48", "close": 13430.0, "high": 13430.0, "low": 13230.0, "stop": null, "avg": null, "peak": null}, {"time": "10:49", "close": 13390.0, "high": 13430.0, "low": 13370.0, "stop": null, "avg": null, "peak": null}, {"time": "10:50", "close": 13360.0, "high": 13390.0, "low": 13350.0, "stop": null, "avg": null, "peak": null}, {"time": "10:51", "close": 13470.0, "high": 13490.0, "low": 13340.0, "stop": null, "avg": null, "peak": null}, {"time": "10:52", "close": 13400.0, "high": 13500.0, "low": 13370.0, "stop": null, "avg": null, "peak": null}, {"time": "10:53", "close": 13375.0, "high": 13420.0, "low": 13370.0, "stop": null, "avg": null, "peak": null}, {"time": "10:54", "close": 13410.0, "high": 13420.0, "low": 13330.0, "stop": null, "avg": null, "peak": null}, {"time": "10:55", "close": 13340.0, "high": 13410.0, "low": 13330.0, "stop": null, "avg": null, "peak": null}, {"time": "10:56", "close": 13370.0, "high": 13380.0, "low": 13300.0, "stop": null, "avg": null, "peak": null}, {"time": "10:57", "close": 13470.0, "high": 13530.0, "low": 13370.0, "stop": null, "avg": null, "peak": null}, {"time": "10:58", "close": 13460.0, "high": 13490.0, "low": 13430.0, "stop": null, "avg": null, "peak": null}, {"time": "10:59", "close": 13470.0, "high": 13470.0, "low": 13410.0, "stop": null, "avg": null, "peak": null}, {"time": "11:00", "close": 13430.0, "high": 13480.0, "low": 13430.0, "stop": null, "avg": null, "peak": null}, {"time": "11:01", "close": 13600.0, "high": 13620.0, "low": 13430.0, "stop": null, "avg": null, "peak": null}, {"time": "11:02", "close": 13570.0, "high": 13605.0, "low": 13540.0, "stop": null, "avg": null, "peak": null}, {"time": "11:03", "close": 13580.0, "high": 13650.0, "low": 13560.0, "stop": null, "avg": null, "peak": null}, {"time": "11:04", "close": 13500.0, "high": 13590.0, "low": 13490.0, "stop": null, "avg": null, "peak": null}, {"time": "11:05", "close": 13510.0, "high": 13530.0, "low": 13480.0, "stop": null, "avg": null, "peak": null}, {"time": "11:06", "close": 13590.0, "high": 13600.0, "low": 13500.0, "stop": null, "avg": null, "peak": null}, {"time": "11:07", "close": 13540.0, "high": 13650.0, "low": 13540.0, "stop": null, "avg": null, "peak": null}, {"time": "11:08", "close": 13590.0, "high": 13610.0, "low": 13540.0, "stop": null, "avg": null, "peak": null}, {"time": "11:09", "close": 13610.0, "high": 13640.0, "low": 13580.0, "stop": null, "avg": null, "peak": null}, {"time": "11:10", "close": 13570.0, "high": 13630.0, "low": 13550.0, "stop": null, "avg": null, "peak": null}, {"time": "11:11", "close": 13610.0, "high": 13620.0, "low": 13570.0, "stop": null, "avg": null, "peak": null}, {"time": "11:12", "close": 13590.0, "high": 13630.0, "low": 13570.0, "stop": null, "avg": null, "peak": null}, {"time": "11:13", "close": 13750.0, "high": 13750.0, "low": 13580.0, "stop": null, "avg": null, "peak": null}, {"time": "11:14", "close": 13830.0, "high": 13860.0, "low": 13710.0, "stop": null, "avg": null, "peak": null}, {"time": "11:15", "close": 13870.0, "high": 13910.0, "low": 13830.0, "stop": null, "avg": null, "peak": null}, {"time": "11:16", "close": 13900.0, "high": 13960.0, "low": 13810.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:17", "close": 13900.0, "high": 13940.0, "low": 13900.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:18", "close": 13870.0, "high": 13940.0, "low": 13850.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:19", "close": 13870.0, "high": 13920.0, "low": 13750.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:20", "close": 13950.0, "high": 13950.0, "low": 13850.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:21", "close": 13860.0, "high": 13950.0, "low": 13830.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:22", "close": 13800.0, "high": 13900.0, "low": 13790.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:23", "close": 13770.0, "high": 13860.0, "low": 13770.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:24", "close": 13830.0, "high": 13840.0, "low": 13720.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:25", "close": 13770.0, "high": 13840.0, "low": 13770.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:26", "close": 13690.0, "high": 13775.0, "low": 13690.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:27", "close": 13680.0, "high": 13720.0, "low": 13650.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:28", "close": 13690.0, "high": 13760.0, "low": 13680.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:29", "close": 13680.0, "high": 13700.0, "low": 13680.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:30", "close": 13740.0, "high": 13750.0, "low": 13680.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:31", "close": 13700.0, "high": 13750.0, "low": 13690.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:32", "close": 13810.0, "high": 13810.0, "low": 13700.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:33", "close": 13780.0, "high": 13830.0, "low": 13750.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:34", "close": 13760.0, "high": 13780.0, "low": 13700.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:35", "close": 13820.0, "high": 13830.0, "low": 13730.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:36", "close": 13850.0, "high": 13880.0, "low": 13810.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:37", "close": 13990.0, "high": 14050.0, "low": 13840.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:38", "close": 13990.0, "high": 14050.0, "low": 13930.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:39", "close": 13990.0, "high": 14030.0, "low": 13980.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:40", "close": 14040.0, "high": 14040.0, "low": 13960.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:41", "close": 14000.0, "high": 14050.0, "low": 13990.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:42", "close": 14070.0, "high": 14100.0, "low": 13990.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:43", "close": 14020.0, "high": 14110.0, "low": 14010.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:44", "close": 13930.0, "high": 14030.0, "low": 13910.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:45", "close": 14030.0, "high": 14050.0, "low": 13930.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:46", "close": 13980.0, "high": 14050.0, "low": 13960.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:47", "close": 13940.0, "high": 14000.0, "low": 13910.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:48", "close": 14030.0, "high": 14050.0, "low": 13930.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:49", "close": 14090.0, "high": 14140.0, "low": 14000.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:50", "close": 14060.0, "high": 14150.0, "low": 14030.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:51", "close": 14100.0, "high": 14120.0, "low": 14040.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:52", "close": 14100.0, "high": 14130.0, "low": 14080.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:53", "close": 14100.0, "high": 14120.0, "low": 14090.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:54", "close": 14040.0, "high": 14110.0, "low": 14010.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:55", "close": 14040.0, "high": 14070.0, "low": 14020.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:56", "close": 14080.0, "high": 14080.0, "low": 14030.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:57", "close": 14100.0, "high": 14100.0, "low": 14070.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "11:58", "close": 14240.0, "high": 14240.0, "low": 14080.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "12:01", "close": 14360.0, "high": 14430.0, "low": 14250.0, "stop": 13593, "avg": 13870, "peak": null}, {"time": "12:02", "close": 14310.0, "high": 14400.0, "low": 14300.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:03", "close": 14340.0, "high": 14370.0, "low": 14300.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:04", "close": 14320.0, "high": 14340.0, "low": 14300.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:05", "close": 14240.0, "high": 14360.0, "low": 14210.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:06", "close": 14270.0, "high": 14310.0, "low": 14210.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:07", "close": 14280.0, "high": 14310.0, "low": 14270.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:08", "close": 14230.0, "high": 14290.0, "low": 14210.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:09", "close": 14220.0, "high": 14280.0, "low": 14220.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:10", "close": 14090.0, "high": 14250.0, "low": 14070.0, "stop": 14141, "avg": 13870, "peak": 14430}, {"time": "12:11", "close": 14080.0, "high": 14180.0, "low": 14070.0, "stop": null, "avg": null, "peak": null}, {"time": "12:12", "close": 14120.0, "high": 14160.0, "low": 14070.0, "stop": null, "avg": null, "peak": null}, {"time": "12:13", "close": 14060.0, "high": 14160.0, "low": 14050.0, "stop": null, "avg": null, "peak": null}, {"time": "12:14", "close": 14100.0, "high": 14100.0, "low": 14050.0, "stop": null, "avg": null, "peak": null}, {"time": "12:15", "close": 14100.0, "high": 14140.0, "low": 14080.0, "stop": null, "avg": null, "peak": null}, {"time": "12:16", "close": 14130.0, "high": 14140.0, "low": 14100.0, "stop": null, "avg": null, "peak": null}, {"time": "12:17", "close": 14020.0, "high": 14130.0, "low": 14020.0, "stop": null, "avg": null, "peak": null}, {"time": "12:18", "close": 14060.0, "high": 14110.0, "low": 14030.0, "stop": null, "avg": null, "peak": null}, {"time": "12:19", "close": 14160.0, "high": 14190.0, "low": 14060.0, "stop": null, "avg": null, "peak": null}, {"time": "12:20", "close": 14160.0, "high": 14180.0, "low": 14110.0, "stop": null, "avg": null, "peak": null}, {"time": "12:21", "close": 14160.0, "high": 14190.0, "low": 14150.0, "stop": null, "avg": null, "peak": null}, {"time": "12:22", "close": 14130.0, "high": 14170.0, "low": 14100.0, "stop": null, "avg": null, "peak": null}, {"time": "12:23", "close": 14190.0, "high": 14200.0, "low": 14120.0, "stop": null, "avg": null, "peak": null}, {"time": "12:24", "close": 14150.0, "high": 14200.0, "low": 14130.0, "stop": null, "avg": null, "peak": null}, {"time": "12:25", "close": 14240.0, "high": 14260.0, "low": 14140.0, "stop": null, "avg": null, "peak": null}, {"time": "12:26", "close": 14240.0, "high": 14250.0, "low": 14230.0, "stop": null, "avg": null, "peak": null}, {"time": "12:27", "close": 14180.0, "high": 14240.0, "low": 14180.0, "stop": null, "avg": null, "peak": null}, {"time": "12:28", "close": 14180.0, "high": 14200.0, "low": 14160.0, "stop": null, "avg": null, "peak": null}, {"time": "12:29", "close": 14180.0, "high": 14190.0, "low": 14170.0, "stop": null, "avg": null, "peak": null}, {"time": "12:30", "close": 14130.0, "high": 14190.0, "low": 14120.0, "stop": null, "avg": null, "peak": null}, {"time": "12:31", "close": 14200.0, "high": 14200.0, "low": 14110.0, "stop": null, "avg": null, "peak": null}, {"time": "12:32", "close": 14180.0, "high": 14210.0, "low": 14180.0, "stop": null, "avg": null, "peak": null}, {"time": "12:33", "close": 14150.0, "high": 14190.0, "low": 14150.0, "stop": null, "avg": null, "peak": null}, {"time": "12:34", "close": 14115.0, "high": 14160.0, "low": 14110.0, "stop": null, "avg": null, "peak": null}, {"time": "12:35", "close": 14050.0, "high": 14120.0, "low": 14050.0, "stop": null, "avg": null, "peak": null}, {"time": "12:36", "close": 14150.0, "high": 14150.0, "low": 14050.0, "stop": null, "avg": null, "peak": null}, {"time": "12:37", "close": 14210.0, "high": 14220.0, "low": 14140.0, "stop": null, "avg": null, "peak": null}, {"time": "12:38", "close": 14210.0, "high": 14220.0, "low": 14170.0, "stop": null, "avg": null, "peak": null}, {"time": "12:39", "close": 14180.0, "high": 14220.0, "low": 14170.0, "stop": null, "avg": null, "peak": null}, {"time": "12:40", "close": 14210.0, "high": 14230.0, "low": 14180.0, "stop": null, "avg": null, "peak": null}, {"time": "12:41", "close": 14330.0, "high": 14330.0, "low": 14200.0, "stop": null, "avg": null, "peak": null}, {"time": "12:42", "close": 14270.0, "high": 14330.0, "low": 14220.0, "stop": null, "avg": null, "peak": null}, {"time": "12:43", "close": 14270.0, "high": 14300.0, "low": 14250.0, "stop": null, "avg": null, "peak": null}, {"time": "12:44", "close": 14330.0, "high": 14350.0, "low": 14240.0, "stop": null, "avg": null, "peak": null}, {"time": "12:45", "close": 14300.0, "high": 14340.0, "low": 14300.0, "stop": null, "avg": null, "peak": null}, {"time": "12:46", "close": 14270.0, "high": 14300.0, "low": 14260.0, "stop": null, "avg": null, "peak": null}, {"time": "12:47", "close": 14310.0, "high": 14330.0, "low": 14270.0, "stop": null, "avg": null, "peak": null}, {"time": "12:48", "close": 14320.0, "high": 14350.0, "low": 14280.0, "stop": null, "avg": null, "peak": null}, {"time": "12:49", "close": 14260.0, "high": 14340.0, "low": 14260.0, "stop": null, "avg": null, "peak": null}, {"time": "12:50", "close": 14190.0, "high": 14280.0, "low": 14180.0, "stop": null, "avg": null, "peak": null}, {"time": "12:51", "close": 14200.0, "high": 14230.0, "low": 14170.0, "stop": null, "avg": null, "peak": null}, {"time": "12:52", "close": 14200.0, "high": 14230.0, "low": 14180.0, "stop": null, "avg": null, "peak": null}, {"time": "12:53", "close": 14130.0, "high": 14220.0, "low": 14120.0, "stop": null, "avg": null, "peak": null}, {"time": "12:54", "close": 14160.0, "high": 14190.0, "low": 14120.0, "stop": null, "avg": null, "peak": null}, {"time": "12:55", "close": 14090.0, "high": 14160.0, "low": 14080.0, "stop": null, "avg": null, "peak": null}, {"time": "12:56", "close": 14150.0, "high": 14150.0, "low": 14070.0, "stop": null, "avg": null, "peak": null}, {"time": "12:57", "close": 14140.0, "high": 14170.0, "low": 14130.0, "stop": null, "avg": null, "peak": null}, {"time": "12:58", "close": 14110.0, "high": 14150.0, "low": 14090.0, "stop": null, "avg": null, "peak": null}, {"time": "12:59", "close": 14100.0, "high": 14130.0, "low": 14090.0, "stop": null, "avg": null, "peak": null}, {"time": "13:00", "close": 14090.0, "high": 14110.0, "low": 14080.0, "stop": null, "avg": null, "peak": null}, {"time": "13:01", "close": 14140.0, "high": 14150.0, "low": 14090.0, "stop": null, "avg": null, "peak": null}, {"time": "13:02", "close": 14160.0, "high": 14180.0, "low": 14130.0, "stop": null, "avg": null, "peak": null}, {"time": "13:03", "close": 14100.0, "high": 14160.0, "low": 14100.0, "stop": null, "avg": null, "peak": null}, {"time": "13:04", "close": 14080.0, "high": 14110.0, "low": 14080.0, "stop": null, "avg": null, "peak": null}, {"time": "13:05", "close": 13880.0, "high": 14090.0, "low": 13800.0, "stop": null, "avg": null, "peak": null}, {"time": "13:06", "close": 13980.0, "high": 13980.0, "low": 13870.0, "stop": null, "avg": null, "peak": null}, {"time": "13:07", "close": 13850.0, "high": 13990.0, "low": 13840.0, "stop": null, "avg": null, "peak": null}, {"time": "13:08", "close": 13920.0, "high": 13940.0, "low": 13860.0, "stop": null, "avg": null, "peak": null}, {"time": "13:09", "close": 13860.0, "high": 13920.0, "low": 13850.0, "stop": null, "avg": null, "peak": null}, {"time": "13:10", "close": 13960.0, "high": 13960.0, "low": 13850.0, "stop": null, "avg": null, "peak": null}, {"time": "13:11", "close": 14010.0, "high": 14010.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:12", "close": 13960.0, "high": 14020.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:13", "close": 13970.0, "high": 13980.0, "low": 13940.0, "stop": null, "avg": null, "peak": null}, {"time": "13:14", "close": 13950.0, "high": 13980.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:15", "close": 13930.0, "high": 13960.0, "low": 13930.0, "stop": null, "avg": null, "peak": null}, {"time": "13:16", "close": 13870.0, "high": 13940.0, "low": 13870.0, "stop": null, "avg": null, "peak": null}, {"time": "13:17", "close": 13910.0, "high": 13930.0, "low": 13860.0, "stop": null, "avg": null, "peak": null}, {"time": "13:18", "close": 13790.0, "high": 13910.0, "low": 13750.0, "stop": null, "avg": null, "peak": null}, {"time": "13:19", "close": 13790.0, "high": 13810.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "13:20", "close": 13810.0, "high": 13830.0, "low": 13770.0, "stop": null, "avg": null, "peak": null}, {"time": "13:21", "close": 13800.0, "high": 13820.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "13:22", "close": 13840.0, "high": 13860.0, "low": 13800.0, "stop": null, "avg": null, "peak": null}, {"time": "13:23", "close": 13910.0, "high": 13910.0, "low": 13820.0, "stop": null, "avg": null, "peak": null}, {"time": "13:24", "close": 13870.0, "high": 13920.0, "low": 13850.0, "stop": null, "avg": null, "peak": null}, {"time": "13:25", "close": 13880.0, "high": 13890.0, "low": 13870.0, "stop": null, "avg": null, "peak": null}, {"time": "13:26", "close": 13890.0, "high": 13890.0, "low": 13880.0, "stop": null, "avg": null, "peak": null}, {"time": "13:27", "close": 13940.0, "high": 13960.0, "low": 13880.0, "stop": null, "avg": null, "peak": null}, {"time": "13:28", "close": 13860.0, "high": 13940.0, "low": 13850.0, "stop": null, "avg": null, "peak": null}, {"time": "13:29", "close": 13900.0, "high": 13900.0, "low": 13855.0, "stop": null, "avg": null, "peak": null}, {"time": "13:30", "close": 13930.0, "high": 13930.0, "low": 13890.0, "stop": null, "avg": null, "peak": null}, {"time": "13:31", "close": 13910.0, "high": 13930.0, "low": 13900.0, "stop": null, "avg": null, "peak": null}, {"time": "13:32", "close": 13960.0, "high": 14000.0, "low": 13910.0, "stop": null, "avg": null, "peak": null}, {"time": "13:33", "close": 13970.0, "high": 13980.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:34", "close": 13970.0, "high": 13990.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:35", "close": 13930.0, "high": 13970.0, "low": 13920.0, "stop": null, "avg": null, "peak": null}, {"time": "13:36", "close": 13890.0, "high": 13930.0, "low": 13880.0, "stop": null, "avg": null, "peak": null}, {"time": "13:37", "close": 13950.0, "high": 13950.0, "low": 13880.0, "stop": null, "avg": null, "peak": null}, {"time": "13:38", "close": 13950.0, "high": 13960.0, "low": 13940.0, "stop": null, "avg": null, "peak": null}, {"time": "13:39", "close": 13940.0, "high": 13960.0, "low": 13930.0, "stop": null, "avg": null, "peak": null}, {"time": "13:40", "close": 13960.0, "high": 13960.0, "low": 13930.0, "stop": null, "avg": null, "peak": null}, {"time": "13:41", "close": 13890.0, "high": 13970.0, "low": 13890.0, "stop": null, "avg": null, "peak": null}, {"time": "13:42", "close": 13880.0, "high": 13900.0, "low": 13860.0, "stop": null, "avg": null, "peak": null}, {"time": "13:43", "close": 13890.0, "high": 13900.0, "low": 13870.0, "stop": null, "avg": null, "peak": null}, {"time": "13:44", "close": 13980.0, "high": 13980.0, "low": 13890.0, "stop": null, "avg": null, "peak": null}, {"time": "13:45", "close": 13950.0, "high": 13990.0, "low": 13930.0, "stop": null, "avg": null, "peak": null}, {"time": "13:46", "close": 13980.0, "high": 13990.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:47", "close": 13970.0, "high": 13980.0, "low": 13960.0, "stop": null, "avg": null, "peak": null}, {"time": "13:48", "close": 14010.0, "high": 14040.0, "low": 13940.0, "stop": null, "avg": null, "peak": null}, {"time": "13:49", "close": 13950.0, "high": 14010.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:50", "close": 13980.0, "high": 13980.0, "low": 13950.0, "stop": null, "avg": null, "peak": null}, {"time": "13:51", "close": 13960.0, "high": 13980.0, "low": 13960.0, "stop": null, "avg": null, "peak": null}, {"time": "13:52", "close": 13900.0, "high": 13960.0, "low": 13900.0, "stop": null, "avg": null, "peak": null}, {"time": "13:53", "close": 13890.0, "high": 13920.0, "low": 13870.0, "stop": null, "avg": null, "peak": null}, {"time": "13:54", "close": 13930.0, "high": 13950.0, "low": 13890.0, "stop": null, "avg": null, "peak": null}, {"time": "13:55", "close": 13860.0, "high": 13930.0, "low": 13830.0, "stop": null, "avg": null, "peak": null}, {"time": "13:56", "close": 13840.0, "high": 13860.0, "low": 13820.0, "stop": null, "avg": null, "peak": null}, {"time": "13:57", "close": 13800.0, "high": 13860.0, "low": 13800.0, "stop": null, "avg": null, "peak": null}, {"time": "13:58", "close": 13770.0, "high": 13810.0, "low": 13760.0, "stop": null, "avg": null, "peak": null}, {"time": "13:59", "close": 13830.0, "high": 13850.0, "low": 13770.0, "stop": null, "avg": null, "peak": null}, {"time": "14:00", "close": 13780.0, "high": 13850.0, "low": 13770.0, "stop": null, "avg": null, "peak": null}, {"time": "14:01", "close": 13790.0, "high": 13800.0, "low": 13760.0, "stop": null, "avg": null, "peak": null}, {"time": "14:02", "close": 13720.0, "high": 13810.0, "low": 13710.0, "stop": null, "avg": null, "peak": null}, {"time": "14:03", "close": 13730.0, "high": 13760.0, "low": 13680.0, "stop": null, "avg": null, "peak": null}, {"time": "14:04", "close": 13730.0, "high": 13760.0, "low": 13720.0, "stop": null, "avg": null, "peak": null}, {"time": "14:05", "close": 13690.0, "high": 13740.0, "low": 13650.0, "stop": null, "avg": null, "peak": null}, {"time": "14:06", "close": 13650.0, "high": 13720.0, "low": 13620.0, "stop": null, "avg": null, "peak": null}, {"time": "14:07", "close": 13700.0, "high": 13700.0, "low": 13630.0, "stop": null, "avg": null, "peak": null}, {"time": "14:08", "close": 13660.0, "high": 13710.0, "low": 13660.0, "stop": null, "avg": null, "peak": null}, {"time": "14:09", "close": 13630.0, "high": 13670.0, "low": 13610.0, "stop": null, "avg": null, "peak": null}, {"time": "14:10", "close": 13680.0, "high": 13700.0, "low": 13630.0, "stop": null, "avg": null, "peak": null}, {"time": "14:11", "close": 13720.0, "high": 13750.0, "low": 13670.0, "stop": null, "avg": null, "peak": null}, {"time": "14:12", "close": 13680.0, "high": 13720.0, "low": 13680.0, "stop": null, "avg": null, "peak": null}, {"time": "14:13", "close": 13760.0, "high": 13760.0, "low": 13680.0, "stop": null, "avg": null, "peak": null}, {"time": "14:14", "close": 13740.0, "high": 13780.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "14:15", "close": 13740.0, "high": 13750.0, "low": 13720.0, "stop": null, "avg": null, "peak": null}, {"time": "14:16", "close": 13760.0, "high": 13770.0, "low": 13710.0, "stop": null, "avg": null, "peak": null}, {"time": "14:17", "close": 13810.0, "high": 13810.0, "low": 13750.0, "stop": null, "avg": null, "peak": null}, {"time": "14:18", "close": 13820.0, "high": 13820.0, "low": 13790.0, "stop": null, "avg": null, "peak": null}, {"time": "14:19", "close": 13760.0, "high": 13820.0, "low": 13750.0, "stop": null, "avg": null, "peak": null}, {"time": "14:20", "close": 13740.0, "high": 13760.0, "low": 13730.0, "stop": null, "avg": null, "peak": null}, {"time": "14:21", "close": 13820.0, "high": 13840.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "14:22", "close": 13820.0, "high": 13820.0, "low": 13790.0, "stop": null, "avg": null, "peak": null}, {"time": "14:23", "close": 13820.0, "high": 13840.0, "low": 13800.0, "stop": null, "avg": null, "peak": null}, {"time": "14:24", "close": 13840.0, "high": 13840.0, "low": 13820.0, "stop": null, "avg": null, "peak": null}, {"time": "14:25", "close": 13780.0, "high": 13850.0, "low": 13780.0, "stop": null, "avg": null, "peak": null}, {"time": "14:26", "close": 13790.0, "high": 13800.0, "low": 13770.0, "stop": null, "avg": null, "peak": null}, {"time": "14:27", "close": 13810.0, "high": 13810.0, "low": 13780.0, "stop": null, "avg": null, "peak": null}, {"time": "14:28", "close": 13810.0, "high": 13840.0, "low": 13800.0, "stop": null, "avg": null, "peak": null}, {"time": "14:29", "close": 13780.0, "high": 13830.0, "low": 13780.0, "stop": null, "avg": null, "peak": null}, {"time": "14:30", "close": 13710.0, "high": 13790.0, "low": 13700.0, "stop": null, "avg": null, "peak": null}, {"time": "14:31", "close": 13720.0, "high": 13760.0, "low": 13700.0, "stop": null, "avg": null, "peak": null}, {"time": "14:32", "close": 13690.0, "high": 13730.0, "low": 13690.0, "stop": null, "avg": null, "peak": null}, {"time": "14:33", "close": 13690.0, "high": 13700.0, "low": 13660.0, "stop": null, "avg": null, "peak": null}, {"time": "14:34", "close": 13700.0, "high": 13710.0, "low": 13670.0, "stop": null, "avg": null, "peak": null}, {"time": "14:35", "close": 13720.0, "high": 13740.0, "low": 13700.0, "stop": null, "avg": null, "peak": null}, {"time": "14:36", "close": 13730.0, "high": 13740.0, "low": 13700.0, "stop": null, "avg": null, "peak": null}, {"time": "14:37", "close": 13710.0, "high": 13760.0, "low": 13700.0, "stop": null, "avg": null, "peak": null}, {"time": "14:38", "close": 13700.0, "high": 13750.0, "low": 13700.0, "stop": null, "avg": null, "peak": null}, {"time": "14:39", "close": 13730.0, "high": 13730.0, "low": 13680.0, "stop": null, "avg": null, "peak": null}, {"time": "14:40", "close": 13710.0, "high": 13740.0, "low": 13710.0, "stop": null, "avg": null, "peak": null}, {"time": "14:41", "close": 13750.0, "high": 13770.0, "low": 13720.0, "stop": null, "avg": null, "peak": null}, {"time": "14:42", "close": 13780.0, "high": 13790.0, "low": 13730.0, "stop": null, "avg": null, "peak": null}, {"time": "14:43", "close": 13790.0, "high": 13810.0, "low": 13780.0, "stop": null, "avg": null, "peak": null}, {"time": "14:44", "close": 13780.0, "high": 13810.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "14:45", "close": 13750.0, "high": 13790.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "14:46", "close": 13840.0, "high": 13840.0, "low": 13740.0, "stop": null, "avg": null, "peak": null}, {"time": "14:47", "close": 13870.0, "high": 13940.0, "low": 13810.0, "stop": null, "avg": null, "peak": null}, {"time": "14:48", "close": 13855.0, "high": 13920.0, "low": 13840.0, "stop": null, "avg": null, "peak": null}, {"time": "14:49", "close": 13880.0, "high": 13880.0, "low": 13840.0, "stop": null, "avg": null, "peak": null}, {"time": "14:50", "close": 13930.0, "high": 13940.0, "low": 13880.0, "stop": null, "avg": null, "peak": null}, {"time": "14:51", "close": 13880.0, "high": 13920.0, "low": 13870.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:52", "close": 13920.0, "high": 13950.0, "low": 13870.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:53", "close": 13900.0, "high": 13930.0, "low": 13870.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:54", "close": 13840.0, "high": 13900.0, "low": 13840.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:55", "close": 13900.0, "high": 13900.0, "low": 13840.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:56", "close": 13890.0, "high": 13900.0, "low": 13880.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:57", "close": 13870.0, "high": 13900.0, "low": 13860.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:58", "close": 13955.0, "high": 13960.0, "low": 13850.0, "stop": 13651, "avg": 13930, "peak": null}, {"time": "14:59", "close": 13960.0, "high": 13980.0, "low": 13910.0, "stop": 13651, "avg": 13930, "peak": null}];
+const mb = [{"time": "09:02", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:03", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:04", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:05", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:06", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:07", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:08", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:09", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:10", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:11", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:12", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:13", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:14", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:15", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:16", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:17", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:18", "h3": 0.0, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:19", "h3": -42.8, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:20", "h3": -42.8, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:21", "h3": -42.8, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:22", "h3": -36.1, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:23", "h3": -36.1, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:24", "h3": -36.1, "h5": 0.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "09:25", "h3": -23.4, "h5": 0.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:26", "h3": -23.4, "h5": 0.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:27", "h3": -23.4, "h5": 0.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:28", "h3": -18.9, "h5": 0.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:29", "h3": -18.9, "h5": 0.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:30", "h3": -18.9, "h5": 0.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:31", "h3": -10.8, "h5": -34.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:32", "h3": -13.0, "h5": -48.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:33", "h3": -16.1, "h5": -28.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:34", "h3": -13.5, "h5": -10.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:35", "h3": -7.7, "h5": -2.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:36", "h3": 2.7, "h5": -8.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:37", "h3": 21.7, "h5": 9.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:38", "h3": 27.0, "h5": 45.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:39", "h3": 32.5, "h5": 49.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:40", "h3": 64.9, "h5": 66.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:41", "h3": 76.4, "h5": 72.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:42", "h3": 70.7, "h5": 74.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:43", "h3": 91.7, "h5": 85.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:44", "h3": 94.6, "h5": 74.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:45", "h3": 91.3, "h5": 78.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:46", "h3": 86.6, "h5": 65.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "09:47", "h3": 79.3, "h5": 65.7, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "09:48", "h3": 78.2, "h5": 86.1, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "09:49", "h3": 71.5, "h5": 73.1, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "09:50", "h3": 77.3, "h5": 69.0, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "09:51", "h3": 80.5, "h5": 73.8, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "09:52", "h3": 58.5, "h5": 71.6, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "09:53", "h3": 55.2, "h5": 67.9, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "09:54", "h3": 69.7, "h5": 79.2, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "09:55", "h3": 64.6, "h5": 95.0, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "09:56", "h3": 61.7, "h5": 76.5, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "09:57", "h3": 72.7, "h5": 73.6, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "09:58", "h3": 75.2, "h5": 81.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "09:59", "h3": 69.8, "h5": 85.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:00", "h3": 66.1, "h5": 87.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:01", "h3": 80.3, "h5": 96.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:02", "h3": 79.2, "h5": 79.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:03", "h3": 74.2, "h5": 63.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:04", "h3": 86.5, "h5": 76.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:05", "h3": 65.0, "h5": 35.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:06", "h3": 47.7, "h5": 26.2, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:07", "h3": 53.4, "h5": 47.7, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:08", "h3": 42.6, "h5": 23.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:09", "h3": 43.4, "h5": 46.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:10", "h3": 44.2, "h5": 29.8, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "10:11", "h3": 52.6, "h5": 50.8, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:12", "h3": 45.7, "h5": 64.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:13", "h3": 62.2, "h5": 68.8, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:14", "h3": 69.3, "h5": 81.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:15", "h3": 59.1, "h5": 63.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:16", "h3": 65.2, "h5": 60.7, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:17", "h3": 63.8, "h5": 70.9, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:18", "h3": 52.3, "h5": 79.9, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:19", "h3": 67.3, "h5": 84.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:20", "h3": 73.6, "h5": 64.3, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:21", "h3": 71.8, "h5": 77.2, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:22", "h3": 61.7, "h5": 67.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:23", "h3": 65.3, "h5": 40.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:24", "h3": 65.4, "h5": 47.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "10:25", "h3": 39.8, "h5": 50.5, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:26", "h3": 43.1, "h5": 40.7, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:27", "h3": 55.5, "h5": 41.0, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:28", "h3": 29.6, "h5": 40.1, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "10:29", "h3": 22.3, "h5": 4.0, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "10:30", "h3": 25.5, "h5": 17.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:31", "h3": -2.3, "h5": 37.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:32", "h3": 5.0, "h5": 26.6, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "10:33", "h3": 18.3, "h5": 33.5, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "10:34", "h3": 3.7, "h5": 19.8, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "10:35", "h3": 8.2, "h5": 16.7, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "10:36", "h3": 9.1, "h5": 5.5, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "10:37", "h3": 0.6, "h5": 2.4, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "10:38", "h3": -12.3, "h5": -15.3, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:39", "h3": -12.0, "h5": -20.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:40", "h3": -24.1, "h5": -5.5, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:41", "h3": -18.9, "h5": -6.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:42", "h3": -16.4, "h5": -6.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:43", "h3": -33.7, "h5": -17.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:44", "h3": -25.3, "h5": -45.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:45", "h3": -34.1, "h5": -50.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:46", "h3": -47.6, "h5": -52.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:47", "h3": -49.4, "h5": -58.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:48", "h3": -47.3, "h5": -52.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:49", "h3": -45.0, "h5": -49.8, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:50", "h3": -47.4, "h5": -44.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:51", "h3": -34.1, "h5": -33.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "10:52", "h3": -31.6, "h5": -50.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "10:53", "h3": -34.3, "h5": -35.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "10:54", "h3": -28.6, "h5": -16.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "10:55", "h3": -27.6, "h5": -15.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "10:56", "h3": -18.8, "h5": -6.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "10:57", "h3": -4.1, "h5": -6.4, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "10:58", "h3": -5.8, "h5": -12.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "10:59", "h3": -6.0, "h5": -12.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:00", "h3": -7.5, "h5": -25.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "11:01", "h3": 3.4, "h5": -17.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "11:02", "h3": -0.6, "h5": -14.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:03", "h3": -2.4, "h5": 1.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:04", "h3": 2.3, "h5": 0.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:05", "h3": 9.5, "h5": 4.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:06", "h3": 15.1, "h5": 3.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:07", "h3": 17.5, "h5": 11.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:08", "h3": 15.1, "h5": 31.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:09", "h3": 20.9, "h5": 26.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:10", "h3": 26.5, "h5": 32.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:11", "h3": 30.8, "h5": 32.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:12", "h3": 30.7, "h5": 40.3, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:13", "h3": 35.8, "h5": 29.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:14", "h3": 49.4, "h5": 38.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:15", "h3": 36.1, "h5": 43.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:16", "h3": 46.4, "h5": 35.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:17", "h3": 52.1, "h5": 41.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:18", "h3": 42.5, "h5": 49.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:19", "h3": 50.6, "h5": 48.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:20", "h3": 58.3, "h5": 62.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:21", "h3": 47.9, "h5": 54.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:22", "h3": 49.0, "h5": 38.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:23", "h3": 47.9, "h5": 39.7, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:24", "h3": 41.0, "h5": 44.2, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:25", "h3": 34.7, "h5": 48.5, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "11:26", "h3": 28.1, "h5": 20.5, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "11:27", "h3": 28.9, "h5": 21.3, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "11:28", "h3": 16.3, "h5": 19.6, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "11:29", "h3": 12.2, "h5": 30.7, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "11:30", "h3": 14.2, "h5": 32.9, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "11:31", "h3": 14.6, "h5": 16.5, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "11:32", "h3": 16.3, "h5": 28.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "11:33", "h3": 11.9, "h5": 19.2, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "11:34", "h3": 10.3, "h5": 15.9, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "11:35", "h3": 12.0, "h5": 25.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "sell_pre"}, {"time": "11:36", "h3": 13.3, "h5": 19.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "11:37", "h3": 21.4, "h5": 34.5, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:38", "h3": 21.3, "h5": 14.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:39", "h3": 23.9, "h5": 4.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "11:40", "h3": 22.6, "h5": 6.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:41", "h3": 16.5, "h5": 0.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:42", "h3": 19.7, "h5": 12.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:43", "h3": 20.6, "h5": 12.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:44", "h3": 13.5, "h5": 5.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:45", "h3": 24.6, "h5": 6.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:46", "h3": 23.2, "h5": 12.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:47", "h3": 12.0, "h5": 22.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "11:48", "h3": 26.8, "h5": 29.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:49", "h3": 32.8, "h5": 23.4, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:50", "h3": 28.9, "h5": 33.0, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:51", "h3": 32.3, "h5": 42.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:52", "h3": 36.2, "h5": 43.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "11:53", "h3": 37.0, "h5": 45.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "11:54", "h3": 36.0, "h5": 43.1, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:55", "h3": 34.9, "h5": 36.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:56", "h3": 35.7, "h5": 44.2, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "11:57", "h3": 30.9, "h5": 31.5, "sig": "buy_pre", "s3": "sell_pre", "s5": "buy_pre"}, {"time": "11:58", "h3": 40.9, "h5": 45.3, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:01", "h3": 43.7, "h5": 53.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:02", "h3": 39.4, "h5": 43.2, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:03", "h3": 45.7, "h5": 43.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:04", "h3": 48.1, "h5": 26.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:05", "h3": 35.9, "h5": 27.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:06", "h3": 32.5, "h5": 32.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:07", "h3": 37.5, "h5": 25.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:08", "h3": 26.7, "h5": 29.0, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:09", "h3": 25.8, "h5": 20.0, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:10", "h3": 22.7, "h5": 16.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:11", "h3": 11.3, "h5": 29.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:12", "h3": 16.5, "h5": 19.6, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "12:13", "h3": 13.7, "h5": 20.3, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "12:14", "h3": 7.3, "h5": 26.9, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "12:15", "h3": 9.4, "h5": 10.8, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "12:16", "h3": 8.2, "h5": 6.6, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "12:17", "h3": -2.5, "h5": 4.5, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "12:18", "h3": -5.4, "h5": -0.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:19", "h3": 0.4, "h5": 6.8, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "12:20", "h3": -3.1, "h5": 3.5, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:21", "h3": -4.3, "h5": 11.0, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "12:22", "h3": -3.9, "h5": 6.1, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "12:23", "h3": 4.0, "h5": 5.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "12:24", "h3": -0.9, "h5": 4.8, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "12:25", "h3": 3.0, "h5": -5.9, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:26", "h3": 6.1, "h5": -19.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:27", "h3": -9.0, "h5": -20.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:28", "h3": -11.0, "h5": -21.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:29", "h3": -4.6, "h5": -18.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "12:30", "h3": -13.6, "h5": -8.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "12:31", "h3": -4.6, "h5": -7.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:32", "h3": 0.9, "h5": -12.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:33", "h3": -6.8, "h5": -7.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:34", "h3": -5.2, "h5": -9.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:35", "h3": -6.2, "h5": 1.7, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "12:36", "h3": -2.3, "h5": 11.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "12:37", "h3": 8.6, "h5": 9.5, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:38", "h3": 6.9, "h5": 15.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:39", "h3": 5.6, "h5": 6.9, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:40", "h3": 10.6, "h5": 6.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "12:41", "h3": 15.4, "h5": 15.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "12:42", "h3": 12.9, "h5": 25.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:43", "h3": 10.4, "h5": 20.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:44", "h3": 24.4, "h5": 10.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:45", "h3": 19.8, "h5": 8.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:46", "h3": 10.9, "h5": 12.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:47", "h3": 17.3, "h5": 17.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:48", "h3": 17.7, "h5": 11.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "12:49", "h3": 12.5, "h5": 13.8, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "12:50", "h3": 8.2, "h5": -1.8, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:51", "h3": 12.2, "h5": -0.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:52", "h3": 2.5, "h5": 7.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:53", "h3": -3.0, "h5": 3.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:54", "h3": 3.5, "h5": 4.5, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "12:55", "h3": -3.7, "h5": 3.3, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "12:56", "h3": -3.8, "h5": -1.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:57", "h3": 0.2, "h5": 0.6, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "12:58", "h3": -9.6, "h5": -0.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "12:59", "h3": -9.7, "h5": 3.7, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "13:00", "h3": -8.2, "h5": 6.7, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "13:01", "h3": -5.9, "h5": -0.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:02", "h3": -2.9, "h5": -5.8, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:03", "h3": -11.8, "h5": -11.9, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:04", "h3": -15.2, "h5": -10.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:05", "h3": -29.4, "h5": -28.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:06", "h3": -22.6, "h5": -32.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:07", "h3": -31.1, "h5": -33.5, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:08", "h3": -41.3, "h5": -32.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:09", "h3": -38.9, "h5": -43.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:10", "h3": -35.2, "h5": -41.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:11", "h3": -35.8, "h5": -29.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:12", "h3": -38.4, "h5": -41.9, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:13", "h3": -32.6, "h5": -40.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:14", "h3": -32.8, "h5": -37.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:15", "h3": -37.3, "h5": -30.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:16", "h3": -34.7, "h5": -31.8, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:17", "h3": -26.3, "h5": -33.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:18", "h3": -36.5, "h5": -31.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:19", "h3": -36.4, "h5": -36.5, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:20", "h3": -28.7, "h5": -26.8, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:21", "h3": -35.8, "h5": -35.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:22", "h3": -29.0, "h5": -31.9, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:23", "h3": -25.4, "h5": -27.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:24", "h3": -29.3, "h5": -29.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:25", "h3": -25.3, "h5": -25.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:26", "h3": -19.7, "h5": -32.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:27", "h3": -17.1, "h5": -29.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:28", "h3": -23.2, "h5": -27.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:29", "h3": -18.9, "h5": -23.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:30", "h3": -11.3, "h5": 1.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:31", "h3": -12.9, "h5": -11.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:32", "h3": 2.7, "h5": 9.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:33", "h3": 2.0, "h5": 0.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:34", "h3": 7.1, "h5": 7.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:35", "h3": 1.1, "h5": -4.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:36", "h3": 6.4, "h5": -13.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "13:37", "h3": 3.6, "h5": -1.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:38", "h3": -1.3, "h5": -2.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:39", "h3": 2.4, "h5": -0.3, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "13:40", "h3": 5.8, "h5": 2.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:41", "h3": -0.0, "h5": 3.1, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "13:42", "h3": 1.4, "h5": 0.9, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:43", "h3": 7.8, "h5": 15.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:44", "h3": 6.2, "h5": 20.8, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "13:45", "h3": 10.8, "h5": 16.6, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "13:46", "h3": 14.2, "h5": 16.3, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:47", "h3": 12.3, "h5": 11.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:48", "h3": 13.7, "h5": 6.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "13:49", "h3": 9.8, "h5": 10.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:50", "h3": 7.2, "h5": 10.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "13:51", "h3": 8.4, "h5": 7.7, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "13:52", "h3": 3.1, "h5": -2.5, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "13:53", "h3": 2.7, "h5": 7.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:54", "h3": 2.0, "h5": 4.9, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "13:55", "h3": -1.3, "h5": -2.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:56", "h3": -4.9, "h5": -1.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:57", "h3": -7.2, "h5": -12.5, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:58", "h3": -13.1, "h5": -15.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "13:59", "h3": -12.5, "h5": -10.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:00", "h3": -16.2, "h5": -11.3, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:01", "h3": -19.4, "h5": -6.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:02", "h3": -19.8, "h5": -20.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:03", "h3": -18.6, "h5": -21.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:04", "h3": -22.8, "h5": -17.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:05", "h3": -27.3, "h5": -25.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:06", "h3": -29.8, "h5": -20.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:07", "h3": -26.7, "h5": -19.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:08", "h3": -28.7, "h5": -23.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:09", "h3": -31.6, "h5": -34.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:10", "h3": -25.0, "h5": -30.2, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:11", "h3": -30.8, "h5": -32.4, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:12", "h3": -33.4, "h5": -33.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:13", "h3": -24.5, "h5": -34.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:14", "h3": -24.8, "h5": -29.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "14:15", "h3": -28.8, "h5": -31.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "14:16", "h3": -17.5, "h5": -27.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "14:17", "h3": -15.8, "h5": -17.5, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "14:18", "h3": -14.0, "h5": -13.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:19", "h3": -10.6, "h5": -23.3, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:20", "h3": -8.6, "h5": -15.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:21", "h3": -4.1, "h5": -6.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:22", "h3": -1.6, "h5": -0.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:23", "h3": 0.6, "h5": 4.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:24", "h3": 9.1, "h5": -3.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:25", "h3": 4.5, "h5": -2.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:26", "h3": 3.1, "h5": 1.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:27", "h3": 10.9, "h5": 10.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:28", "h3": 5.5, "h5": 10.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:29", "h3": 8.9, "h5": 8.2, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "14:30", "h3": 6.8, "h5": 5.7, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "14:31", "h3": 3.9, "h5": 12.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:32", "h3": 3.4, "h5": 6.0, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "14:33", "h3": 4.3, "h5": 10.3, "sig": "hold", "s3": "sell_pre", "s5": "hold"}, {"time": "14:34", "h3": 0.4, "h5": 13.6, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "14:35", "h3": 1.8, "h5": 5.3, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "14:36", "h3": 2.7, "h5": 2.1, "sig": "sell_pre", "s3": "sell_pre", "s5": "sell_pre"}, {"time": "14:37", "h3": -1.6, "h5": 4.5, "sig": "hold", "s3": "hold", "s5": "sell_pre"}, {"time": "14:38", "h3": -4.8, "h5": -5.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:39", "h3": -1.9, "h5": -1.1, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:40", "h3": -7.5, "h5": -3.0, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:41", "h3": -4.2, "h5": -2.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:42", "h3": -2.5, "h5": -7.7, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:43", "h3": -2.5, "h5": -8.6, "sig": "hold", "s3": "hold", "s5": "hold"}, {"time": "14:44", "h3": -4.3, "h5": -1.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "14:45", "h3": -6.2, "h5": -1.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "hold"}, {"time": "14:46", "h3": 3.9, "h5": -3.1, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:47", "h3": 7.9, "h5": -0.6, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:48", "h3": 1.7, "h5": -1.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:49", "h3": 7.5, "h5": -1.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:50", "h3": 12.3, "h5": 7.4, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:51", "h3": 7.4, "h5": 7.0, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:52", "h3": 16.2, "h5": 8.9, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:53", "h3": 17.2, "h5": 7.2, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:54", "h3": 10.4, "h5": 7.7, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:55", "h3": 16.6, "h5": 20.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:56", "h3": 18.0, "h5": 18.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:57", "h3": 17.3, "h5": 23.3, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}, {"time": "14:58", "h3": 25.0, "h5": 27.8, "sig": "buy_pre", "s3": "buy_pre", "s5": "buy_pre"}, {"time": "14:59", "h3": 25.9, "h5": 25.0, "sig": "buy_pre", "s3": "hold", "s5": "buy_pre"}];  // 신 로직 MACD (AND+양수 기준)
+const ea = [{"time": "09:10", "type": "BUY", "price": 12420.0, "qty": 48, "reason": "1\ucc28 \ub9e4\uc218 (60%) \u2014 Opening Gate \ud574\uc81c", "pnl": null, "pnl_pct": null, "avg": 12420, "stop": 12172}, {"time": "09:15", "type": "SELL_STOP", "price": 12172, "qty": 48, "reason": "\ucd08\uae30 \uc190\uc808 (\u22122%)", "pnl": -11904, "pnl_pct": -2.0, "avg": null, "stop": null}, {"time": "09:40", "type": "BUY_REENTRY", "price": 13030.0, "qty": 46, "reason": "MACD \uc7ac\uc9c4\uc785 (vs 3.6\ubc30 / buy_pre\u00b7buy_pre)", "pnl": null, "pnl_pct": null, "avg": 13030, "stop": 12769}, {"time": "10:01", "type": "TRAIL_ACTIVATE", "price": 13460, "qty": 0, "reason": "\ud2b8\ub808\uc77c\ub9c1 \ud65c\uc131 \u2014 \uc9c4\uc785\uac00 +3% \ub3cc\ud30c", "pnl": null, "pnl_pct": null, "avg": 13030, "stop": 13191}, {"time": "10:05", "type": "SELL_STOP", "price": 13377, "qty": 46, "reason": "\ud2b8\ub808\uc77c\ub9c1 \uc190\uc808 (\u22122%)", "pnl": 15962, "pnl_pct": 2.66, "avg": null, "stop": null}, {"time": "11:15", "type": "BUY_REENTRY", "price": 13870.0, "qty": 43, "reason": "MACD \uc7ac\uc9c4\uc785 (vs 2.8\ubc30 / buy_pre\u00b7buy_pre)", "pnl": null, "pnl_pct": null, "avg": 13870, "stop": 13593}, {"time": "12:01", "type": "TRAIL_ACTIVATE", "price": 14430, "qty": 0, "reason": "\ud2b8\ub808\uc77c\ub9c1 \ud65c\uc131 \u2014 \uc9c4\uc785\uac00 +3% \ub3cc\ud30c", "pnl": null, "pnl_pct": null, "avg": 13870, "stop": 14141}, {"time": "12:10", "type": "SELL_STOP", "price": 14141, "qty": 43, "reason": "\ud2b8\ub808\uc77c\ub9c1 \uc190\uc808 (\u22122%)", "pnl": 11653, "pnl_pct": 1.95, "avg": null, "stop": null}, {"time": "14:50", "type": "BUY_REENTRY", "price": 13930.0, "qty": 43, "reason": "MACD \uc7ac\uc9c4\uc785 (vs 2.8\ubc30 / buy_pre\u00b7buy_pre)", "pnl": null, "pnl_pct": null, "avg": 13930, "stop": 13651}, {"time": "14:59", "type": "SELL_EOD", "price": 13960.0, "qty": 43, "reason": "\uc7a5\ub9c8\uac10 (+0.2%)", "pnl": 1290, "pnl_pct": 0.22, "avg": null, "stop": null}];
+const eb = [{"time": "09:10", "type": "BUY", "price": 12420.0, "qty": 48, "reason": "1\ucc28 \ub9e4\uc218 (60%) \u2014 Opening Gate \ud574\uc81c", "pnl": null, "pnl_pct": null, "avg": 12420, "stop": 12172}, {"time": "09:15", "type": "SELL_STOP", "price": 12172, "qty": 48, "reason": "\ucd08\uae30 \uc190\uc808 (\u22122%)", "pnl": -11904, "pnl_pct": -2.0, "avg": null, "stop": null}, {"time": "09:40", "type": "BUY_REENTRY", "price": 13030.0, "qty": 46, "reason": "MACD \uc7ac\uc9c4\uc785 (vs 3.6\ubc30 / buy_pre\u00b7buy_pre)", "pnl": null, "pnl_pct": null, "avg": 13030, "stop": 12769}, {"time": "10:01", "type": "TRAIL_ACTIVATE", "price": 13460, "qty": 0, "reason": "\ud2b8\ub808\uc77c\ub9c1 \ud65c\uc131 \u2014 \uc9c4\uc785\uac00 +3% \ub3cc\ud30c", "pnl": null, "pnl_pct": null, "avg": 13030, "stop": 13191}, {"time": "10:02", "type": "SELL_PARTIAL", "price": 13430.0, "qty": 19, "reason": "\ub3d9\uc801 \ubd80\ubd84\uc775\uc808 42% | \uc18c\uc9c4\ub3c4 0.25 | MACD\ud53c\ud06c\uac10\uc18c", "pnl": 7600, "pnl_pct": 3.07, "avg": 13030, "stop": 13191}, {"time": "10:05", "type": "SELL_STOP", "price": 13377, "qty": 27, "reason": "\ud2b8\ub808\uc77c\ub9c1 \uc190\uc808 (\u22122%)", "pnl": 9369, "pnl_pct": 2.66, "avg": null, "stop": null}, {"time": "11:15", "type": "BUY_REENTRY", "price": 13870.0, "qty": 43, "reason": "MACD \uc7ac\uc9c4\uc785 (vs 2.8\ubc30 / buy_pre\u00b7buy_pre)", "pnl": null, "pnl_pct": null, "avg": 13870, "stop": 13593}, {"time": "12:01", "type": "TRAIL_ACTIVATE", "price": 14430, "qty": 0, "reason": "\ud2b8\ub808\uc77c\ub9c1 \ud65c\uc131 \u2014 \uc9c4\uc785\uac00 +3% \ub3cc\ud30c", "pnl": null, "pnl_pct": null, "avg": 13870, "stop": 14141}, {"time": "12:02", "type": "SELL_PARTIAL", "price": 14310.0, "qty": 18, "reason": "\ub3d9\uc801 \ubd80\ubd84\uc775\uc808 42% | \uc18c\uc9c4\ub3c4 0.25 | MACD\ud53c\ud06c\uac10\uc18c", "pnl": 7920, "pnl_pct": 3.17, "avg": 13870, "stop": 14141}, {"time": "12:10", "type": "SELL_STOP", "price": 14141, "qty": 25, "reason": "\ud2b8\ub808\uc77c\ub9c1 \uc190\uc808 (\u22122%)", "pnl": 6775, "pnl_pct": 1.95, "avg": null, "stop": null}, {"time": "14:50", "type": "BUY_REENTRY", "price": 13930.0, "qty": 43, "reason": "MACD \uc7ac\uc9c4\uc785 (vs 2.8\ubc30 / buy_pre\u00b7buy_pre)", "pnl": null, "pnl_pct": null, "avg": 13930, "stop": 13651}, {"time": "14:59", "type": "SELL_EOD", "price": 13960.0, "qty": 43, "reason": "\uc7a5\ub9c8\uac10 (+0.2%)", "pnl": 1290, "pnl_pct": 0.22, "avg": null, "stop": null}];
+
+const labels = pd.map(d => d.time);
+const closes = pd.map(d => d.close);
+
+// 이벤트 인덱스 계산
+const buyA=[], sellA=[], buyB=[], sellB=[];
+ea.forEach(e => {
+  const i = labels.indexOf(e.time); if (i<0) return;
+  if (e.type.startsWith('BUY')) buyA.push(i);
+  if (e.type.startsWith('SELL') && e.pnl!==null) sellA.push(i);
+});
+eb.forEach(e => {
+  const i = labels.indexOf(e.time); if (i<0) return;
+  if (e.type.startsWith('BUY')) buyB.push(i);
+  if (e.type.startsWith('SELL') && e.pnl!==null) sellB.push(i);
+});
+
+const ptR = labels.map((_,i) =>
+  (buyA.includes(i)||sellA.includes(i)||buyB.includes(i)||sellB.includes(i)) ? 7 : 0);
+const ptC = labels.map((_,i) => {
+  if (buyA.includes(i)||buyB.includes(i)) return '#10b981';
+  if (sellA.includes(i)||sellB.includes(i)) return '#ef4444';
+  return 'transparent';
+});
+
+// 가격 차트
+new Chart(document.getElementById('cMain').getContext('2d'), {
+  type:'line', data:{labels, datasets:[
+    {label:'종가', data:closes, borderColor:'#3b82f6', borderWidth:2,
+      pointRadius:ptR, pointBackgroundColor:ptC, pointBorderColor:ptC,
+      fill:false, tension:0.12},
+    {label:'손절선', data:pd.map(d=>d.stop), borderColor:'#ef4444',
+      borderWidth:1.2, borderDash:[4,3], pointRadius:0, fill:false, spanGaps:true},
+    {label:'평단가', data:pd.map(d=>d.avg), borderColor:'#f59e0b',
+      borderWidth:1, borderDash:[2,4], pointRadius:0, fill:false, spanGaps:true},
+  ]}, options:{
+    responsive:true, interaction:{mode:'index',intersect:false},
+    plugins:{
+      legend:{labels:{color:'#64748b',font:{size:11}}},
+      tooltip:{backgroundColor:'#1e293b',titleColor:'#f8fafc',bodyColor:'#cbd5e1',
+                borderColor:'#334155',borderWidth:1,
+                callbacks:{label:c=>`${c.dataset.label}: ${c.parsed.y?.toLocaleString()}원`}}
+    },
+    scales:{
+      x:{ticks:{color:'#94a3b8',maxTicksLimit:14,font:{size:10}},grid:{color:'#f1f5f9'}},
+      y:{ticks:{color:'#94a3b8',callback:v=>v.toLocaleString()+'원',font:{size:10}},grid:{color:'#f1f5f9'}}
+    }
+  }
+});
+
+// MACD 히스토그램 차트 (신 로직)
+const h3vals = mb.map(d=>d.h3);
+const bColors = mb.map(d=>{
+  if (d.sig==='buy_pre')  return 'rgba(16,185,129,0.8)';
+  if (d.sig==='sell_pre') return 'rgba(239,68,68,0.8)';
+  return d.h3>=0 ? 'rgba(96,165,250,0.55)' : 'rgba(148,163,184,0.55)';
+});
+
+new Chart(document.getElementById('cMacd').getContext('2d'), {
+  type:'bar', data:{labels, datasets:[{
+    label:'MACD 히스토그램 (3분봉, 신 로직 기준)',
+    data:h3vals, backgroundColor:bColors, borderWidth:0,
+  }]}, options:{
+    responsive:true, interaction:{mode:'index',intersect:false},
+    plugins:{
+      legend:{labels:{color:'#64748b',font:{size:11}}},
+      tooltip:{backgroundColor:'#1e293b',titleColor:'#f8fafc',bodyColor:'#cbd5e1',
+                borderColor:'#334155',borderWidth:1,
+                callbacks:{label:c=>`MACD hist: ${c.parsed.y?.toFixed(1)} | ${mb[c.dataIndex]?.sig}`}}
+    },
+    scales:{
+      x:{ticks:{color:'#94a3b8',maxTicksLimit:14,font:{size:10}},grid:{color:'#f1f5f9'}},
+      y:{ticks:{color:'#94a3b8',font:{size:10}},grid:{color:'#f1f5f9'}}
+    }
+  }
+});
+</script>
+</body>
+</html>
