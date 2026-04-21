@@ -118,6 +118,9 @@ class StockSnapshot:
     is_gap_up: bool = False        # 전일 종가 대비 +8% 이상 갭업 (돌파매매 대상)
     gap_up_pct: float = 0.0        # 갭업 비율 (≈ change_pct, 당일 등락률 활용)
 
+    # 장중 위치 (눌림목 반등 감지용)
+    intraday_chg_pct: float = 0.0  # (현재가 - 시가) / 시가 × 100 — 양수=시가 대비 상승, 음수=하락
+
     error: str = ""               # 수집 오류 메시지
 
 
@@ -402,6 +405,8 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     # 갭업 돌파 플래그: +8% 이상 갭업이면 돌파매매 대상
     snap.gap_up_pct = change_pct
     snap.is_gap_up  = change_pct >= 8.0
+    # 장중 위치: 시가 대비 현재가 위치 (눌림목 반등 감지)
+    snap.intraday_chg_pct = round((price - day_open) / day_open * 100, 2) if day_open > 0 else 0.0
 
     # 2. 기술지표 (FDR + pandas-ta)
     ind = _compute_indicators(ticker, price, volume)

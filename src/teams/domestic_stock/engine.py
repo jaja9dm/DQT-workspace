@@ -100,7 +100,12 @@ class DomesticStockEngine:
 
         # 5. Claude Hot List 판단
         key_events = _get_global_key_events()
-        hot_list = analyze(scan, market_score, global_risk_score, global_key_events=key_events)
+        kospi_chg = _get_kospi_chg_pct()
+        hot_list = analyze(
+            scan, market_score, global_risk_score,
+            global_key_events=key_events,
+            kospi_chg_pct=kospi_chg,
+        )
 
         # 6. DB 저장
         saved = _save_hot_list(hot_list, scan)
@@ -228,6 +233,20 @@ def _get_global_risk_score() -> int:
         return int(row["global_risk_score"]) if row else 5
     except Exception:
         return 5
+
+
+def _get_kospi_chg_pct() -> float:
+    """DB의 market_condition summary JSON에서 KOSPI 등락률 추출."""
+    try:
+        row = fetch_one(
+            "SELECT summary FROM market_condition ORDER BY created_at DESC LIMIT 1"
+        )
+        if row and row.get("summary"):
+            summary = json.loads(row["summary"])
+            return float(summary.get("kospi", 0.0))
+    except Exception:
+        pass
+    return 0.0
 
 
 def _get_global_key_events() -> list[str]:
