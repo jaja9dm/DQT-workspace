@@ -72,6 +72,15 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 
 ## 선정 기준 (우선순위 순)
 
+### 0순위: 갭업 돌파 (gap_up_breakout) — 최최우선 선정
+전일 대비 +8% 이상 갭업한 종목 중 아래 조건 충족 시 즉시 선정:
+- 갭업 +8% 이상 + OBV기울기 양수(매수세 지속 유입): 세력/기관 매집 중 갭업
+- 갭업 +8% 이상 + MACD 히스토그램 양수: 갭업 후 추가 모멘텀 살아있음
+- 거래량이 평소 대비 10배↑ 이상 + 갭업: 수급 폭발적 집중
+특히 +10~25% 구간 (상한가 미달 강한 갭업)이 추가 상승 여력이 가장 큼.
+RSI가 80+ 이어도 OBV 양수이면 "수급 강세" 로 허용 — reason에 반드시 "RSI과열_포지션50%" 명시.
+day_range 0.90↑이어도 갭업 + OBV 양수면 추격이 아닌 "돌파" 이므로 허용.
+
 ### 1순위: 복합 모멘텀 신호 (즉시 선정 고려)
 - 거래량 3배↑ + 가격 상승 + MACD 히스토그램 양수: 강력 매수 신호
 - 볼린저밴드 상단 돌파(BB위치 > 1.0) + RSI 60↑ + MA20 위: 모멘텀 돌파
@@ -120,7 +129,8 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - JSON만 출력합니다. 설명이나 주석을 추가하지 않습니다.
 - hot_list가 비어있으면 빈 배열 []을 반환합니다.
 - 선정 이유는 한국어로 20자 이내로 간결하게 작성합니다.
-- signal_type은 반드시 다음 중 하나: volume_surge | breakout | momentum | sector_momentum
+- signal_type은 반드시 다음 중 하나: gap_up_breakout | volume_surge | breakout | momentum | sector_momentum
+  (gap_up_breakout: 갭업 +8% 이상 + OBV 양수 or MACD 양수 종목 전용)
 
 ## 출력 형식
 {
@@ -166,9 +176,11 @@ def _build_user_message(
         mscore_str = f"모멘텀{s.momentum_score:.0f}점"
         drp = getattr(s, "day_range_pos", 0.5)
         drp_str = f"당일범위{drp:.2f}" + ("⚠️고가권" if drp >= 0.90 else ("↓저가권" if drp <= 0.20 else ""))
+        is_gap_up = getattr(s, "is_gap_up", False)
+        gap_str = f"🚀갭업{s.change_pct:+.0f}%" if is_gap_up else ""
         lines.append(
             f"- {s.ticker}({s.name}): "
-            f"등락{s.change_pct:+.1f}% | RSI {s.rsi:.0f} | "
+            f"등락{s.change_pct:+.1f}%{' ' + gap_str if gap_str else ''} | RSI {s.rsi:.0f} | "
             f"MACD히스토그램 {s.macd_hist:+.4f} | BB위치 {s.bb_position:.2f} | "
             f"MA20{'위' if s.above_ma20 else '아래'} | {obv_str} | {bbw_str} | {srsi_str} | {mscore_str} | {drp_str}"
             f"{supply_str} | {flag_str}"
@@ -321,24 +333,31 @@ def _extract_json(raw: str) -> str:
 
 
 def _fallback_hot_list(candidates: list[StockSnapshot]) -> list[dict]:
-    """Claude 실패 시 momentum_score 기준 상위 5종목 자동 선정."""
-    # RSI 82 초과·OBV 역행 종목 제외, 나머지를 momentum_score로 정렬
-    eligible = [
+    """Claude 실패 시 자동 선정 (갭업 돌파 우선 + momentum_score 기준)."""
+    # 갭업 돌파 종목 먼저 선정 (OBV 양수 + 갭업)
+    gap_up = [
         s for s in candidates
-        if s.rsi <= 82
+        if s.is_gap_up and s.obv_slope > 0 and s.rsi <= 90
+    ]
+    # 나머지 일반 종목 (RSI 82 이하, OBV 역행 제외)
+    normal = [
+        s for s in candidates
+        if not s.is_gap_up
+        and s.rsi <= 82
         and not (s.obv_slope < 0 and s.rsi > 70)
         and s.is_price_surge
     ]
-    top = sorted(eligible, key=lambda s: s.momentum_score, reverse=True)[:5]
+    gap_top    = sorted(gap_up,  key=lambda s: s.change_pct,    reverse=True)[:2]
+    normal_top = sorted(normal,  key=lambda s: s.momentum_score, reverse=True)[:1]
+    top = (gap_top + normal_top)[:3]
 
-    return [
-        {
-            "ticker": s.ticker,
-            "signal_type": "volume_surge",
-            "reason": (
-                f"모멘텀{s.momentum_score:.0f}점·거래량{s.volume_ratio:.1f}배"
-                f"{'·RSI과열_포지션50%' if s.rsi > 72 else ''} (자동선정)"
-            ),
-        }
-        for s in top
-    ]
+    result = []
+    for s in top:
+        sig   = "gap_up_breakout" if s.is_gap_up else "volume_surge"
+        reason = (
+            f"갭업{s.change_pct:+.0f}%·OBV{'↑' if s.obv_slope > 0 else '↓'}·거래량{s.volume_ratio:.1f}배"
+            if s.is_gap_up else
+            f"모멘텀{s.momentum_score:.0f}점·거래량{s.volume_ratio:.1f}배"
+        ) + ("·RSI과열_포지션50%" if s.rsi > 72 else "") + " (자동선정)"
+        result.append({"ticker": s.ticker, "signal_type": sig, "reason": reason})
+    return result

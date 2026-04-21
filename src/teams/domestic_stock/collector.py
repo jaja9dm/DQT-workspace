@@ -111,7 +111,12 @@ class StockSnapshot:
     # 당일 가격 범위
     day_high: float = 0.0         # 당일 고가 (KIS stck_hgpr)
     day_low: float = 0.0          # 당일 저가 (KIS stck_lwpr)
+    day_open: float = 0.0         # 당일 시가 (KIS stck_oprc)
     day_range_pos: float = 0.5    # (현재가-저가)/(고가-저가) — 0=저가권, 1=고가권
+
+    # 갭업 돌파 플래그
+    is_gap_up: bool = False        # 전일 종가 대비 +8% 이상 갭업 (돌파매매 대상)
+    gap_up_pct: float = 0.0        # 갭업 비율 (≈ change_pct, 당일 등락률 활용)
 
     error: str = ""               # 수집 오류 메시지
 
@@ -158,10 +163,11 @@ def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int
         inst_net_buy = int(output.get("orgn_ntby_qty", 0) or 0)
         day_high = float(output.get("stck_hgpr", 0) or 0)
         day_low  = float(output.get("stck_lwpr", 0) or 0)
-        return price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low
+        day_open = float(output.get("stck_oprc", 0) or 0)
+        return price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low, day_open
     except Exception as e:
         logger.debug(f"KIS 현재가 실패 [{ticker}]: {e}")
-        return 0.0, 0.0, 0, 0, 0, 0, 0.0, 0.0
+        return 0.0, 0.0, 0, 0, 0, 0, 0.0, 0.0, 0.0
 
 
 # ── FDR 기술지표 계산 ─────────────────────────────────────────
@@ -380,7 +386,7 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap = StockSnapshot(ticker=ticker, name=name)
 
     # 1. KIS 현재가
-    price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low = _fetch_price_from_kis(ticker)
+    price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low, day_open = _fetch_price_from_kis(ticker)
     snap.current_price = price
     snap.change_pct = change_pct
     snap.volume = volume
@@ -389,9 +395,13 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.inst_net_buy = inst_net_buy
     snap.day_high = day_high
     snap.day_low  = day_low
+    snap.day_open = day_open
     # 당일 가격 범위 내 현재 위치 (0=저가권, 1=고가권)
     day_range = day_high - day_low
     snap.day_range_pos = round((price - day_low) / day_range, 3) if day_range > 0 else 0.5
+    # 갭업 돌파 플래그: +8% 이상 갭업이면 돌파매매 대상
+    snap.gap_up_pct = change_pct
+    snap.is_gap_up  = change_pct >= 8.0
 
     # 2. 기술지표 (FDR + pandas-ta)
     ind = _compute_indicators(ticker, price, volume)
