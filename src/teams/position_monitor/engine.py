@@ -543,6 +543,23 @@ class PositionMonitorEngine:
                     exhaustion += bonus
                     exh_signals.append(f"연속sell_pre {consec_sell}회(+{bonus:.2f})")
 
+                # 거래량 하락세: 최근 3봉 평균 < 이전 3봉 평균 → 모멘텀 소진 신호
+                try:
+                    from src.infra.database import fetch_all as _fa
+                    _vol_rows = _fa(
+                        "SELECT volume FROM intraday_candles WHERE ticker = ? "
+                        "ORDER BY bar_time DESC LIMIT 6",
+                        (ticker,),
+                    )
+                    if len(_vol_rows) >= 6:
+                        _recent_vol = sum(int(r["volume"]) for r in _vol_rows[:3]) / 3
+                        _earlier_vol = sum(int(r["volume"]) for r in _vol_rows[3:6]) / 3
+                        if _earlier_vol > 0 and _recent_vol < _earlier_vol * 0.70:
+                            exhaustion += 0.15
+                            exh_signals.append(f"거래량감소({_recent_vol/_earlier_vol:.2f}x)")
+                except Exception:
+                    pass
+
                 # 수익률 자체도 반영 (고수익 = 수익 잠금 urgency)
                 if pnl_pct >= 7.0:
                     exhaustion += 0.20

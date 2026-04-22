@@ -446,6 +446,14 @@ class TradingEngine:
                     fails.append(
                         f"고가권 추격 차단 (등락 {price_chg:+.1f}% + 범위위치 {day_range_pos:.2f} + OBV↓)"
                     )
+            # stoch_rsi 극단 과매수 차단: 단기 되돌림 위험 (갭업/오프닝급락 예외)
+            _stoch_rsi = c.get("stoch_rsi") or 50.0
+            if _stoch_rsi > 88.0 and not (is_gap_up or is_op_plunge):
+                fails.append(f"StochRSI {_stoch_rsi:.0f} > 88 (단기 극과매수 — 되돌림 위험)")
+            # bb_width_ratio 브레이크아웃 확인: 갭업 돌파 시 변동성 실제 확대 필요
+            _bb_ratio = c.get("bb_width_ratio") or 1.0
+            if is_gap_up and _bb_ratio < 1.0:
+                fails.append(f"BB폭 미확대 {_bb_ratio:.2f} < 1.0 (가짜 브레이크아웃)")
             # 갭업 돌파 종목 시간 제한:
             # 11:00 이후 ~ 13:00: MACD buy_pre 확인 시 뒤늦은 추격 허용 (Gate 4.5에서 검증)
             # 13:00 이후: 완전 차단 (너무 늦은 추격 — 갭 되돌림 위험)
@@ -497,6 +505,20 @@ class TradingEngine:
                     f"(히스토그램 양수 하강 중 — 수급 이탈 신호) — 진입 보류"
                 )
                 continue
+
+            # Gate 4.5 VWAP 품질 필터: 모멘텀/갭업 종목은 현재가 ≥ VWAP 필수
+            # 눌림목/오프닝급락은 VWAP 아래가 정상이므로 면제
+            sig_type_c = c.get("signal_type", "momentum")
+            _is_pullback_c  = sig_type_c == "pullback_rebound"
+            _is_op_plunge_c = sig_type_c == "opening_plunge_rebound"
+            if not (_is_pullback_c or _is_op_plunge_c):
+                _vwap, _cur_px = _get_vwap_position(tk)
+                if _vwap > 0 and _cur_px < _vwap * 0.995:
+                    logger.info(
+                        f"Gate 4.5 차단: {tk} 현재가 {_cur_px:,.0f} < VWAP {_vwap:,.0f} × 0.995 "
+                        f"(수급 중심선 하회 — 모멘텀 약화)"
+                    )
+                    continue
 
             # 전략D: 오프닝 급락 반등 — 3분봉+5분봉 듀얼 확인 + 실제 급락 검증
             if sig_type == "opening_plunge_rebound":
@@ -1146,6 +1168,37 @@ def _check_opening_dip_quality(ticker: str) -> tuple[bool, str]:
     if higher_lows:
         parts.append("연속 저가 상승")
     return True, " + ".join(parts)
+
+
+def _get_vwap_position(ticker: str) -> tuple[float, float]:
+    """
+    당일 intraday_candles에서 VWAP 계산.
+    Returns: (vwap, current_price) — 데이터 부족 시 (0.0, 0.0)
+    """
+    rows = fetch_all(
+        """
+        SELECT high, low, close, volume
+        FROM intraday_candles
+        WHERE ticker = ?
+          AND bar_time >= '090000'
+        ORDER BY bar_time ASC
+        """,
+        (ticker,),
+    )
+    if len(rows) < 3:
+        return 0.0, 0.0
+    cum_pv = 0.0
+    cum_vol = 0.0
+    for r in rows:
+        typical = (float(r["high"]) + float(r["low"]) + float(r["close"])) / 3
+        vol = float(r["volume"])
+        cum_pv += typical * vol
+        cum_vol += vol
+    if cum_vol == 0:
+        return 0.0, 0.0
+    vwap = cum_pv / cum_vol
+    current_price = float(rows[-1]["close"])
+    return vwap, current_price
 
 
 def _load_global_context() -> dict:
