@@ -75,6 +75,16 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 시황과 종목 특성을 보고 아래 전략 중 가장 적합한 것을 선택하세요.
 Hot List 안에서 종목마다 다른 전략을 적용할 수 있습니다.
 
+### 전략 D: 오프닝 급락 반등 (opening_plunge_rebound) — 장초반 전용
+**언제**: 09:00~10:30, 시가 대비 -3% 이상 급락 후 반등 중인 종목
+**조건**:
+- 장중등락(시가대비) -3% 이하 (오프닝 급락 확인)
+- 현재가가 당일 저점 대비 반등 중 (day_range 0.20 이상으로 회복)
+- OBV기울기 양수 또는 급반등 거래량 (매수세 유입)
+- 전일비 등락률은 무관 (플러스여도 됨 — 시가 급락이 핵심)
+**특징**: 3분봉+5분봉 듀얼 MACD 확인 후 진입, target 2~4%, stop 1.5%, 당일 청산
+**예시**: 갭업 오픈 후 5분 내 -5% 급락 → V자 반등 초입 진입
+
 ### 전략 A: 갭업 돌파매매 (gap_up_breakout) — 최우선
 **언제**: 전일 대비 +8% 이상 갭업 종목이 있을 때
 - 갭업 +8% 이상 + OBV기울기 양수: 세력/기관 매집 중 갭업
@@ -140,7 +150,7 @@ day_range 0.90↑이어도 갭업+OBV양수면 허용.
 - hot_list가 비어있으면 빈 배열 []을 반환합니다.
 - 선정 이유는 한국어로 20자 이내로 간결하게 작성합니다.
 - signal_type은 반드시 다음 중 하나:
-  gap_up_breakout (전략A) | pullback_rebound (전략B) | market_momentum (전략C)
+  opening_plunge_rebound (전략D) | gap_up_breakout (전략A) | pullback_rebound (전략B) | market_momentum (전략C)
   | volume_surge | breakout | momentum | sector_momentum
 
 ## 출력 형식
@@ -358,11 +368,23 @@ def _extract_json(raw: str) -> str:
 
 
 def _fallback_hot_list(candidates: list[StockSnapshot]) -> list[dict]:
-    """Claude 실패 시 자동 선정 — 전략 A/B/C 우선순위로 자동 분류."""
+    """Claude 실패 시 자동 선정 — 전략 D/A/B/C 우선순위로 자동 분류."""
+    from datetime import datetime
+    _now_hm = int(datetime.now().strftime("%H%M"))
+
+    # 전략 D: 오프닝 급락 반등 (09:00~10:30, 시가 대비 -3% 이하 급락 + 반등 중)
+    op_plunge = [
+        s for s in candidates
+        if _now_hm <= 1030
+        and getattr(s, "intraday_chg_pct", 0.0) <= -3.0
+        and s.day_range_pos >= 0.20   # 저점에서 어느 정도 반등 중
+        and s.obv_slope > 0
+    ]
     # 전략 A: 갭업 돌파 (OBV 양수 + 갭업)
     gap_up = [
         s for s in candidates
         if s.is_gap_up and s.obv_slope > 0 and s.rsi <= 90
+        and s not in op_plunge
     ]
     # 전략 B: 눌림목 반등 (오늘 하락 + 시가 대비 반등 중 + OBV 양수)
     pullback = [
@@ -372,6 +394,7 @@ def _fallback_hot_list(candidates: list[StockSnapshot]) -> list[dict]:
         and getattr(s, "intraday_chg_pct", 0.0) >= 0
         and s.obv_slope > 0
         and s.rsi <= 75
+        and s not in op_plunge
     ]
     # 전략 C: 시장 강세 편승 (외인+기관 동시 순매수 + 적정 등락 + RSI 정상)
     mkt_mom = [
@@ -392,29 +415,32 @@ def _fallback_hot_list(candidates: list[StockSnapshot]) -> list[dict]:
         and s not in pullback and s not in mkt_mom
     ]
 
-    gap_top  = sorted(gap_up,  key=lambda s: s.change_pct,    reverse=True)[:2]
-    pb_top   = sorted(pullback, key=lambda s: s.momentum_score, reverse=True)[:1]
-    mm_top   = sorted(mkt_mom,  key=lambda s: s.momentum_score, reverse=True)[:1]
-    norm_top = sorted(normal,   key=lambda s: s.momentum_score, reverse=True)[:1]
+    op_top   = sorted(op_plunge, key=lambda s: getattr(s, "intraday_chg_pct", 0.0))[:1]  # 급락폭 큰 순
+    gap_top  = sorted(gap_up,   key=lambda s: s.change_pct,     reverse=True)[:2]
+    pb_top   = sorted(pullback, key=lambda s: s.momentum_score,  reverse=True)[:1]
+    mm_top   = sorted(mkt_mom,  key=lambda s: s.momentum_score,  reverse=True)[:1]
+    norm_top = sorted(normal,   key=lambda s: s.momentum_score,  reverse=True)[:1]
 
-    # 슬롯 채우기: 갭업 우선, 나머지 1자리는 B→C→일반 순
-    top = gap_top[:]
-    if len(top) < 3:
-        for s in (pb_top + mm_top + norm_top):
-            if s not in top:
-                top.append(s)
-            if len(top) >= 3:
-                break
+    # 슬롯 채우기: D(오프닝급락)→A(갭업)→나머지 순
+    top = op_top[:]
+    for s in (gap_top + pb_top + mm_top + norm_top):
+        if s not in top:
+            top.append(s)
+        if len(top) >= 3:
+            break
     top = top[:3]
 
     result = []
     for s in top:
-        if s.is_gap_up:
+        intra = getattr(s, "intraday_chg_pct", 0.0)
+        if s in op_plunge:
+            sig = "opening_plunge_rebound"
+            reason = f"오프닝급락{intra:+.1f}%·반등중·OBV↑"
+        elif s.is_gap_up:
             sig = "gap_up_breakout"
             reason = f"갭업{s.change_pct:+.0f}%·OBV{'↑' if s.obv_slope > 0 else '↓'}·거래량{s.volume_ratio:.1f}배"
         elif s in pullback:
             sig = "pullback_rebound"
-            intra = getattr(s, "intraday_chg_pct", 0.0)
             reason = f"눌림{s.change_pct:+.0f}%·장중{intra:+.1f}%·OBV↑"
         elif s in mkt_mom:
             sig = "market_momentum"

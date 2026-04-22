@@ -300,6 +300,27 @@ def get_consecutive_sell_pre(ticker: str, max_age_minutes: int = 20) -> int:
     return count
 
 
+def get_macd_dual_confirm(ticker: str, max_age_minutes: int = 6) -> bool:
+    """
+    3분봉 AND 5분봉 모두 buy_pre인지 확인.
+    사용자 방식: 두 타임프레임이 같은 방향이어야 진입.
+    opening_plunge_rebound 등 고확신 진입 시 사용.
+    """
+    row = fetch_one(
+        """
+        SELECT sig_3m, sig_5m FROM intraday_macd_signal
+        WHERE ticker = ?
+          AND created_at >= datetime('now', ?)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (ticker, f"-{max_age_minutes} minutes"),
+    )
+    if not row:
+        return False
+    return row["sig_3m"] == "buy_pre" and row["sig_5m"] == "buy_pre"
+
+
 def get_latest_macd_signal(ticker: str, max_age_minutes: int = 5) -> str:
     """
     해당 종목의 최신 MACD 신호 조회.
