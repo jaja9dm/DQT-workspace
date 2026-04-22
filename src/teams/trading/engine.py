@@ -34,7 +34,7 @@ from __future__ import annotations
 import json
 import threading
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import anthropic
 
@@ -311,9 +311,29 @@ class TradingEngine:
         # 이미 당일 매수한 종목 제외
         # 단, MACD 조기손절 후 재진입 허용 종목(buy_pre 신호 복귀)은 재진입 가능
         from src.teams.intraday_macd.engine import get_latest_macd_signal
+        # 전일 손절 종목 쿨다운: 손절 후 1 거래일은 재진입 금지 (한온시스템 패턴 차단)
+        _cooldown_days = 1
+        yesterday = (date.today() - timedelta(days=1)).isoformat()
+        _prev_sl_tickers: set[str] = set()
+        prev_sl_rows = fetch_all(
+            "SELECT DISTINCT ticker FROM trades WHERE date=? AND action='stop_loss'",
+            (yesterday,),
+        )
+        if prev_sl_rows:
+            _prev_sl_tickers = {r["ticker"] for r in prev_sl_rows}
+            if _prev_sl_tickers:
+                logger.info(
+                    f"[전일 손절 쿨다운] {_cooldown_days}일 재진입 금지: "
+                    f"{', '.join(sorted(_prev_sl_tickers))}"
+                )
+
         candidates = []
         for h in hot_list:
             ticker = h["ticker"]
+            # 전일 손절 종목 쿨다운 체크
+            if ticker in _prev_sl_tickers:
+                logger.info(f"[쿨다운 차단] {ticker} — 전일 손절 이력, {_cooldown_days}일 재진입 금지")
+                continue
             if ticker not in self._today_tickers:
                 candidates.append(h)
             elif ticker in self._macd_reentry_ok:
