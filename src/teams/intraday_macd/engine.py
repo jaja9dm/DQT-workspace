@@ -38,8 +38,9 @@ from src.utils.macd import MACDSignal, aggregate_candles, get_signal, macd_from_
 
 logger = get_logger(__name__)
 
-_INTERVAL_SEC = 180   # 3분 주기
-_CANDLE_SLEEP = 5.0   # 분봉 API 종목간 간격 — KIS 모의투자 엄격 제한 (직접 requests 사용)
+_INTERVAL_SEC = 180       # 기본 3분 주기
+_INTERVAL_OPENING = 60    # 오프닝 1분 주기 (09:00~10:30)
+_CANDLE_SLEEP = 5.0       # 분봉 API 종목간 간격 — KIS 모의투자 엄격 제한 (직접 requests 사용)
 
 
 class IntradayMACDEngine:
@@ -67,12 +68,19 @@ class IntradayMACDEngine:
     # ──────────────────────────────────────────
 
     def _run_loop(self) -> None:
+        _cleanup_counter = 0
         while not self._stop_event.is_set():
             try:
                 self.run_once()
+                # 30사이클(~30분)마다 오래된 DB 레코드 정리
+                _cleanup_counter += 1
+                if _cleanup_counter >= 30:
+                    _cleanup_counter = 0
+                    _purge_old_records()
             except Exception as e:
                 logger.error(f"장중 MACD 모니터링 오류: {e}", exc_info=True)
-            self._stop_event.wait(timeout=_INTERVAL_SEC)
+            interval = _get_scan_interval()
+            self._stop_event.wait(timeout=interval)
 
     def run_once(self) -> list[dict]:
         """
@@ -122,19 +130,25 @@ class IntradayMACDEngine:
 
                 # 최종 신호 결합
                 #
-                # buy_pre  : 3분봉 OR 5분봉 중 하나만 BUY_PRE여도 진입 신호
-                #            (AND → OR: 히스토그램 저점 반등 초기에 더 빠르게 포착)
-                # sell_pre : 3분봉 AND 5분봉 모두 SELL_PRE일 때만 청산 신호
-                #            (OR → AND: 어느 하나만 약해도 섣불리 청산하는 오류 방지)
-                #            → 첫 번째 신호 = 스캘핑 부분 익절 트리거
-                #              두 번째 이상 연속 = 전량 청산 트리거 (연속 횟수로 판단)
+                # sell_pre  : 3분봉 AND 5분봉 모두 SELL_PRE — 가장 강한 청산 신호
+                # buy_pre   : 3분봉 OR 5분봉 BUY_PRE — 반등 초기 포착 (빠른 진입)
+                # sell_prep : 5분봉 히스토그램이 양수 고점에서 꺾임 — 모멘텀 약화 조기 경고
+                #             사용자 패턴: 5분봉 MACD 피크 → 청산 준비 (sell_pre 1~2봉 선행)
+                # hold      : 그 외
                 raw_sig_3m = sig_3m.value   # "buy_pre"|"sell_pre"|"hold"
                 raw_sig_5m = sig_5m.value
 
-                if sig_3m == MACDSignal.BUY_PRE or sig_5m == MACDSignal.BUY_PRE:
-                    final_signal = "buy_pre"
-                elif sig_3m == MACDSignal.SELL_PRE and sig_5m == MACDSignal.SELL_PRE:
+                # 5분봉 히스토그램 고점 감지 (전봉 대비 감소 + 전봉 양수)
+                hist_5m_curr = float(df_5m["hist"].iloc[-1])
+                hist_5m_prev = float(df_5m["hist"].iloc[-2]) if len(df_5m) >= 2 else hist_5m_curr
+                hist_5m_peak_decline = hist_5m_prev > 0.0 and hist_5m_curr < hist_5m_prev
+
+                if sig_3m == MACDSignal.SELL_PRE and sig_5m == MACDSignal.SELL_PRE:
                     final_signal = "sell_pre"
+                elif sig_3m == MACDSignal.BUY_PRE or sig_5m == MACDSignal.BUY_PRE:
+                    final_signal = "buy_pre"
+                elif hist_5m_peak_decline:
+                    final_signal = "sell_prep"   # 5분봉 MACD 고점 꺾임 — 조기 경고
                 else:
                     final_signal = "hold"
 
@@ -178,6 +192,39 @@ class IntradayMACDEngine:
                 continue
 
         return results
+
+
+# ──────────────────────────────────────────────
+# DB 정리
+# ──────────────────────────────────────────────
+
+def _purge_old_records() -> None:
+    """장 중 누적되는 신호/캔들 레코드 정리 (2시간 이상 오래된 것 삭제)."""
+    try:
+        execute(
+            "DELETE FROM intraday_macd_signal WHERE created_at < datetime('now', '-2 hours')"
+        )
+        execute(
+            "DELETE FROM intraday_candles WHERE bar_time < strftime('%H%M%S', datetime('now', '-2 hours'))"
+        )
+    except Exception as e:
+        logger.debug(f"DB 정리 오류: {e}")
+
+
+# ──────────────────────────────────────────────
+# 스캔 주기 결정
+# ──────────────────────────────────────────────
+
+def _get_scan_interval() -> int:
+    """
+    시간대별 스캔 주기 반환.
+    09:00~10:30 오프닝 구간: 1분 (opening_plunge_rebound 타이밍 개선)
+    그 외: 3분 (API 절약)
+    """
+    hm = int(datetime.now().strftime("%H%M"))
+    if 900 <= hm <= 1400:
+        return _INTERVAL_OPENING
+    return _INTERVAL_SEC
 
 
 # ──────────────────────────────────────────────
@@ -349,34 +396,64 @@ def get_macd_details(ticker: str, max_age_minutes: int = 6) -> dict:
     """
     최신 MACD 신호 + 히스토그램 값 조회 (동적 스캘핑 판단용).
 
-    Args:
-        ticker: 종목 코드
-        max_age_minutes: 이 분 이내 신호만 유효
-
     Returns:
         {
-            "signal": "buy_pre" | "sell_pre" | "hold",
-            "hist_3m": float | None,   # 3분봉 MACD 히스토그램
-            "hist_5m": float | None,   # 5분봉 MACD 히스토그램
+            "signal": "buy_pre"|"sell_pre"|"sell_prep"|"hold",
+            "hist_3m": float | None,
+            "hist_5m": float | None,
+            "from_negative": bool,   # 5분봉 hist가 음수에서 회복 중 (강한 반전 신호)
+            "hist_5m_peak_decline": bool,  # 5분봉 hist 양수 고점 꺾임 (sell_prep 판단용)
         }
     """
-    row = fetch_one(
+    rows = fetch_all(
         """
         SELECT signal, hist_3m, hist_5m FROM intraday_macd_signal
         WHERE ticker = ?
           AND created_at >= datetime('now', ?)
         ORDER BY created_at DESC
-        LIMIT 1
+        LIMIT 2
         """,
         (ticker, f"-{max_age_minutes} minutes"),
     )
-    if row:
+    if rows:
+        curr = rows[0]
+        prev = rows[1] if len(rows) >= 2 else curr
+        hist_5m_curr = float(curr["hist_5m"] or 0)
+        hist_5m_prev = float(prev["hist_5m"] or 0)
         return {
-            "signal": row["signal"],
-            "hist_3m": row["hist_3m"],
-            "hist_5m": row["hist_5m"],
+            "signal": curr["signal"],
+            "hist_3m": curr["hist_3m"],
+            "hist_5m": curr["hist_5m"],
+            "from_negative": hist_5m_prev < 0.0 and hist_5m_curr > hist_5m_prev,
+            "hist_5m_peak_decline": hist_5m_prev > 0.0 and hist_5m_curr < hist_5m_prev,
         }
-    return {"signal": "hold", "hist_3m": None, "hist_5m": None}
+    return {
+        "signal": "hold", "hist_3m": None, "hist_5m": None,
+        "from_negative": False, "hist_5m_peak_decline": False,
+    }
+
+
+def get_macd_from_negative(ticker: str, max_age_minutes: int = 8) -> bool:
+    """
+    5분봉 MACD 히스토그램이 음수 구간에서 회복 중인지 확인.
+    사용자 패턴: "MACD가 마이너스로 갔다가 마이너스에서 cross 오면서 올라올 때" = 강한 반전
+    일반 buy_pre(양수에서 수렴)보다 신뢰도 높은 재진입 시그널.
+    """
+    rows = fetch_all(
+        """
+        SELECT hist_5m FROM intraday_macd_signal
+        WHERE ticker = ?
+          AND created_at >= datetime('now', ?)
+        ORDER BY created_at DESC
+        LIMIT 2
+        """,
+        (ticker, f"-{max_age_minutes} minutes"),
+    )
+    if len(rows) < 2:
+        return False
+    hist_curr = float(rows[0]["hist_5m"] or 0)
+    hist_prev = float(rows[1]["hist_5m"] or 0)
+    return hist_prev < 0.0 and hist_curr > hist_prev
 
 
 # ──────────────────────────────────────────────

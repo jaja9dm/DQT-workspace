@@ -322,6 +322,10 @@ class PositionMonitorEngine:
         hist_3m_now   = macd_details["hist_3m"] or 0.0
         macd_bullish  = macd_sig in _MACD_BULLISH
         macd_bearish  = macd_sig in _MACD_BEARISH
+        # sell_prep: 5분봉 히스토그램 양수 고점 꺾임 — sell_pre 1~2봉 선행하는 조기 경고
+        # (bearish는 아니므로 조기손절 트리거 안 함 — trailing 타이트 + 소진도 가속만)
+        macd_sell_prep = macd_sig == "sell_prep"
+        from_negative  = macd_details.get("from_negative", False)
 
         # 이전 사이클 대비 bullish 전환 여부 (bearish/None → bullish)
         prev_macd = self._macd_prev.get(ticker)
@@ -378,10 +382,12 @@ class PositionMonitorEngine:
         # ── 2. 트레일링 스톱 ────────────────────
         ts = _load_trailing_stop(ticker)
         if ts:
-            # tight 조건: MACD bearish OR 14:00 이후 (장마감 전 수익 보호 가속)
+            # tight 조건: bearish OR sell_prep(5분봉 피크 꺾임) OR 14:00 이후
             _now_hm = datetime.now().hour * 100 + datetime.now().minute
-            tight = macd_bearish or (_now_hm >= 1400 and pnl_pct > 0)
-            if _now_hm >= 1400 and pnl_pct > 0 and not macd_bearish:
+            tight = macd_bearish or macd_sell_prep or (_now_hm >= 1400 and pnl_pct > 0)
+            if macd_sell_prep and pnl_pct > 0:
+                logger.debug(f"[sell_prep 타이트] {ticker} 5분봉 MACD 고점 꺾임 — 손절선 간격 절반 적용")
+            elif _now_hm >= 1400 and pnl_pct > 0 and not macd_bearish:
                 logger.debug(f"[14:00 이후 타이트] {ticker} 수익 {pnl_pct:+.2f}% — 트레일링 간격 절반 적용")
             updated_floor = _update_trailing_floor(
                 ticker, ts, current_price, avg_price, quantity, tight=tight
@@ -516,6 +522,11 @@ class PositionMonitorEngine:
                     # sell_pre: 3분봉+5분봉 모두 히스토그램 하강 (AND 조건) → 비중 축소
                     exhaustion += 0.45
                     exh_signals.append(f"MACD역행({macd_sig})")
+                elif macd_sell_prep:
+                    # sell_prep: 5분봉 히스토그램 양수 고점 꺾임 — sell_pre보다 1~2봉 선행
+                    # 사용자 패턴: 5분봉 MACD 피크에서 청산 준비 → 즉시 손절선 타이트 + 소진도 상승
+                    exhaustion += 0.38
+                    exh_signals.append("5분봉MACD피크꺾임")
                 elif hist_3m_now < 0 and hist_3m_prev >= 0:
                     # 히스토그램이 양수→음수 전환 (모멘텀 반전 확인)
                     exhaustion += 0.40

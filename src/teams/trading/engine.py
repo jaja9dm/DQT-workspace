@@ -210,10 +210,10 @@ class TradingEngine:
         # ── Gate 0: 오프닝 게이트 ───────────────
         now = datetime.now()
 
-        # 신규 매수 마감 (14:20 이후 — 장중 집중력 분산 방지 + 청산 여유 확보)
+        # 신규 매수 마감 (13:30 이후 — 장 후반 추가 진입 지양, 청산 여유 확보)
         _hm = now.hour * 100 + now.minute
-        if _hm >= 1420:
-            logger.debug(f"장마감 시간대 ({now.strftime('%H:%M')}) — 신규 매수 차단")
+        if _hm >= 1330:
+            logger.debug(f"13:30 이후 신규 매수 차단 ({now.strftime('%H:%M')})")
             return []
 
         if not self._opening_gate_checked:
@@ -318,7 +318,10 @@ class TradingEngine:
 
         # 이미 당일 매수한 종목 제외
         # 단, MACD 조기손절 후 재진입 허용 종목(buy_pre 신호 복귀)은 재진입 가능
-        from src.teams.intraday_macd.engine import get_latest_macd_signal
+        from src.teams.intraday_macd.engine import (
+            get_latest_macd_signal,
+            get_macd_from_negative as _get_from_neg,
+        )
         # 전일 손절 종목 쿨다운: 손절 후 1 거래일은 재진입 금지 (한온시스템 패턴 차단)
         _cooldown_days = 1
         yesterday = (date.today() - timedelta(days=1)).isoformat()
@@ -357,9 +360,20 @@ class TradingEngine:
                     continue
                 macd_sig = get_latest_macd_signal(ticker, max_age_minutes=6)
                 if macd_sig == "buy_pre" and not _has_open_position(ticker):
-                    logger.info(f"[MACD 재진입] {ticker} — MACD buy_pre 복귀, 재매수 허용")
+                    from_neg = _get_from_neg(ticker)
+                    if from_neg:
+                        logger.info(
+                            f"[MACD 음수회복 재진입] {ticker} — 5분봉 hist 음수→회복 확인, "
+                            f"강한 반전 신호 (풀사이즈 재매수)"
+                        )
+                    else:
+                        logger.info(f"[MACD 재진입] {ticker} — MACD buy_pre 복귀 (사이즈 25% 축소)")
                     self._today_tickers.discard(ticker)
                     self._macd_reentry_ok.discard(ticker)
+                    # 재진입 품질 플래그 태깅 (사이징 조정용)
+                    h = dict(h)
+                    h["_is_reentry"] = True
+                    h["_from_negative"] = from_neg
                     candidates.append(h)
 
         if not candidates:
@@ -607,7 +621,13 @@ class TradingEngine:
 
             # RSI 과열 종목: 1차 매수 비중 50%로 축소 (40% → 20% 실효)
             rsi_hot = item.get("rsi_hot", False)
-            t1_ratio = _TRANCHE_RATIOS[0] * (0.5 if rsi_hot else 1.0)
+            # 재진입 종목: 포지션 25% 축소 (리서치 기반 — 재진입 성공률 관리)
+            # from_negative(음수→회복)이면 신뢰도 높아 축소 없음
+            is_reentry = item.get("_is_reentry", False)
+            reentry_mult = 1.0 if not is_reentry else (1.0 if item.get("_from_negative") else 0.75)
+            if is_reentry and reentry_mult < 1.0:
+                logger.info(f"재진입 사이즈 축소: {ticker} × {reentry_mult} (단순 buy_pre 재진입)")
+            t1_ratio = _TRANCHE_RATIOS[0] * (0.5 if rsi_hot else 1.0) * reentry_mult
             tranche1_amt = max_invest * t1_ratio
             qty = max(1, int(tranche1_amt / current_price))
 
@@ -846,6 +866,12 @@ JSON만 응답:
                 # 5분 대기 후 현재가 확인
                 time.sleep(300)
                 if self._stop_event.is_set():
+                    break
+
+                # 13:30 이후 추가 분할매수 차단
+                _now_hm = datetime.now().hour * 100 + datetime.now().minute
+                if _now_hm >= 1330:
+                    logger.info(f"분할매수 {tranche_no}차 중단: 13:30 이후 추가 진입 지양")
                     break
 
                 current = _fetch_current_price(ticker)

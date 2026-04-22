@@ -12,6 +12,7 @@ KIS API는 반드시 KISGateway 경유.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -25,6 +26,14 @@ from src.utils.logger import get_logger
 from src.utils.retry import retry_call
 
 logger = get_logger(__name__)
+
+# ── FDR 당일 캐시 ─────────────────────────────────────────────
+# FDR OHLCV는 일봉 데이터라 장 중 변하지 않음.
+# 매 5분 사이클마다 재요청하는 대신 날짜 단위로 캐시.
+# → 첫 사이클에만 네트워크 요청, 이후 사이클은 메모리에서 즉시 반환.
+_fdr_cache: dict[str, tuple[str, pd.DataFrame]] = {}  # ticker → (date_str, df)
+_fdr_cache_lock = threading.Lock()
+_FDR_MIN_ATR_PCT = 1.5   # ATR(%) 최소 기준 — 이하면 수수료 후 수익 불가 종목으로 간주
 
 # 사이클 ID: 현재 시각을 5분 단위로 내림한 문자열 (재시작 후 이어받기 기준)
 def _cycle_id() -> str:
@@ -191,12 +200,30 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
     }
 
     try:
-        end = datetime.now().date()
-        start = end - timedelta(days=120)  # 60일 지표 계산용 여유분
-        # FDR 조회 실패 시 최대 3회 재시도
-        df = retry_call(fdr.DataReader, ticker, start, end, max_attempts=3, base_delay=2.0)
+        today_str = datetime.now().strftime("%Y%m%d")
+        # 당일 캐시 확인 (FDR 일봉 데이터는 장 중 변경 없음 — 재요청 불필요)
+        with _fdr_cache_lock:
+            cached = _fdr_cache.get(ticker)
+        if cached and cached[0] == today_str:
+            df = cached[1]
+        else:
+            end = datetime.now().date()
+            start = end - timedelta(days=120)
+            df = retry_call(fdr.DataReader, ticker, start, end, max_attempts=3, base_delay=2.0)
+            with _fdr_cache_lock:
+                _fdr_cache[ticker] = (today_str, df)
+
         if df.empty or len(df) < 20:
             return _default
+
+        # ATR 최소 기준 필터: 일봉 기준 평균 변동폭 < 1.5% 종목은 수수료 후 수익 불가
+        try:
+            tr_pct = ((df["High"] - df["Low"]) / df["Close"]).tail(14).mean() * 100
+            if tr_pct < _FDR_MIN_ATR_PCT:
+                _default["_low_atr"] = True  # 호출측에서 스킵 여부 판단
+                return _default
+        except Exception:
+            pass
 
         close = df["Close"].astype(float)
         volume_series = df["Volume"].astype(float)
@@ -410,6 +437,10 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
 
     # 2. 기술지표 (FDR + pandas-ta)
     ind = _compute_indicators(ticker, price, volume)
+    # ATR 최소 기준 미달 종목: 수수료 후 수익 불가 → 스냅샷 오류 처리
+    if ind.get("_low_atr"):
+        snap.error = f"ATR < {_FDR_MIN_ATR_PCT}% (수수료 후 수익 불가)"
+        return snap
     snap.rsi = ind["rsi"]
     snap.macd = ind["macd"]
     snap.macd_signal = ind["macd_signal"]
