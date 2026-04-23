@@ -60,7 +60,9 @@ _SYSTEM_PROMPT = """당신은 국내 주식 퀀트 전략가입니다.
 - 거래량비율: 최근 20일 평균 대비 배수 (1.0=평균, 3.0=3배)
 - OBV기울기: 최근 5봉 On-Balance Volume 기울기. 양수=매수세 유입, 음수=매도세(가격 상승에도 OBV 하락=위험)
 - StochRSI: Stochastic RSI(14,14). 80↑=단기 과매수(주의), 20↓=과매도(반등 대기), 50~80=모멘텀 지속
-- 모멘텀점수: 거래량·MACD·BB폭·OBV 종합 점수(0~100). 높을수록 신호 품질 우수
+- 모멘텀점수: 거래량·MACD·BB폭·OBV·거래대금·신고가 종합 점수(0~130). 높을수록 신호 품질 우수
+- 거래대금: 당일 누적 거래대금(억원). 단타 체결 유동성 직결 — 100억 미만은 슬리피지 위험
+- 120일신고가(🚀): 직전 120일 최고가 돌파 — 위에 저항선 없음, 추가 상승 여력 가장 큰 구간
 - 당일범위위치(day_range): (현재가-당일저가)/(당일고가-당일저가). 0=저가권(눌림 반등 유리), 0.9↑=고가권(추격 주의)
 - 외인순매수: 당일 외국인 순매수량(주). 양수=외인 매수우위, 음수=외인 매도우위. 제공 시 수급 강도 판단에 활용
 - 기관순매수: 당일 기관 순매수량(주). 양수=기관 매수우위. 외인+기관 동시 양수=가장 강한 수급 신호
@@ -117,6 +119,11 @@ day_range 0.90↑이어도 갭업+OBV양수면 허용.
 - 거래량 3배↑ + 가격 상승 + MACD 양수: volume_surge
 - BB상단 돌파 + RSI 60↑ + MA20 위: breakout
 - MACD 수렴 중 + RSI 50~65: momentum
+
+### 신고가 돌파 우선순위
+- 🚀120일신고가 표시 종목: 위에 저항선 없음 — 동일 점수 종목 중 우선 선정
+- 갭업 + 🚀120일신고가 조합: 가장 강한 단타 신호 (세력 돌파 + 저항선 부재)
+- 거래대금이 클수록 체결 용이 — 같은 조건이면 거래대금 큰 종목 우선
 
 ### 수급 보조 판단 (모든 전략 공통)
 - 외인+기관 동시 순매수: 가장 강한 확인 신호 — 최우선 선정
@@ -211,11 +218,15 @@ def _build_user_message(
         gap_str = f"갭업{s.change_pct:+.0f}%" if is_gap_up else ""
         intraday_chg = getattr(s, "intraday_chg_pct", 0.0)
         intraday_str = f"장중{intraday_chg:+.1f}%"
+        new_high_str = "🚀120일신고가" if getattr(s, "at_new_high", False) else ""
+        trading_val = getattr(s, "trading_value", 0)
+        tv_str = f"거래대금{trading_val/1e8:.0f}억" if trading_val > 0 else ""
         lines.append(
             f"- {s.ticker}({s.name}): "
             f"등락{s.change_pct:+.1f}%{' [' + gap_str + ']' if gap_str else ''} | {intraday_str} | RSI {s.rsi:.0f} | "
             f"MACD히스토그램 {s.macd_hist:+.4f} | BB위치 {s.bb_position:.2f} | "
             f"MA20{'위' if s.above_ma20 else '아래'} | {obv_str} | {bbw_str} | {srsi_str} | {mscore_str} | {drp_str}"
+            f"{' | ' + tv_str if tv_str else ''}{' | ' + new_high_str if new_high_str else ''}"
             f"{supply_str} | {flag_str}"
         )
     stock_block = "\n".join(lines)

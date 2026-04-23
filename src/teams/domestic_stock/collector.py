@@ -115,7 +115,8 @@ class StockSnapshot:
     bb_width: float = 0.0         # 볼린저밴드 폭 (upper-lower)/mid — 확대=변동성 폭발
     bb_width_ratio: float = 1.0   # 현재 BB폭 / 20봉 평균 BB폭 — 1.3↑=스퀴즈 돌파
     stoch_rsi: float = 50.0       # Stochastic RSI(14,14) — 80↑=단기 과매수, 20↓=과매도
-    momentum_score: float = 0.0   # 종합 모멘텀 점수 (0~100) — Gate 4.2 순위 기준
+    momentum_score: float = 0.0   # 종합 모멘텀 점수 (0~130) — Gate 4.2 순위 기준
+    at_new_high: bool = False      # 120일 신고가 돌파 여부 — 저항 없는 상승 구간
 
     # 당일 가격 범위
     day_high: float = 0.0         # 당일 고가 (KIS stck_hgpr)
@@ -330,17 +331,27 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
         except Exception:
             stoch_rsi = 50.0
 
-        # 종합 모멘텀 점수 (0~100): Gate 4.2에서 종목 우선순위 결정에 사용
-        # 거래량(35%) + MACD 히스토그램 방향·강도(25%) + BB Width 확대(20%) + OBV 방향(20%)
+        # 종합 모멘텀 점수 (0~130): Gate 4.2에서 종목 우선순위 결정에 사용
+        # 거래량(35%) + MACD(25%) + BB폭(20%) + OBV(20%) + 120일신고가(+10)
         try:
-            vol_score   = min(volume_ratio / 5.0, 1.0) * 35         # 최대 5배 → 35점
+            vol_score   = min(volume_ratio / 5.0, 1.0) * 35
             macd_score  = (25 if macd_hist > 0 and macd_hist > macd_hist_prev else
-                           15 if macd_hist > macd_hist_prev else 0)   # 히스토그램 상승·양수
+                           15 if macd_hist > macd_hist_prev else 0)
             bbw_score   = min((bb_width_ratio - 1.0) / 0.5, 1.0) * 20 if bb_width_ratio > 1.0 else 0.0
-            obv_score   = 20 if obv_slope > 0 else 0.0              # OBV 방향 상승이면 20점
+            obv_score   = 20 if obv_slope > 0 else 0.0
             momentum_score = round(vol_score + macd_score + bbw_score + obv_score, 1)
         except Exception:
             momentum_score = 0.0
+
+        # 120일 신고가 돌파 여부 (저항선 없는 상승 — 강한 모멘텀 신호)
+        at_new_high = False
+        try:
+            high_120d = float(df["High"].iloc[:-1].tail(120).max()) if len(df) >= 2 else 0.0
+            if high_120d > 0 and ref >= high_120d * 0.99:
+                at_new_high = True
+                momentum_score = round(momentum_score + 10.0, 1)
+        except Exception:
+            pass
 
         return {
             "rsi": round(rsi, 2) if not _isnan(rsi) else 50.0,
@@ -364,6 +375,7 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
             "bb_width_ratio": bb_width_ratio,
             "stoch_rsi": stoch_rsi,
             "momentum_score": momentum_score,
+            "at_new_high": at_new_high,
         }
 
     except Exception as e:
@@ -461,6 +473,16 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.bb_width_ratio = ind.get("bb_width_ratio", 1.0)
     snap.stoch_rsi      = ind.get("stoch_rsi", 50.0)
     snap.momentum_score = ind.get("momentum_score", 0.0)
+    snap.at_new_high    = ind.get("at_new_high", False)
+
+    # 거래대금 가중치: 단타 유동성 가산점 (같은 기술 점수면 거래대금 높은 종목 우선)
+    # 이수페타시스(1.1조)와 나노캠텍(53억)이 동점 되는 문제 해결
+    if trading_value >= 200_000_000_000:    # 2000억↑
+        snap.momentum_score = min(130.0, snap.momentum_score + 25.0)
+    elif trading_value >= 50_000_000_000:   # 500억↑
+        snap.momentum_score = min(130.0, snap.momentum_score + 15.0)
+    elif trading_value >= 10_000_000_000:   # 100억↑
+        snap.momentum_score = min(130.0, snap.momentum_score + 5.0)
 
     # 일봉 MACD 강세 여부 (is_daily_macd_bullish 유틸 사용)
     from src.utils.macd import is_daily_macd_bullish
