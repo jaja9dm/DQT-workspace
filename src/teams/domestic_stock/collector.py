@@ -578,22 +578,42 @@ def collect(max_workers: int = 10) -> UniverseScan:
         except Exception as e:
             logger.debug(f"체크포인트 저장 실패 [{ticker}]: {e}")
 
-    # 후보 필터 1: 복합 신호 (2개 이상) 충족 종목만 후보 등록
-    # 단일 신호(거래량만, 가격만, BB돌파만)는 신뢰도 낮아 제외
-    # 예외: 거래량 5배↑ 이상 폭발적 급증은 단독으로도 허용 (세력 집결 가능성)
+    # 후보 필터 1: 신호 기반 후보 분류
+    # ① 모멘텀 후보: 거래량급증+가격급등+BB돌파 중 2개↑, 또는 거래량 5배↑ 단독
+    # ② 눌림목 반등 후보: 오늘 하락 + OBV양수 + 적정 거래량 (기존 필터에서 전부 탈락하던 문제 수정)
+    # ③ 오프닝급락 반등 후보: 시가 대비 -3%↓ 급락 후 저점 반등 중 (장초반)
+    _now_hm_c = int(datetime.now().strftime("%H%M"))
+
     def _signal_count(s: StockSnapshot) -> int:
         return int(s.is_volume_surge) + int(s.is_price_surge) + int(s.is_breakout)
 
+    def _is_pullback_candidate(s: StockSnapshot) -> bool:
+        return (
+            -5.0 <= s.change_pct <= -0.3   # 소폭~중폭 하락
+            and s.volume_ratio >= 1.5       # 평균 이상 거래량
+            and s.obv_slope > 0             # OBV 매수세 유입
+            and s.rsi <= 75                 # 과열 아님
+        )
+
+    def _is_op_plunge_candidate(s: StockSnapshot) -> bool:
+        return (
+            _now_hm_c <= 1030               # 장초반 10:30 이전
+            and s.intraday_chg_pct <= -3.0  # 시가 대비 -3%↓ 급락
+            and s.day_range_pos >= 0.15     # 저점에서 반등 시작
+        )
+
     raw_candidates = [
         s for s in scan.snapshots
-        if _signal_count(s) >= 2 or (s.is_volume_surge and s.volume_ratio >= 5.0)
+        if not s.error and (
+            _signal_count(s) >= 2
+            or (s.is_volume_surge and s.volume_ratio >= 5.0)
+            or _is_pullback_candidate(s)
+            or _is_op_plunge_candidate(s)
+        )
     ]
-    single_signal_skipped = sum(
-        1 for s in scan.snapshots
-        if (_signal_count(s) == 1 and not (s.is_volume_surge and s.volume_ratio >= 5.0))
-    )
-    if single_signal_skipped:
-        logger.info(f"단일 신호 필터: {single_signal_skipped}종목 제외 (복합 조건 미충족)")
+    skipped = len([s for s in scan.snapshots if not s.error]) - len(raw_candidates)
+    if skipped:
+        logger.info(f"신호 필터: {skipped}종목 제외 (복합 조건·눌림·오프닝 모두 미충족)")
 
     # 후보 필터 2: 잡주 제외 — 당일 거래대금 기준
     # 장중에는 최종 거래대금이 낮을 수 있으므로:
@@ -614,7 +634,7 @@ def collect(max_workers: int = 10) -> UniverseScan:
             scan.candidates.append(s)
 
     if filtered_out:
-        logger.info(f"잡주 필터: {filtered_out}종목 제외 (거래대금 10억 미만)")
+        logger.info(f"잡주 필터: {filtered_out}종목 제외 (거래대금 30억 미만)")
 
     logger.info(
         f"스캔 완료 — {len(scan.snapshots)}종목 / "
