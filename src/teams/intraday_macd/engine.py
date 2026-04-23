@@ -152,6 +152,15 @@ class IntradayMACDEngine:
                 else:
                     final_signal = "hold"
 
+                # MACD 신호 강도 계산 (0~100 연속형)
+                signal_strength = _compute_signal_strength(
+                    df_3m=df_3m,
+                    df_5m=df_5m,
+                    sig_3m=sig_3m,
+                    sig_5m=sig_5m,
+                    final_signal=final_signal,
+                )
+
                 # 분봉 캔들 저장 (ATR·거래량 압력 계산용 — 종목별 최근 30봉 유지)
                 _save_candles(ticker, candles_1m[:30])
 
@@ -161,8 +170,8 @@ class IntradayMACDEngine:
                     INSERT INTO intraday_macd_signal
                         (ticker, signal, hist_3m, hist_5m,
                          macd_3m, signal_3m, macd_5m, signal_5m,
-                         sig_3m, sig_5m)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         sig_3m, sig_5m, signal_strength)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         ticker,
@@ -175,6 +184,7 @@ class IntradayMACDEngine:
                         round(float(df_5m["signal"].iloc[-1]), 6),
                         raw_sig_3m,
                         raw_sig_5m,
+                        round(signal_strength, 1),
                     ),
                 )
 
@@ -197,6 +207,110 @@ class IntradayMACDEngine:
 # ──────────────────────────────────────────────
 # DB 정리
 # ──────────────────────────────────────────────
+
+def _compute_signal_strength(
+    df_3m,
+    df_5m,
+    sig_3m: MACDSignal,
+    sig_5m: MACDSignal,
+    final_signal: str,
+) -> float:
+    """
+    MACD 신호 강도 점수 (0~100 연속형).
+
+    이진 buy_pre/sell_pre 대신 신호의 질을 정량화.
+    매매팀·포지션 감시팀이 진입 사이즈·청산 강도 조정에 활용.
+
+    구성 (합계 100pt):
+      멀티타임프레임 일치 (0~25pt) — 3분+5분 방향 일치 여부
+      히스토그램 수렴 속도    (0~25pt) — 기울기 크기 (빠를수록 강한 신호)
+      크로스 전환 품질        (0~25pt) — 음수→양수 전환 vs 양수 내 수렴
+      히스토그램 절대값       (0~25pt) — 크로스 후 이탈 거리 (확인된 반전일수록 ↑)
+    """
+    try:
+        hist_3m = df_3m["hist"].values
+        hist_5m = df_5m["hist"].values
+
+        if len(hist_3m) < 2 or len(hist_5m) < 2:
+            return 50.0
+
+        h3_curr, h3_prev = float(hist_3m[-1]), float(hist_3m[-2])
+        h5_curr, h5_prev = float(hist_5m[-1]), float(hist_5m[-2])
+
+        score = 0.0
+
+        # 1. 멀티타임프레임 방향 일치 (0~25pt)
+        rising_3m = h3_curr > h3_prev
+        rising_5m = h5_curr > h5_prev
+        same_dir  = rising_3m == rising_5m
+        both_buy  = sig_3m == MACDSignal.BUY_PRE and sig_5m == MACDSignal.BUY_PRE
+        both_sell = sig_3m == MACDSignal.SELL_PRE and sig_5m == MACDSignal.SELL_PRE
+        if both_buy or both_sell:
+            score += 25.0
+        elif same_dir:
+            score += 12.0
+        else:
+            score += 0.0
+
+        # 2. 히스토그램 수렴 속도 (0~25pt) — 기울기 절댓값 정규화
+        slope_3m = abs(h3_curr - h3_prev)
+        slope_5m = abs(h5_curr - h5_prev)
+        avg_slope = (slope_3m + slope_5m) / 2
+        # 일반적 히스토그램 범위: 0.001~0.02 → 25pt 기준 = 0.01
+        slope_score = min(25.0, avg_slope / 0.01 * 25.0)
+        score += slope_score
+
+        # 3. 크로스 전환 품질 (0~25pt) — 음수→양수(또는 반대) 전환이 가장 강력
+        crossed_3m = (h3_prev < 0 and h3_curr >= 0) or (h3_prev > 0 and h3_curr <= 0)
+        crossed_5m = (h5_prev < 0 and h5_curr >= 0) or (h5_prev > 0 and h5_curr <= 0)
+        if crossed_3m and crossed_5m:
+            score += 25.0   # 양쪽 모두 크로스 — 최강 신호
+        elif crossed_3m or crossed_5m:
+            score += 15.0   # 한쪽만 크로스
+        elif final_signal in ("buy_pre", "sell_pre"):
+            score += 8.0    # 크로스 임박 (수렴 중)
+        else:
+            score += 0.0
+
+        # 4. 히스토그램 절댓값 (0~25pt) — 크로스 이후 이탈 확인
+        abs_3m = abs(h3_curr)
+        abs_5m = abs(h5_curr)
+        avg_abs = (abs_3m + abs_5m) / 2
+        # 크로스 직후는 작고, 추세 형성 시 커짐 (0.005~0.03 범위)
+        abs_score = min(25.0, avg_abs / 0.015 * 25.0)
+        # sell 신호면 부호 반영 없이 강도만 (방향은 signal에서 판단)
+        score += abs_score
+
+        return min(100.0, max(0.0, score))
+
+    except Exception:
+        return 50.0
+
+
+def get_macd_signal_strength(ticker: str, max_age_minutes: int = 6) -> float:
+    """
+    해당 종목의 최신 MACD 신호 강도 조회 (0~100).
+    데이터 없으면 50.0(중립) 반환.
+
+    매매팀·포지션 감시팀에서 신호 품질 판단에 활용:
+      70↑ — 강한 신호, 적극 대응
+      50~70 — 보통, 기존 로직 유지
+      30↓ — 약한 신호, 보수적 대응
+    """
+    row = fetch_one(
+        """
+        SELECT signal_strength FROM intraday_macd_signal
+        WHERE ticker = ?
+          AND created_at >= datetime('now', ?)
+        ORDER BY created_at DESC
+        LIMIT 1
+        """,
+        (ticker, f"-{max_age_minutes} minutes"),
+    )
+    if row and row["signal_strength"] is not None:
+        return float(row["signal_strength"])
+    return 50.0
+
 
 def _purge_old_records() -> None:
     """장 중 누적되는 신호/캔들 레코드 정리 (2시간 이상 오래된 것 삭제)."""

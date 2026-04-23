@@ -161,6 +161,9 @@ class TradingEngine:
         )
         self._today_tickers: set[str] = set()   # 당일 이미 매수한 종목 (중복 방지)
         self._macd_reentry_ok: set[str] = set()  # MACD 조기손절 후 재진입 허용 종목
+        # 수익 실현 후 MACD 재진입 감시 목록
+        # {ticker: {"exit_price": float, "exit_time": datetime, "item": dict, "reentry_count": int}}
+        self._reentry_watchlist: dict[str, dict] = {}
 
         # 오프닝 게이트 관련
         self._opening_gate_checked: bool = False  # 당일 오프닝 게이트 판단 완료 여부
@@ -192,6 +195,7 @@ class TradingEngine:
                     self._today_str = date.today().isoformat()
                     self._today_tickers.clear()
                     self._macd_reentry_ok.clear()
+                    self._reentry_watchlist.clear()
                     self._opening_gate_checked = False
                     self._buy_allowed_from = None
 
@@ -379,110 +383,81 @@ class TradingEngine:
         if not candidates:
             return []
 
-        # ── Gate 4.2: Hot List 품질 필터 (복합 AND 조건) ──────────
-        # RSI 과열 구간: 완전 차단 대신 포지션 축소(rsi_hot 플래그)로 모멘텀 참여
-        #   RSI 72~82 → 진입 허용, 1차 매수 50%·손절 1.5%로 제한
-        #   RSI 82 초과 → 완전 차단 (극단적 과열)
-        # OBV 역행 고RSI → 수급 없는 가짜 상승 → 차단
+        # ── Gate 4.2: 진입 신뢰도 점수 필터 ─────────────────────────
+        # 바이너리 AND 차단 → 연속형 점수(0~100) 기반 판단으로 전환.
+        #
+        # 점수 구성: 거래량(30) + RSI구간(20) + OBV기울기(20) + StochRSI(15) + 모멘텀/BB(15)
+        # 절대 차단(hard_fail)은 유지 (RSI극단·거래량없음·OBV역행고RSI 등)
+        # 점수 결과:
+        #   ≥ 72점 → 풀사이즈 진입
+        #   50~71점 → 75% 사이즈 진입 (경계 종목 — 기회 포기 대신 보수적 참여)
+        #   < 50점 → 차단
         from src.teams.research.param_tuner import get_param as _gp
         _min_vol      = _gp("hot_list_min_vol_ratio", 2.0)
-        _max_rsi_hard = _gp("hot_list_max_rsi",       82.0)  # 완전 차단 상한 (82)
-        _max_rsi_soft = _gp("hot_list_rsi_hot_limit", 72.0)  # 포지션 축소 시작 (72)
-        _min_rsi      = _gp("hot_list_min_rsi",       35.0)  # 붕괴 하한 (35로 상향)
+        _max_rsi_hard = _gp("hot_list_max_rsi",       82.0)
+        _max_rsi_soft = _gp("hot_list_rsi_hot_limit", 72.0)
+        _min_rsi      = _gp("hot_list_min_rsi",       35.0)
 
         filtered_candidates = []
         for c in candidates:
             tk        = c["ticker"]
-            vol_ratio = c.get("volume_ratio")    or 0.0
-            price_chg = c.get("price_change_pct") or 0.0
-            rsi       = c.get("rsi")             or 50.0
-            obv_slope = c.get("obv_slope")       or 0.0
-            reason    = c.get("reason")          or ""
-
-            day_range_pos = c.get("day_range_pos") or 0.5
-            # 갭업 돌파 여부: signal_type 또는 price_chg >= 8% 판단
-            is_gap_up = (
-                c.get("signal_type") == "gap_up_breakout"
-                or price_chg >= 8.0
-            )
+            price_chg = float(c.get("price_change_pct") or 0.0)
+            rsi       = float(c.get("rsi") or 50.0)
+            reason    = c.get("reason") or ""
 
             signal_type  = c.get("signal_type", "momentum")
+            is_gap_up    = signal_type == "gap_up_breakout" or price_chg >= 8.0
             is_pullback  = signal_type == "pullback_rebound"
             is_mkt_mom   = signal_type == "market_momentum"
             is_op_plunge = signal_type == "opening_plunge_rebound"
 
-            # 완전 차단 조건 (전략별 예외 적용)
-            fails = []
+            hard_fails, score, size_mult = _compute_entry_score(
+                c=c,
+                is_gap_up=is_gap_up,
+                is_pullback=is_pullback,
+                is_mkt_mom=is_mkt_mom,
+                is_op_plunge=is_op_plunge,
+                _hm=_hm,
+                _min_vol=_min_vol,
+                _max_rsi_hard=_max_rsi_hard,
+                _max_rsi_soft=_max_rsi_soft,
+                _min_rsi=_min_rsi,
+            )
 
-            # 전략D: 오프닝 급락 반등 — 시가 대비 intraday 변동이 핵심, 전일비 등락률 무관
-            # 10:30 이후는 오프닝 타이밍이 지난 것 → 차단
-            if is_op_plunge and _hm >= 1030:
-                fails.append(f"오프닝 급락 반등 10:30 이후 차단 (현재 {now.strftime('%H:%M')})")
-
-            if vol_ratio < _min_vol:
-                # 갭업/눌림/강세편승/오프닝급락은 거래량 기준 1.2x로 완화
-                _vol_min_eff = 1.2 if (is_gap_up or is_pullback or is_mkt_mom or is_op_plunge) else _min_vol
-                if vol_ratio < _vol_min_eff:
-                    fails.append(f"거래량비 {vol_ratio:.1f}x < {_vol_min_eff:.1f}x")
-            # 눌림목 반등 / 오프닝 급락: 하락 종목이므로 등락률 ≤ 0 차단 면제
-            if price_chg <= 0 and not (is_pullback or is_op_plunge):
-                fails.append(f"등락률 {price_chg:+.2f}% ≤ 0")
-            if rsi > _max_rsi_hard:
-                # 갭업 돌파 + OBV 양수: 테마 주도 강한 갭업은 RSI 95까지 허용
-                # (LS ELECTRIC 사례: 테마 형성 당일 RSI 92도 +16% 추가 상승)
-                _rsi_hard_eff = 95.0 if (is_gap_up and obv_slope > 0) else _max_rsi_hard
-                if rsi > _rsi_hard_eff:
-                    fails.append(f"RSI {rsi:.0f} > {_rsi_hard_eff:.0f} (극단 과열)")
-            # 눌림목 반등 / 오프닝 급락: RSI 낮은 것이 정상 — 과매도 하한선 면제
-            if rsi < _min_rsi and not (is_pullback or is_op_plunge):
-                fails.append(f"RSI {rsi:.0f} < {_min_rsi:.0f} (과매도 붕괴)")
-            if obv_slope < 0 and rsi > 70:
-                # 갭업 돌파/강세편승 종목은 OBV 역행 차단 완화
-                if not (is_gap_up or is_mkt_mom):
-                    fails.append(f"OBV 역행+고RSI {rsi:.0f} (수급 없는 상승)")
-            # 당일 고가권 추격 매수 차단 — 갭업 돌파 + OBV 양수이면 예외
-            # 오프닝 급락 반등은 고가권에서 내려온 것 → 예외
-            if price_chg >= 3.0 and day_range_pos >= 0.90 and obv_slope <= 0:
-                if not (is_gap_up or is_op_plunge):
-                    fails.append(
-                        f"고가권 추격 차단 (등락 {price_chg:+.1f}% + 범위위치 {day_range_pos:.2f} + OBV↓)"
-                    )
-            # stoch_rsi 극단 과매수 차단: 단기 되돌림 위험 (갭업/오프닝급락 예외)
-            _stoch_rsi = c.get("stoch_rsi") or 50.0
-            if _stoch_rsi > 88.0 and not (is_gap_up or is_op_plunge):
-                fails.append(f"StochRSI {_stoch_rsi:.0f} > 88 (단기 극과매수 — 되돌림 위험)")
-            # bb_width_ratio 브레이크아웃 확인: 갭업 돌파 시 변동성 실제 확대 필요
-            _bb_ratio = c.get("bb_width_ratio") or 1.0
-            if is_gap_up and _bb_ratio < 1.0:
-                fails.append(f"BB폭 미확대 {_bb_ratio:.2f} < 1.0 (가짜 브레이크아웃)")
-            # 갭업 돌파 종목 시간 제한:
-            # 11:00 이후 ~ 13:00: MACD buy_pre 확인 시 뒤늦은 추격 허용 (Gate 4.5에서 검증)
-            # 13:00 이후: 완전 차단 (너무 늦은 추격 — 갭 되돌림 위험)
-            if is_gap_up and _hm >= 1300:
-                fails.append(f"갭업 돌파 13:00 이후 진입 차단 (현재 {now.strftime('%H:%M')})")
-
-            if fails:
-                logger.info(f"Gate 4.2 차단: {tk} — {' | '.join(fails)}")
+            if hard_fails:
+                logger.info(f"Gate 4.2 차단: {tk} — {' | '.join(hard_fails)}")
                 continue
 
-            # RSI 과열 구간(72~82): 진입 허용하되 포지션 축소 플래그
-            rsi_hot = rsi > _max_rsi_soft
+            if size_mult == 0.0:
+                logger.info(f"Gate 4.2 점수 차단: {tk} — 신뢰도 {score:.0f}/100 < 50")
+                continue
+
             c = dict(c)
+            c["_entry_score"] = score
+            c["_score_size_mult"] = size_mult
+
+            rsi_hot = rsi > _max_rsi_soft
             c["rsi_hot"] = rsi_hot
             if rsi_hot:
                 logger.info(
                     f"Gate 4.2 RSI 과열 허용: {tk} RSI {rsi:.0f} "
                     f"→ 1차 매수 50% + 손절 1.5% 적용"
                 )
-            # Claude reason에 "RSI과열_포지션50%" 포함 시 자동 인식
-            if rsi_hot and "RSI과열_포지션50%" not in reason:
-                c["reason"] = (reason + " [RSI과열_포지션50%]").strip()
+                if "RSI과열_포지션50%" not in reason:
+                    c["reason"] = (reason + " [RSI과열_포지션50%]").strip()
+
+            if size_mult < 1.0:
+                logger.info(
+                    f"Gate 4.2 경계 통과: {tk} — 신뢰도 {score:.0f}/100 → 사이즈 ×{size_mult:.2f}"
+                )
+            else:
+                logger.info(f"Gate 4.2 통과: {tk} — 신뢰도 {score:.0f}/100 (풀사이즈)")
 
             filtered_candidates.append(c)
 
         candidates = filtered_candidates
         if not candidates:
-            logger.debug("Gate 4.2: 복합 조건 통과 종목 없음")
+            logger.debug("Gate 4.2: 신뢰도 점수 통과 종목 없음")
             return []
 
         # ── Gate 4.5: MACD 방향 필터 + 장초반 진입 품질 체크 ──
@@ -493,6 +468,7 @@ class TradingEngine:
         from src.teams.intraday_macd.engine import (
             get_latest_macd_signal as _get_macd,
             get_macd_dual_confirm as _get_macd_dual,
+            get_macd_signal_strength as _get_macd_strength,
         )
         now_hm = now.hour * 100 + now.minute
         gated_candidates = []
@@ -500,12 +476,16 @@ class TradingEngine:
             tk = c["ticker"]
             sig_type = c.get("signal_type", "momentum")
             macd_now = _get_macd(tk, max_age_minutes=6)
+            macd_strength = _get_macd_strength(tk, max_age_minutes=6)
             if macd_now == "sell_pre":
                 logger.info(
-                    f"Gate 4.5 차단: {tk} MACD sell_pre "
-                    f"(히스토그램 양수 하강 중 — 수급 이탈 신호) — 진입 보류"
+                    f"Gate 4.5 차단: {tk} MACD sell_pre (강도 {macd_strength:.0f}) "
+                    f"— 수급 이탈 신호, 진입 보류"
                 )
                 continue
+            # 신호 강도를 후보에 기록 (Claude 판단 및 사이징에 활용)
+            c = dict(c)
+            c["_macd_strength"] = macd_strength
 
             # Gate 4.5 VWAP 품질 필터: 모멘텀/갭업 종목은 현재가 ≥ VWAP 필수
             # 눌림목/오프닝급락은 VWAP 아래가 정상이므로 면제
@@ -628,14 +608,15 @@ class TradingEngine:
             if current_price <= 0:
                 continue
 
-            # 종목당 투자 한도 — momentum_score 기반 동적 사이징
-            # momentum_score 0~130 → 곱승 0.7~1.5 (선형 보간)
-            # 점수 낮은 종목에 자금 덜 배분, 강한 신호에 집중
+            # 종목당 투자 한도 — momentum_score × 신뢰도 점수 이중 사이징
+            # ms_mult: momentum_score(0~130) → 0.7~1.5x (강한 신호에 집중)
+            # score_mult: Gate 4.2 신뢰도(50~100) → 0.75~1.0x (경계 종목 보수적)
             mscore = float(item.get("momentum_score") or 0.0)
             ms_mult = 0.7 + (mscore / 130.0) * 0.8   # 0 → 0.7x, 130 → 1.5x
             ms_mult = max(0.7, min(1.5, ms_mult))
+            score_mult = float(item.get("_score_size_mult") or 1.0)
             base_invest = usable_cash * max_single_pct / 100
-            max_invest = base_invest * ms_mult
+            max_invest = base_invest * ms_mult * score_mult
             if mscore > 0:
                 logger.info(
                     f"동적 사이징: {ticker} momentum={mscore:.0f} → "
@@ -677,11 +658,182 @@ class TradingEngine:
                     decision=decision,
                 )
 
+        # ── 재진입 감시 업데이트 + 신호 실행 ────
+        # 1. 당일 수익 실현 종목 → watchlist 추가
+        # 2. watchlist 종목 중 MACD 골든크로스 확인 시 재진입
+        self._update_reentry_watchlist()
+        if open_count < max_pos:  # 포지션 여유 있을 때만 재진입 탐색
+            reentry_orders = self._check_and_execute_reentry(
+                usable_cash=usable_cash,
+                max_single_pct=max_single_pct,
+            )
+            orders.extend(reentry_orders)
+
         return orders
 
     # ──────────────────────────────────────────
     # 오프닝 게이트 (Gate 0)
     # ──────────────────────────────────────────
+
+    # ──────────────────────────────────────────
+    # 수익 실현 후 MACD 기반 재진입
+    # ──────────────────────────────────────────
+
+    def _update_reentry_watchlist(self) -> None:
+        """
+        당일 수익 실현(take_profit/partial_exit) 종목을 재진입 감시 목록에 추가.
+        이미 감시 중이거나 현재 포지션 보유 중이면 스킵.
+        """
+        today_str = str(date.today())
+        profit_rows = fetch_all(
+            """
+            SELECT DISTINCT ticker, exec_price
+            FROM trades
+            WHERE date = ? AND action IN ('take_profit', 'partial_exit') AND pnl > 0
+            ORDER BY id DESC
+            """,
+            (today_str,),
+        )
+        for row in profit_rows:
+            ticker = row["ticker"]
+            if ticker in self._reentry_watchlist:
+                continue
+            if _has_open_position(ticker):
+                continue
+            # 당일 손절 이력이 있으면 감시 제외
+            was_stopped = fetch_one(
+                "SELECT id FROM trades WHERE ticker=? AND date=? AND action='stop_loss' LIMIT 1",
+                (ticker, today_str),
+            )
+            if was_stopped:
+                continue
+            # hot_list에서 최근 스냅샷 조회 (없으면 기본값)
+            snap_row = fetch_one(
+                """
+                SELECT ticker, name, signal_type, volume_ratio, price_change_pct, rsi,
+                       reason, momentum_score, obv_slope, day_range_pos,
+                       stoch_rsi, bb_width_ratio, trading_value
+                FROM hot_list WHERE ticker=? ORDER BY created_at DESC LIMIT 1
+                """,
+                (ticker,),
+            )
+            item_snapshot = dict(snap_row) if snap_row else {"ticker": ticker}
+            self._reentry_watchlist[ticker] = {
+                "exit_price": float(row["exec_price"] or 0),
+                "exit_time": datetime.now(),
+                "item": item_snapshot,
+                "reentry_count": 0,
+            }
+            logger.info(f"[재진입 감시 등록] {ticker} — 수익 실현 후 MACD 재진입 대기")
+
+    def _check_and_execute_reentry(
+        self,
+        usable_cash: float,
+        max_single_pct: float,
+    ) -> list[dict]:
+        """
+        재진입 감시 종목 중 MACD 골든크로스 + 거래량 급증 + RSI/VWAP 조건 충족 시 재진입.
+
+        재진입 신호 (AND 조건):
+          1. 5분봉 MACD hist: 음수 구간 통과 후 양수로 전환 (from_negative=True) — 강한 반전
+          2. MACD 최종 신호 buy_pre — 크로스 임박 확인
+          3. 최근 2봉 평균 거래량 ≥ 이전 4봉 평균 × 1.3 — 거래량 재급증
+          4. RSI < 75 — 재상승 여력
+          5. 현재가 ≥ VWAP × 0.995 — 수급 중심선 위 (하락 재개 아님)
+          6. 1회 재진입만 허용 (당일)
+        """
+        from src.teams.intraday_macd.engine import get_macd_details as _get_macd_det
+
+        orders: list[dict] = []
+        to_remove: list[str] = []
+
+        for ticker, watch in list(self._reentry_watchlist.items()):
+            # 이미 재진입 완료 or 포지션 보유 중이면 제거
+            if watch["reentry_count"] >= 1 or _has_open_position(ticker):
+                to_remove.append(ticker)
+                continue
+
+            # 13:00 이후 재진입 금지 (장 후반 리스크)
+            _now_hm = datetime.now().hour * 100 + datetime.now().minute
+            if _now_hm >= 1300:
+                to_remove.append(ticker)
+                continue
+
+            # ① MACD 음수→양수 전환 (from_negative) + buy_pre
+            macd = _get_macd_det(ticker, max_age_minutes=6)
+            if not macd.get("from_negative") or macd["signal"] != "buy_pre":
+                continue
+
+            # ② 거래량 재급증 확인
+            vol_rows = fetch_all(
+                "SELECT volume FROM intraday_candles WHERE ticker=? ORDER BY bar_time DESC LIMIT 6",
+                (ticker,),
+            )
+            if len(vol_rows) >= 4:
+                recent_vol = sum(int(r["volume"]) for r in vol_rows[:2]) / 2
+                prev_vol   = sum(int(r["volume"]) for r in vol_rows[2:6]) / 4
+                if prev_vol > 0 and recent_vol < prev_vol * 1.3:
+                    logger.debug(f"[재진입 보류] {ticker} — 거래량 재급증 미충족 ({recent_vol/prev_vol:.2f}x < 1.3x)")
+                    continue
+
+            # ③ RSI + VWAP 확인 (hot_list 스냅샷에서 RSI 읽기)
+            item = watch["item"]
+            rsi = float(item.get("rsi") or 55.0)
+            if rsi >= 75.0:
+                logger.debug(f"[재진입 보류] {ticker} — RSI {rsi:.0f} ≥ 75 (재상승 여력 부족)")
+                continue
+
+            vwap, cur_px = _get_vwap_position(ticker)
+            if vwap > 0 and cur_px < vwap * 0.995:
+                logger.debug(f"[재진입 보류] {ticker} — 현재가 {cur_px:,.0f} < VWAP {vwap:,.0f} (수급 중심선 하회)")
+                continue
+
+            # 모든 조건 충족 → 재진입 실행
+            current_price = _fetch_current_price(ticker)
+            if current_price <= 0:
+                continue
+
+            # 재진입 사이즈: 원래 배분의 70% (보수적, 재진입 리스크 관리)
+            mscore = float(item.get("momentum_score") or 0.0)
+            ms_mult = 0.7 + (mscore / 130.0) * 0.8
+            ms_mult = max(0.7, min(1.5, ms_mult))
+            max_invest = usable_cash * max_single_pct / 100 * ms_mult * 0.70
+            qty = max(1, int(max_invest * _TRANCHE_RATIOS[0] / current_price))
+
+            logger.info(
+                f"[MACD 재진입] {ticker} — 5분봉 hist 음수→양수 전환 + buy_pre + 거래량↑ + VWAP 위 "
+                f"| RSI {rsi:.0f} | 수량 {qty}주 @ {current_price:,.0f}"
+            )
+
+            # 재진입 판단: 간소화 (Claude 재호출 없이 지표 기반으로 직접 진입)
+            fake_decision = {
+                "buy": True,
+                "reason": f"MACD 재진입 (from_neg+buy_pre+vol↑)",
+                "target_pct": 3.0,
+                "stop_pct": 1.5,
+                "rsi": rsi,
+                "signal_type": item.get("signal_type", "momentum"),
+                "market_score": 0.0,
+            }
+            result = self._place_buy(
+                ticker=ticker,
+                name=item.get("name", ""),
+                quantity=qty,
+                current_price=current_price,
+                tranche=1,
+                decision=fake_decision,
+                tight_stop=True,   # 재진입은 항상 타이트한 손절
+            )
+            if result:
+                orders.append(result)
+                watch["reentry_count"] += 1
+                self._today_tickers.add(ticker)
+                logger.info(f"[MACD 재진입 완료] {ticker} {qty}주 @ {current_price:,.0f}")
+
+        for tk in to_remove:
+            self._reentry_watchlist.pop(tk, None)
+
+        return orders
 
     def _check_opening_gate(self) -> bool:
         """
@@ -787,16 +939,20 @@ JSON만 응답:
         for item in items:
             ticker = item["ticker"]
             sentiment = _load_sentiment(ticker)
-            mscore = item.get("momentum_score") or 0.0
-            drp    = item.get("day_range_pos") or 0.5
-            obv    = item.get("obv_slope") or 0.0
+            mscore       = item.get("momentum_score") or 0.0
+            drp          = item.get("day_range_pos") or 0.5
+            obv          = item.get("obv_slope") or 0.0
+            entry_score  = item.get("_entry_score") or 0.0
+            macd_str     = item.get("_macd_strength") or 50.0
             stock_lines.append(
                 f"- 티커: {ticker} ({item.get('name', '')})\n"
                 f"  신호: {item.get('signal_type', '')} | "
                 f"등락: {item.get('price_change_pct', 0):+.1f}% | "
                 f"거래량: {item.get('volume_ratio', 0):.1f}배 | "
                 f"RSI: {item.get('rsi', 50):.0f} | "
-                f"모멘텀점수: {mscore:.0f}/100 | "
+                f"진입신뢰도: {entry_score:.0f}/100 | "
+                f"MACD강도: {macd_str:.0f}/100 | "
+                f"모멘텀점수: {mscore:.0f}/130 | "
                 f"당일범위위치: {drp:.2f} | "
                 f"OBV기울기: {'↑' if obv > 0 else '↓'}{obv:+.2f}\n"
                 f"  선정근거: {item.get('reason', '')} | "
@@ -1060,6 +1216,191 @@ JSON만 응답:
 # DB / KIS 데이터 로드 헬퍼
 # ──────────────────────────────────────────────
 
+def _compute_entry_score(
+    c: dict,
+    is_gap_up: bool,
+    is_pullback: bool,
+    is_mkt_mom: bool,
+    is_op_plunge: bool,
+    _hm: int,
+    _min_vol: float,
+    _max_rsi_hard: float,
+    _max_rsi_soft: float,
+    _min_rsi: float,
+) -> tuple[list[str], float, float]:
+    """
+    진입 신뢰도 점수 (0~100) + 하드 차단 사유 + 사이즈 배율.
+
+    하드 차단(hard_fails) 있으면 score/size_mult 무관 진입 불가.
+
+    점수 구성 (합계 100pt):
+      거래량    0~30pt — 거래량비 크기별 차등
+      RSI 구간  0~20pt — 과열일수록 감점
+      OBV 기울기 0~20pt — 방향·강도 반영
+      StochRSI  0~15pt — 단기 과매수 감점
+      모멘텀/BB 0~15pt — 모멘텀점수·BB폭 확대 보정
+
+    사이즈 배율:
+      score ≥ 72 → 1.00 (풀사이즈)
+      score 50~71 → 0.75 (축소 진입)
+      score < 50  → 차단 (hard fail과 동일)
+
+    Returns: (hard_fails, score, size_mult)
+    """
+    hard_fails: list[str] = []
+
+    vol_ratio  = float(c.get("volume_ratio") or 0.0)
+    price_chg  = float(c.get("price_change_pct") or 0.0)
+    rsi        = float(c.get("rsi") or 50.0)
+    obv_slope  = float(c.get("obv_slope") or 0.0)
+    stoch_rsi  = float(c.get("stoch_rsi") or 50.0)
+    bb_ratio   = float(c.get("bb_width_ratio") or 1.0)
+    mscore     = float(c.get("momentum_score") or 0.0)
+
+    # ── HARD FAILS (전략/시간 무관 절대 차단) ──────────────────
+    if is_op_plunge and _hm >= 1030:
+        hard_fails.append(f"오프닝 급락 10:30 이후 차단 ({_hm // 100:02d}:{_hm % 100:02d})")
+        return hard_fails, 0.0, 0.0
+
+    if is_gap_up and _hm >= 1300:
+        hard_fails.append(f"갭업 13:00 이후 진입 차단 ({_hm // 100:02d}:{_hm % 100:02d})")
+        return hard_fails, 0.0, 0.0
+
+    # RSI 극단 과열
+    _rsi_hard_eff = 95.0 if (is_gap_up and obv_slope > 0) else _max_rsi_hard
+    if rsi > _rsi_hard_eff:
+        hard_fails.append(f"RSI {rsi:.0f} > {_rsi_hard_eff:.0f} (극단 과열)")
+        return hard_fails, 0.0, 0.0
+
+    # 과매도 붕괴 (눌림/오프닝급락 면제)
+    if rsi < _min_rsi and not (is_pullback or is_op_plunge):
+        hard_fails.append(f"RSI {rsi:.0f} < {_min_rsi:.0f} (과매도 붕괴)")
+        return hard_fails, 0.0, 0.0
+
+    # 거래량 절대 최소 (전략별 완화)
+    _vol_floor = 1.2 if (is_gap_up or is_pullback or is_mkt_mom or is_op_plunge) else max(1.5, _min_vol * 0.75)
+    if vol_ratio < _vol_floor:
+        hard_fails.append(f"거래량비 {vol_ratio:.1f}x < {_vol_floor:.1f}x (최소 기준 미달)")
+        return hard_fails, 0.0, 0.0
+
+    # 하락 종목 차단 (눌림/오프닝급락 면제)
+    if price_chg <= 0 and not (is_pullback or is_op_plunge):
+        hard_fails.append(f"등락률 {price_chg:+.2f}% ≤ 0")
+        return hard_fails, 0.0, 0.0
+
+    # OBV 역행 + 고RSI (갭업/시장강세 면제)
+    if obv_slope < 0 and rsi > 70 and not (is_gap_up or is_mkt_mom):
+        hard_fails.append(f"OBV 역행+고RSI {rsi:.0f} (수급 없는 상승)")
+        return hard_fails, 0.0, 0.0
+
+    # StochRSI 극단 과매수 (갭업/오프닝급락 면제)
+    if stoch_rsi > 88.0 and not (is_gap_up or is_op_plunge):
+        hard_fails.append(f"StochRSI {stoch_rsi:.0f} > 88 (단기 극과매수)")
+        return hard_fails, 0.0, 0.0
+
+    # 갭업 BB폭 미확대
+    if is_gap_up and bb_ratio < 1.0:
+        hard_fails.append(f"BB폭 미확대 {bb_ratio:.2f} < 1.0 (가짜 브레이크아웃)")
+        return hard_fails, 0.0, 0.0
+
+    # 고가권 추격 (갭업+OBV양수 또는 오프닝급락 면제)
+    day_range_pos = float(c.get("day_range_pos") or 0.5)
+    if price_chg >= 3.0 and day_range_pos >= 0.90 and obv_slope <= 0:
+        if not (is_gap_up or is_op_plunge):
+            hard_fails.append(
+                f"고가권 추격 ({price_chg:+.1f}%, 범위위치 {day_range_pos:.2f}, OBV↓)"
+            )
+            return hard_fails, 0.0, 0.0
+
+    # ── SCORED CONDITIONS (연속형 점수화) ──────────────────────
+    score = 0.0
+
+    # 거래량 (0~30pt) — 더 많을수록 고점수, 거래대금도 보조 반영
+    if vol_ratio >= 5.0:
+        score += 30.0
+    elif vol_ratio >= 3.0:
+        score += 22.0
+    elif vol_ratio >= 2.0:
+        score += 16.0
+    elif vol_ratio >= 1.5:
+        score += 10.0
+    else:
+        score += 5.0  # 1.2~1.5x — 최소 통과, 낮은 신뢰도
+
+    trading_value = int(c.get("trading_value") or 0)
+    if trading_value >= 200_000_000_000:   # 2000억↑
+        score += 3.0
+    elif trading_value >= 50_000_000_000:  # 500억↑
+        score += 2.0
+    elif trading_value >= 10_000_000_000:  # 100억↑
+        score += 1.0
+
+    # RSI 구간 (0~20pt) — 이상적 진입은 45~65
+    if rsi < 45:
+        score += 14.0  # 과매도 근처 — 반등 여지 크지만 붕괴 위험도
+    elif rsi < 55:
+        score += 20.0  # 최적 구간
+    elif rsi < 65:
+        score += 16.0
+    elif rsi < 72:
+        score += 11.0
+    elif rsi <= _max_rsi_soft:
+        score += 6.0   # 72~82 과열 구간
+    else:
+        score += 2.0   # 82~95 (갭업+OBV 예외로 통과한 경우)
+
+    # OBV 기울기 (0~20pt) — 방향·강도 반영
+    if obv_slope > 0.5:
+        score += 20.0
+    elif obv_slope > 0.1:
+        score += 15.0
+    elif obv_slope > 0:
+        score += 10.0
+    elif obv_slope > -0.1:
+        score += 5.0
+    else:
+        score += 0.0  # 강한 OBV 하락
+
+    # StochRSI (0~15pt) — 단기 모멘텀 여유
+    if stoch_rsi < 30:
+        score += 15.0
+    elif stoch_rsi < 50:
+        score += 12.0
+    elif stoch_rsi < 65:
+        score += 9.0
+    elif stoch_rsi < 75:
+        score += 6.0
+    elif stoch_rsi < 85:
+        score += 3.0
+    else:
+        score += 0.0
+
+    # 모멘텀점수 + BB폭 (0~15pt)
+    score += min(8.0, mscore / 130.0 * 8.0)  # 모멘텀 최대 8pt
+    if is_gap_up:
+        if bb_ratio >= 1.5:
+            score += 7.0
+        elif bb_ratio >= 1.2:
+            score += 5.0
+        elif bb_ratio >= 1.0:
+            score += 2.0
+    else:
+        score += min(7.0, (bb_ratio - 1.0) * 14.0)  # BB폭 확대 비례
+
+    score = min(100.0, score)
+
+    # 사이즈 배율
+    if score >= 72.0:
+        size_mult = 1.00
+    elif score >= 50.0:
+        size_mult = 0.75
+    else:
+        hard_fails.append(f"신뢰도 점수 {score:.0f}/100 < 50 (복합 신호 부족)")
+        return hard_fails, score, 0.0
+
+    return hard_fails, score, size_mult
+
+
 def _extract_json(raw: str) -> str:
     """Claude 응답에서 JSON 부분만 추출 (코드블록·순수 JSON 모두 처리)."""
     import re
@@ -1243,7 +1584,10 @@ def _load_hot_list() -> list[dict]:
         SELECT ticker, name, signal_type, volume_ratio, price_change_pct, rsi, reason,
                COALESCE(momentum_score, 0.0) AS momentum_score,
                COALESCE(obv_slope, 0.0) AS obv_slope,
-               COALESCE(day_range_pos, 0.5) AS day_range_pos
+               COALESCE(day_range_pos, 0.5) AS day_range_pos,
+               COALESCE(stoch_rsi, 50.0) AS stoch_rsi,
+               COALESCE(bb_width_ratio, 1.0) AS bb_width_ratio,
+               COALESCE(trading_value, 0) AS trading_value
         FROM hot_list
         WHERE created_at >= datetime('now', '-10 minutes')
         ORDER BY COALESCE(momentum_score, 0.0) DESC, volume_ratio DESC

@@ -88,11 +88,21 @@ def init_db() -> None:
             ("momentum_score", "REAL DEFAULT 0.0"),
             ("obv_slope",      "REAL DEFAULT 0.0"),
             ("day_range_pos",  "REAL DEFAULT 0.5"),
+            ("stoch_rsi",      "REAL DEFAULT 50.0"),
+            ("bb_width_ratio", "REAL DEFAULT 1.0"),
+            ("trading_value",  "INTEGER DEFAULT 0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE hot_list ADD COLUMN {col} {typedef}")
             except Exception:
                 pass
+        # 기존 DB 마이그레이션: intraday_macd_signal 신호 강도 컬럼 추가
+        try:
+            conn.execute(
+                "ALTER TABLE intraday_macd_signal ADD COLUMN signal_strength REAL DEFAULT 0.0"
+            )
+        except Exception:
+            pass
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

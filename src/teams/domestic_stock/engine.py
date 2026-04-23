@@ -279,8 +279,9 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
             INSERT INTO hot_list
                 (ticker, name, signal_type, volume_ratio,
                  price_change_pct, rsi, sector, reason,
-                 momentum_score, obv_slope, day_range_pos)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 momentum_score, obv_slope, day_range_pos,
+                 stoch_rsi, bb_width_ratio, trading_value)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticker,
@@ -294,6 +295,9 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
                 getattr(snap, "momentum_score", 0.0),
                 getattr(snap, "obv_slope", 0.0),
                 getattr(snap, "day_range_pos", 0.5),
+                getattr(snap, "stoch_rsi", 50.0),
+                getattr(snap, "bb_width_ratio", 1.0),
+                getattr(snap, "trading_value", 0),
             ),
         )
         saved.append({
@@ -307,6 +311,9 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
             "momentum_score": getattr(snap, "momentum_score", 0.0),
             "obv_slope": getattr(snap, "obv_slope", 0.0),
             "day_range_pos": getattr(snap, "day_range_pos", 0.5),
+            "stoch_rsi": getattr(snap, "stoch_rsi", 50.0),
+            "bb_width_ratio": getattr(snap, "bb_width_ratio", 1.0),
+            "trading_value": getattr(snap, "trading_value", 0),
         })
 
     return saved
