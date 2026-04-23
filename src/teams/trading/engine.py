@@ -428,8 +428,9 @@ class TradingEngine:
             if price_chg <= 0 and not (is_pullback or is_op_plunge):
                 fails.append(f"등락률 {price_chg:+.2f}% ≤ 0")
             if rsi > _max_rsi_hard:
-                # 갭업 돌파 + OBV 양수이면 RSI 90까지 허용
-                _rsi_hard_eff = 90.0 if (is_gap_up and obv_slope > 0) else _max_rsi_hard
+                # 갭업 돌파 + OBV 양수: 테마 주도 강한 갭업은 RSI 95까지 허용
+                # (LS ELECTRIC 사례: 테마 형성 당일 RSI 92도 +16% 추가 상승)
+                _rsi_hard_eff = 95.0 if (is_gap_up and obv_slope > 0) else _max_rsi_hard
                 if rsi > _rsi_hard_eff:
                     fails.append(f"RSI {rsi:.0f} > {_rsi_hard_eff:.0f} (극단 과열)")
             # 눌림목 반등 / 오프닝 급락: RSI 낮은 것이 정상 — 과매도 하한선 면제
