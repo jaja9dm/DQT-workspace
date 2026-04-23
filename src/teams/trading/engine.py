@@ -629,10 +629,10 @@ class TradingEngine:
                 continue
 
             # 종목당 투자 한도 — momentum_score 기반 동적 사이징
-            # momentum_score 0~100 → 곱승 0.7~1.5 (선형 보간)
+            # momentum_score 0~130 → 곱승 0.7~1.5 (선형 보간)
             # 점수 낮은 종목에 자금 덜 배분, 강한 신호에 집중
             mscore = float(item.get("momentum_score") or 0.0)
-            ms_mult = 0.7 + (mscore / 100.0) * 0.8   # 0 → 0.7x, 100 → 1.5x
+            ms_mult = 0.7 + (mscore / 130.0) * 0.8   # 0 → 0.7x, 130 → 1.5x
             ms_mult = max(0.7, min(1.5, ms_mult))
             base_invest = usable_cash * max_single_pct / 100
             max_invest = base_invest * ms_mult
