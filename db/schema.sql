@@ -307,6 +307,7 @@ CREATE TABLE IF NOT EXISTS trade_review (
     improvements  TEXT,              -- JSON array — Claude 권고 개선사항
     summary       TEXT,              -- Claude 자연어 총평
     market_context TEXT,             -- JSON {regime, kospi_chg, kosdaq_chg, foreign_dir, global_risk, strategy_fit}
+    signal_analytics TEXT,           -- JSON 신호 차원별 승률·손익 (자기학습 피드백 루프)
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

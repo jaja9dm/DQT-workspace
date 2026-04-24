@@ -220,6 +220,11 @@ class DQTScheduler:
             deleted = SentimentCache().purge_expired()
             logger.info(f"감성 캐시 정리: {deleted}건 삭제")
 
+            # KOSPI + KRX 섹터 매핑 선제 로드 (장 시작 시 blocking fetch 방지)
+            from src.infra.sector_rotation import prefetch as _sector_prefetch
+            _sector_prefetch()
+            logger.info("섹터 로테이션 캐시 프리페치 시작 (백그라운드)")
+
             notify(f"🌅 <b>장 전 준비 완료</b>\n유니버스 {count}종목 | 감성 캐시 {deleted}건 정리")
         except Exception as e:
             logger.error(f"장 전 준비 오류: {e}", exc_info=True)

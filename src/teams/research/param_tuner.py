@@ -289,12 +289,12 @@ def _rule_based_adjustments(
 def _ask_claude_adjustments(
     reviews: list[dict],
     current_params: dict[str, dict],
-) -> list[dict]:
+) -> dict:
     """
     Claude에게 파라미터 조정 제안 요청.
 
     Returns:
-        [{"param": ..., "new_val": ..., "reason": ..., "is_code_change": bool}, ...]
+        {"adjustments": [...], "code_changes_needed": [...]}
     """
     # 복기 요약 텍스트화
     review_lines = []
@@ -365,7 +365,7 @@ def _ask_claude_adjustments(
         except Exception as e:
             if attempt == 3:
                 logger.error(f"Claude 파라미터 튜닝 최종 실패 ({attempt}회): {type(e).__name__}: {e}")
-                return []
+                return {"adjustments": [], "code_changes_needed": []}
             logger.warning(f"Claude 파라미터 튜닝 재시도 {attempt}/3: {type(e).__name__}: {e}")
             time.sleep(5 * attempt)
     if response is None:
