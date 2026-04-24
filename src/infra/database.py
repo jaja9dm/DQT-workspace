@@ -92,9 +92,69 @@ def init_db() -> None:
             ("bb_width_ratio", "REAL DEFAULT 1.0"),
             ("trading_value",  "INTEGER DEFAULT 0"),
             ("exec_strength",  "REAL DEFAULT 100.0"),
+            ("rs_daily",       "REAL DEFAULT 0.0"),
+            ("rs_5d",          "REAL DEFAULT 0.0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE hot_list ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
+        # 기존 DB 마이그레이션: sector_strength 테이블 생성
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sector_strength (
+                sector      TEXT PRIMARY KEY,
+                avg_ret_1d  REAL NOT NULL,
+                vs_kospi    REAL NOT NULL,
+                stock_count INTEGER NOT NULL,
+                updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 기존 DB 마이그레이션: trade_context 테이블 생성 (자기학습 피드백 루프)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS trade_context (
+                trade_id       INTEGER PRIMARY KEY,
+                ticker         TEXT NOT NULL,
+                trade_date     DATE NOT NULL,
+                signal_type    TEXT,
+                rsi            REAL,
+                entry_score    REAL,
+                momentum_score REAL,
+                rs_daily       REAL,
+                rs_5d          REAL,
+                sector         TEXT,
+                exec_strength  REAL,
+                ob_imbalance   REAL,
+                entry_hhmm     TEXT,
+                created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_trade_context_date ON trade_context(trade_date, ticker)"
+        )
+        # 기존 DB 마이그레이션: trade_review에 signal_analytics 컬럼 추가
+        try:
+            conn.execute("ALTER TABLE trade_review ADD COLUMN signal_analytics TEXT")
+        except Exception:
+            pass
+        # strategy_params 자기학습 파라미터 시드 추가
+        _new_params = [
+            ("gate_entry_score_min",     50.0, 50.0, 30.0,  75.0, "Gate 4.2 진입 최소 신뢰도 점수"),
+            ("gate_rs_daily_min",        -2.0, -2.0, -5.0,   0.0, "하락장 RS hard fail 임계값 (%)"),
+            ("gate_market_down_pct",     -1.5, -1.5, -3.0,  -0.5, "하락장 판단 KOSPI 기준 (%)"),
+            ("sector_hot_bonus",          5.0,  5.0,  0.0,  10.0, "강세 섹터 진입점수 가산"),
+            ("sector_cold_penalty",       3.0,  3.0,  0.0,   8.0, "약세 섹터 진입점수 감점"),
+            ("review_win_rate_target",   55.0, 55.0, 40.0,  75.0, "목표 승률 (%) — 미달 시 필터 강화"),
+        ]
+        for row in _new_params:
+            try:
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO strategy_params
+                        (param_name, current_val, default_val, min_val, max_val, description, tuned_by)
+                    VALUES (?, ?, ?, ?, ?, ?, 'default')
+                    """,
+                    row,
+                )
             except Exception:
                 pass
         # 기존 DB 마이그레이션: intraday_macd_signal 신호 강도 컬럼 추가

@@ -81,6 +81,9 @@ def run_daily_review() -> dict | None:
     # 기초 통계
     stats = _calc_stats(trades)
 
+    # 정량 신호 분석 (자기학습 피드백 루프 핵심)
+    signal_analytics = _compute_signal_analytics(today)
+
     # 포지션 스냅샷 (오늘 보유 종목의 가격 흐름 맥락)
     snapshots = _load_snapshots_context(today, [t["ticker"] for t in trades])
 
@@ -94,10 +97,10 @@ def run_daily_review() -> dict | None:
     review = _ask_claude_review(today, trades, stats, snapshots, market_ctx, similar_days)
 
     # DB 저장
-    _save_review(today, stats, review, market_ctx)
+    _save_review(today, stats, review, market_ctx, signal_analytics)
 
     # Telegram 발송
-    _notify_review(today, stats, review, market_ctx)
+    _notify_review(today, stats, review, market_ctx, signal_analytics)
 
     logger.info(f"일일 복기 완료 — 매매 {stats['total']}건, 수익 {stats['win']}건, 손실 {stats['loss']}건")
     return review
@@ -122,6 +125,122 @@ def _load_todays_trades(today: str) -> list[dict]:
         (today,),
     )
     return [dict(r) for r in rows] if rows else []
+
+
+def _compute_signal_analytics(today: str) -> dict:
+    """
+    오늘 매수 진입 컨텍스트(trade_context)와 매도 결과(trades)를 조인해
+    신호 차원별 승률·평균 손익을 정량 계산.
+
+    자기학습 피드백 루프의 핵심 — 이 데이터로 param_tuner가 규칙 기반 조정.
+
+    Returns:
+        {
+          "by_signal_type": {"gap_up_breakout": {"win": 2, "loss": 1, "avg_pnl": 2.3}, ...},
+          "by_rsi_bucket":  {"45-55": {"win": 3, "loss": 0, "avg_pnl": 3.1}, ...},
+          "by_score_bucket": {"80+": {"win": 4, "loss": 0}, "50-70": {"win": 1, "loss": 2}, ...},
+          "by_sector_hot":  {"hot": {"win": 3, "loss": 0}, "cold": {"win": 0, "loss": 2}, ...},
+          "by_entry_hour":  {"09": {"win": 2, "loss": 1}, "10": {"win": 1, "loss": 0}, ...},
+          "overall": {"win": 6, "loss": 3, "win_rate": 0.67, "avg_pnl": 2.1},
+        }
+    """
+    # 오늘 trade_context와 매도 결과 조인
+    rows = fetch_all(
+        """
+        SELECT tc.signal_type, tc.rsi, tc.entry_score, tc.sector,
+               tc.exec_strength, tc.entry_hhmm,
+               s.pnl_pct, s.action AS sell_action
+        FROM trade_context tc
+        JOIN trades s ON s.ticker = tc.ticker
+            AND s.date = tc.trade_date
+            AND s.action IN ('sell','stop_loss','take_profit','time_cut','partial_exit')
+        WHERE tc.trade_date = ?
+        """,
+        (today,),
+    )
+
+    if not rows:
+        return {}
+
+    def _bucket(analytics: dict, key: str, subkey: str, pnl: float) -> None:
+        grp = analytics.setdefault(subkey, {}).setdefault(key, {"win": 0, "loss": 0, "pnl_sum": 0.0, "count": 0})
+        grp["count"] += 1
+        grp["pnl_sum"] += pnl
+        if pnl > 0:
+            grp["win"] += 1
+        else:
+            grp["loss"] += 1
+
+    analytics: dict = {
+        "by_signal_type": {},
+        "by_rsi_bucket": {},
+        "by_score_bucket": {},
+        "by_sector_hot": {},
+        "by_entry_hour": {},
+    }
+    total_win = total_loss = 0
+    total_pnl = 0.0
+
+    # 섹터 강/약세 기준 (오늘 sector_strength 기반)
+    try:
+        from src.infra.sector_rotation import get_hot_sectors, get_cold_sectors
+        hot_sectors  = set(get_hot_sectors(3))
+        cold_sectors = set(get_cold_sectors(3))
+    except Exception:
+        hot_sectors = cold_sectors = set()
+
+    for r in rows:
+        pnl = float(r["pnl_pct"] or 0.0)
+        total_pnl += pnl
+        if pnl > 0:
+            total_win += 1
+        else:
+            total_loss += 1
+
+        # 신호 유형별
+        sig = r["signal_type"] or "unknown"
+        _bucket(analytics, sig, "by_signal_type", pnl)
+
+        # RSI 구간별
+        rsi = float(r["rsi"] or 50.0)
+        rsi_key = "35-" if rsi < 35 else "35-45" if rsi < 45 else "45-55" if rsi < 55 else "55-65" if rsi < 65 else "65-72" if rsi < 72 else "72+"
+        _bucket(analytics, rsi_key, "by_rsi_bucket", pnl)
+
+        # 진입 점수 구간별
+        score = float(r["entry_score"] or 0.0)
+        score_key = "80+" if score >= 80 else "70-79" if score >= 70 else "60-69" if score >= 60 else "50-59"
+        _bucket(analytics, score_key, "by_score_bucket", pnl)
+
+        # 섹터 강/약세별
+        sector = r["sector"] or ""
+        sector_tag = "hot" if sector in hot_sectors else "cold" if sector in cold_sectors else "neutral"
+        _bucket(analytics, sector_tag, "by_sector_hot", pnl)
+
+        # 진입 시간대별
+        hhmm = str(r["entry_hhmm"] or "")
+        hour_key = hhmm[:2] if len(hhmm) >= 2 else "?"
+        _bucket(analytics, hour_key, "by_entry_hour", pnl)
+
+    # avg_pnl 계산 (pnl_sum/count)
+    for dim in analytics.values():
+        for grp in dim.values():
+            grp["avg_pnl"] = round(grp["pnl_sum"] / grp["count"], 3) if grp["count"] else 0.0
+            del grp["pnl_sum"]
+
+    total = total_win + total_loss
+    analytics["overall"] = {
+        "win": total_win,
+        "loss": total_loss,
+        "win_rate": round(total_win / total, 3) if total else 0.0,
+        "avg_pnl": round(total_pnl / total, 3) if total else 0.0,
+    }
+
+    logger.info(
+        f"신호 분석 완료 — 총 {total}건 | "
+        f"신호유형 {len(analytics['by_signal_type'])}종 | "
+        f"RSI구간 {len(analytics['by_rsi_bucket'])}종"
+    )
+    return analytics
 
 
 def _load_market_context(today: str) -> dict:
@@ -544,7 +663,7 @@ def _fallback_review(stats: dict) -> dict:
 # DB 저장
 # ──────────────────────────────────────────────
 
-def _save_review(today: str, stats: dict, review: dict, market_ctx: dict) -> None:
+def _save_review(today: str, stats: dict, review: dict, market_ctx: dict, signal_analytics: dict | None = None) -> None:
     best_t  = stats.get("best")
     worst_t = stats.get("worst")
 
@@ -571,8 +690,8 @@ def _save_review(today: str, stats: dict, review: dict, market_ctx: dict) -> Non
         INSERT OR REPLACE INTO trade_review
             (review_date, total_trades, win_trades, loss_trades, total_pnl,
              best_trade, worst_trade, pattern_hits, pattern_fails, improvements,
-             summary, market_context)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             summary, market_context, signal_analytics)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             today,
@@ -587,6 +706,7 @@ def _save_review(today: str, stats: dict, review: dict, market_ctx: dict) -> Non
             json.dumps(review.get("improvements",  []), ensure_ascii=False),
             review.get("summary", ""),
             market_context_json,
+            json.dumps(signal_analytics or {}, ensure_ascii=False),
         ),
     )
     logger.info(f"trade_review 저장 완료: {today}")
@@ -596,7 +716,7 @@ def _save_review(today: str, stats: dict, review: dict, market_ctx: dict) -> Non
 # Telegram 알림
 # ──────────────────────────────────────────────
 
-def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict) -> None:
+def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, signal_analytics: dict | None = None) -> None:
     win_rate_str = f"{stats['win_rate']*100:.0f}%"
     total_pnl    = stats.get("total_pnl") or 0
     pnl_str      = f"{total_pnl:+,.0f}원"
@@ -661,5 +781,14 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict) -> N
 
     if review.get("summary"):
         lines.append(f"💬 {review['summary']}")
+
+    # 신호 유형별 성과 요약 (데이터 있을 때만)
+    by_sig = (signal_analytics or {}).get("by_signal_type", {})
+    if by_sig:
+        lines.append("\n📐 <b>신호유형별 성과</b>")
+        for sig, g in sorted(by_sig.items(), key=lambda x: x[1].get("avg_pnl", 0), reverse=True):
+            total_g = g["win"] + g["loss"]
+            wr = g["win"] / total_g * 100 if total_g else 0
+            lines.append(f"  • {sig}: {wr:.0f}% ({g['win']}승/{g['loss']}패) 평균 {g['avg_pnl']:+.2f}%")
 
     notify("\n".join(lines))

@@ -110,7 +110,14 @@ class DomesticStockEngine:
         # 6. DB 저장
         saved = _save_hot_list(hot_list, scan)
 
-        # 7. 종목별 뉴스 감성 분석 제출 (Hot List 종목 대상)
+        # 7. 섹터 로테이션 갱신 (스캔 결과 전체로 섹터별 평균 수익률 계산)
+        try:
+            from src.infra.sector_rotation import inject_scan_results
+            inject_scan_results(scan.snapshots)
+        except Exception as _e:
+            logger.debug(f"섹터 로테이션 갱신 실패: {_e}")
+
+        # 8. 종목별 뉴스 감성 분석 제출 (Hot List 종목 대상)
         self._submit_ticker_sentiment(hot_list, scan)
 
         logger.info(f"Hot List 확정: {len(saved)}종목")
@@ -280,8 +287,9 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
                 (ticker, name, signal_type, volume_ratio,
                  price_change_pct, rsi, sector, reason,
                  momentum_score, obv_slope, day_range_pos,
-                 stoch_rsi, bb_width_ratio, trading_value, exec_strength)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 stoch_rsi, bb_width_ratio, trading_value, exec_strength,
+                 rs_daily, rs_5d)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticker,
@@ -290,7 +298,7 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
                 snap.volume_ratio,
                 snap.change_pct,
                 snap.rsi,
-                None,
+                getattr(snap, "sector", ""),
                 item.get("reason", ""),
                 getattr(snap, "momentum_score", 0.0),
                 getattr(snap, "obv_slope", 0.0),
@@ -299,6 +307,8 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
                 getattr(snap, "bb_width_ratio", 1.0),
                 getattr(snap, "trading_value", 0),
                 getattr(snap, "exec_strength", 100.0),
+                getattr(snap, "rs_daily", 0.0),
+                getattr(snap, "rs_5d", 0.0),
             ),
         )
         saved.append({
@@ -308,6 +318,7 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
             "volume_ratio": snap.volume_ratio,
             "change_pct": snap.change_pct,
             "rsi": snap.rsi,
+            "sector": getattr(snap, "sector", ""),
             "reason": item.get("reason", ""),
             "momentum_score": getattr(snap, "momentum_score", 0.0),
             "obv_slope": getattr(snap, "obv_slope", 0.0),
@@ -316,6 +327,8 @@ def _save_hot_list(hot_list: list[dict], scan: UniverseScan) -> list[dict]:
             "bb_width_ratio": getattr(snap, "bb_width_ratio", 1.0),
             "trading_value": getattr(snap, "trading_value", 0),
             "exec_strength": getattr(snap, "exec_strength", 100.0),
+            "rs_daily": getattr(snap, "rs_daily", 0.0),
+            "rs_5d": getattr(snap, "rs_5d", 0.0),
         })
 
     return saved

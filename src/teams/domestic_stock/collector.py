@@ -138,6 +138,11 @@ class StockSnapshot:
     # 100 기준 — 130↑ 강한 매수세(FOMO), 80↓ 매도세 우위
     exec_strength: float = 100.0
 
+    # 상대강도 & 섹터
+    rs_daily: float = 0.0        # 당일 KOSPI 대비 초과수익률 (%) — 양수=강세
+    rs_5d:    float = 0.0        # 5일 KOSPI 대비 누적 초과수익률 (%)
+    sector:   str   = ""         # 업종명 (KRX 분류, 미매핑='기타')
+
     error: str = ""               # 수집 오류 메시지
 
 
@@ -514,6 +519,18 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
         hist_val=snap.macd_hist,
         prev_hist_val=snap.macd_hist_prev,
     )
+
+    # 상대강도 & 섹터 (sector_rotation 캐시 활용 — 당일 1회만 fetch)
+    from src.infra.sector_rotation import get_kospi_daily_chg, get_kospi_5d_ret, get_sector
+    snap.rs_daily = round(snap.change_pct - get_kospi_daily_chg(), 3)
+    snap.sector   = get_sector(ticker)
+    with _fdr_cache_lock:
+        _cached_rs = _fdr_cache.get(ticker)
+    if _cached_rs:
+        _rs_close = _cached_rs[1]["Close"].astype(float)
+        if len(_rs_close) >= 6:
+            _stock_5d = float((_rs_close.iloc[-1] / _rs_close.iloc[-6] - 1) * 100)
+            snap.rs_5d = round(_stock_5d - get_kospi_5d_ret(), 3)
 
     # 3. 신호 플래그
     snap.is_volume_surge = snap.volume_ratio >= VOLUME_SURGE_RATIO

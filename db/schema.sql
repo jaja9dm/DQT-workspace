@@ -52,8 +52,25 @@ CREATE TABLE IF NOT EXISTS hot_list (
     momentum_score   REAL DEFAULT 0.0,  -- 종합 모멘텀 점수 (0~100)
     obv_slope        REAL DEFAULT 0.0,  -- OBV 5봉 기울기
     day_range_pos    REAL DEFAULT 0.5,  -- 당일 가격 범위 내 위치 (0=저가권, 1=고가권)
+    stoch_rsi        REAL DEFAULT 50.0, -- Stochastic RSI
+    bb_width_ratio   REAL DEFAULT 1.0,  -- 볼린저밴드 폭 비율
+    trading_value    INTEGER DEFAULT 0, -- 당일 누적 거래대금 (원)
     exec_strength    REAL DEFAULT 100.0, -- 체결강도 (100=균형, 130↑=강한매수세, 80↓=매도우위)
+    rs_daily         REAL DEFAULT 0.0,  -- 당일 KOSPI 대비 초과수익률 (%)
+    rs_5d            REAL DEFAULT 0.0,  -- 5일 KOSPI 대비 누적 초과수익률 (%)
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
+-- 섹터 로테이션: 업종별 강도 (당일 스캔 기반)
+-- inject_scan_results() 호출 시 갱신
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS sector_strength (
+    sector      TEXT PRIMARY KEY,
+    avg_ret_1d  REAL NOT NULL,   -- 섹터 평균 당일 등락률 (%)
+    vs_kospi    REAL NOT NULL,   -- KOSPI 대비 초과수익률 (%)
+    stock_count INTEGER NOT NULL, -- 집계 종목 수
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ────────────────────────────────────────
@@ -293,6 +310,27 @@ CREATE TABLE IF NOT EXISTS trade_review (
 );
 
 -- ────────────────────────────────────────
+-- 매수 진입 컨텍스트 (자기학습 피드백 루프)
+-- 매수 체결 시 신호 메타데이터 저장 → 복기에서 신호별 승률 계산
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS trade_context (
+    trade_id       INTEGER PRIMARY KEY,   -- trades.id 참조
+    ticker         TEXT NOT NULL,
+    trade_date     DATE NOT NULL,
+    signal_type    TEXT,                  -- gap_up_breakout | pullback_rebound | ...
+    rsi            REAL,
+    entry_score    REAL,                  -- Gate 4.2 신뢰도 점수 (0~100)
+    momentum_score REAL,
+    rs_daily       REAL,                  -- 당일 KOSPI 대비 초과수익률
+    rs_5d          REAL,                  -- 5일 KOSPI 대비 누적
+    sector         TEXT,
+    exec_strength  REAL,
+    ob_imbalance   REAL,
+    entry_hhmm     TEXT,                  -- 진입 시각 (HHMM 문자열)
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
 -- 인덱스
 -- ────────────────────────────────────────
 CREATE INDEX IF NOT EXISTS idx_checkpoint_cycle   ON fetch_checkpoint(cycle_id, scan_type);
@@ -304,3 +342,4 @@ CREATE INDEX IF NOT EXISTS idx_position_snapshot  ON position_snapshot(snapshot_
 CREATE INDEX IF NOT EXISTS idx_risk_status_latest ON risk_status(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_sentiment_expires  ON sentiment_cache(expires_at);
 CREATE INDEX IF NOT EXISTS idx_universe_date      ON universe(active_date, ticker);
+CREATE INDEX IF NOT EXISTS idx_trade_context_date ON trade_context(trade_date, ticker);
