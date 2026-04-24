@@ -801,6 +801,32 @@ class PositionMonitorEngine:
                 avg_price=avg_price, name=name,
             )
 
+        # ── 5-A. 12:00 이후 3분봉 60일선 이탈 청산 ──────────────
+        # 12:00 이후에는 신규 매수 없음 → 기존 포지션 수익 지키기 모드.
+        # 3분봉 종가(≈현재가)가 60일 이동평균 아래로 내려오면 지지 붕괴 판단 → 도망.
+        # 수익 중인 포지션에만 적용 (손절선은 별도 존재하므로 손실 포지션은 제외).
+        _now_hm_ma = datetime.now().hour * 100 + datetime.now().minute
+        if _now_hm_ma >= 1200 and pnl_pct > 0:
+            ma60 = _fetch_ma60(ticker)
+            if ma60 is not None and ma60 > 0 and current_price < ma60:
+                logger.warning(
+                    f"[60일선 이탈] {ticker} | 현재가 {current_price:,.0f} < MA60 {ma60:,.0f} "
+                    f"| 12:00↑ 지지 붕괴 → 수익 {pnl_pct:+.2f}% 확정 청산"
+                )
+                _delete_trailing_stop(ticker)
+                from src.utils.notifier import notify
+                notify(
+                    f"📉 <b>[60일선 이탈 청산]</b> {name}({ticker})\n"
+                    f"현재가 {current_price:,.0f}원 < 60일선 {ma60:,.0f}원\n"
+                    f"12:00 이후 지지 붕괴 → 수익 {pnl_pct:+.2f}% 확정"
+                )
+                return self._place_sell(
+                    ticker=ticker, quantity=quantity, current_price=current_price,
+                    action="take_profit",
+                    reason=f"12:00↑ 60일선 이탈 ({current_price:,.0f} < MA60 {ma60:,.0f})",
+                    avg_price=avg_price, name=name,
+                )
+
         # ── 5. 타임컷 ────────────────────────────
         if held_days > _MAX_HOLD_DAYS:
             logger.warning(
@@ -1403,6 +1429,43 @@ def _load_trailing_stop(ticker: str) -> dict | None:
         if row:
             return dict(row)
         return None
+    except Exception:
+        return None
+
+
+def _fetch_ma60(ticker: str) -> float | None:
+    """
+    FDR 일봉 캐시에서 60일 이동평균 조회.
+    캐시 미존재 시 FDR 직접 호출 (당일 1회만 발생).
+
+    Returns:
+        ma60 가격 또는 None (데이터 부족)
+    """
+    from datetime import timedelta
+    import FinanceDataReader as fdr
+    import pandas as pd
+
+    try:
+        today_str = datetime.now().strftime("%Y%m%d")
+        # collector의 FDR 캐시 재사용 시도
+        try:
+            from src.teams.domestic_stock.collector import _fdr_cache, _fdr_cache_lock
+            with _fdr_cache_lock:
+                cached = _fdr_cache.get(ticker)
+            if cached and cached[0] == today_str:
+                df = cached[1]
+                if len(df) >= 60:
+                    return float(df["Close"].astype(float).rolling(60).mean().iloc[-1])
+        except Exception:
+            pass
+
+        # 캐시 없으면 직접 조회 (최소 90일)
+        end   = datetime.now().date()
+        start = end - timedelta(days=130)
+        df = fdr.DataReader(ticker, start, end)
+        if df is None or len(df) < 60:
+            return None
+        return float(df["Close"].astype(float).rolling(60).mean().iloc[-1])
     except Exception:
         return None
 
