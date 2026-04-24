@@ -26,7 +26,7 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import anthropic
 
@@ -39,6 +39,9 @@ logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+_KIS_BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
+_KIS_CASH_PATH    = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+
 
 def _extract_json(raw: str) -> str:
     """Claude 응답에서 JSON 블록 추출. 코드 펜스·앞뒤 텍스트 제거."""
@@ -50,6 +53,248 @@ def _extract_json(raw: str) -> str:
     if start != -1 and end != -1:
         return raw[start : end + 1]
     return raw
+
+
+# ──────────────────────────────────────────────
+# KIS 잔고 / 평가금액 조회
+# ──────────────────────────────────────────────
+
+def _fetch_portfolio_summary() -> dict:
+    """
+    장 마감 후 KIS API로 평가금액·예수금·보유종목 조회.
+
+    Returns:
+        {
+          "total_eval_amt": float,   # 총 평가금액 (보유주식 시가 + 예수금)
+          "stock_eval_amt": float,   # 주식 평가금액
+          "available_cash": float,   # 주문 가능 예수금
+          "total_pnl_amt":  float,   # 평가 손익 합계
+          "total_pnl_pct":  float,   # 평가 손익률 (%)
+          "positions": [{"ticker", "name", "quantity", "avg_price",
+                         "current_price", "pnl_pct"}, ...]
+        }
+    """
+    _empty = {
+        "total_eval_amt": 0.0,
+        "stock_eval_amt": 0.0,
+        "available_cash": 0.0,
+        "total_pnl_amt":  0.0,
+        "total_pnl_pct":  0.0,
+        "positions": [],
+    }
+    try:
+        from src.infra.kis_gateway import KISGateway
+        from src.infra.rate_limiter import RequestPriority
+        gw = KISGateway()
+        acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
+        tr_id = "VTTC8434R" if settings.KIS_MODE == "paper" else "TTTC8434R"
+
+        resp = gw.request(
+            method="GET",
+            path=_KIS_BALANCE_PATH,
+            params={
+                "CANO": acnt_no,
+                "ACNT_PRDT_CD": acnt_prdt_cd,
+                "AFHR_FLPR_YN": "N",
+                "OFL_YN": "",
+                "INQR_DVSN": "02",
+                "UNPR_DVSN": "01",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "PRCS_DVSN": "01",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            },
+            tr_id=tr_id,
+            priority=RequestPriority.DATA_COLLECTION,
+        )
+
+        output1 = resp.get("output1", [])
+        output2 = resp.get("output2", [{}])
+        summary = output2[0] if output2 else {}
+
+        stock_eval  = float(summary.get("evlu_amt_smtl_amt", 0) or 0)
+        total_eval  = float(summary.get("tot_evlu_amt", 0) or 0)
+        total_pnl   = float(summary.get("evlu_pfls_smtl_amt", 0) or 0)
+        purchase_amt = float(summary.get("pchs_amt_smtl_amt", 0) or stock_eval)
+        total_pnl_pct = (total_pnl / purchase_amt * 100) if purchase_amt > 0 else 0.0
+
+        # 예수금 (d+2 기준 실제 사용 가능 금액)
+        available_cash = total_eval - stock_eval
+
+        positions = []
+        for item in output1:
+            qty = int(item.get("hldg_qty", 0) or 0)
+            if qty == 0:
+                continue
+            positions.append({
+                "ticker":        item.get("pdno", ""),
+                "name":          item.get("prdt_name", ""),
+                "quantity":      qty,
+                "avg_price":     float(item.get("pchs_avg_pric", 0) or 0),
+                "current_price": float(item.get("prpr", 0) or 0),
+                "pnl_pct":       float(item.get("evlu_pfls_rt", 0) or 0),
+                "eval_amt":      float(item.get("evlu_amt", 0) or 0),
+            })
+
+        return {
+            "total_eval_amt": total_eval,
+            "stock_eval_amt": stock_eval,
+            "available_cash": available_cash,
+            "total_pnl_amt":  total_pnl,
+            "total_pnl_pct":  round(total_pnl_pct, 3),
+            "positions":      positions,
+        }
+    except Exception as e:
+        logger.warning(f"포트폴리오 잔고 조회 실패: {e}")
+        return _empty
+
+
+# ──────────────────────────────────────────────
+# 보조 분석 함수
+# ──────────────────────────────────────────────
+
+def _calc_profit_factor(sell_trades: list[dict]) -> float:
+    """Profit Factor = 총 이익합 / 총 손실합 절대값. 1.5↑ 양호, 1.0↓ 위험."""
+    total_profit = sum((t.get("pnl") or 0) for t in sell_trades if (t.get("pnl") or 0) > 0)
+    total_loss   = abs(sum((t.get("pnl") or 0) for t in sell_trades if (t.get("pnl") or 0) < 0))
+    return round(total_profit / total_loss, 2) if total_loss > 0 else float("inf") if total_profit > 0 else 0.0
+
+
+def _calc_avg_hold_minutes(trades: list[dict]) -> float:
+    """매수 → 매도 평균 보유 시간(분). 종목별로 페어링 후 평균."""
+    _SELL_ACTIONS = ("sell", "stop_loss", "take_profit", "time_cut", "partial_exit", "force_close")
+    buy_time: dict[str, datetime] = {}
+    hold_minutes: list[float] = []
+
+    for t in sorted(trades, key=lambda x: x.get("created_at") or ""):
+        tk = t["ticker"]
+        try:
+            ts = datetime.fromisoformat(str(t.get("created_at") or ""))
+        except Exception:
+            continue
+        if t["action"] == "buy" and tk not in buy_time:
+            buy_time[tk] = ts
+        elif t["action"] in _SELL_ACTIONS and tk in buy_time:
+            diff = (ts - buy_time[tk]).total_seconds() / 60
+            if 0 < diff < 480:  # 8시간 이내 (오버나잇 제외)
+                hold_minutes.append(diff)
+            del buy_time[tk]
+
+    return round(sum(hold_minutes) / len(hold_minutes), 1) if hold_minutes else 0.0
+
+
+def _calc_hot_list_efficiency(today: str, bought_tickers: set) -> dict:
+    """
+    오늘 hot_list에 올라온 종목 수 vs 실제 매수 수.
+    '놓친 기회' — 매수하지 않은 hot_list 종목 중 등락률 상위.
+
+    Returns:
+        {"scanned": int, "bought": int, "conversion_pct": float,
+         "missed_top": [{"ticker", "name", "change_pct", "signal_type"}, ...]}
+    """
+    rows = fetch_all(
+        """
+        SELECT ticker, name, price_change_pct, signal_type, momentum_score
+        FROM hot_list
+        WHERE DATE(created_at) = ?
+        ORDER BY momentum_score DESC
+        """,
+        (today,),
+    )
+    if not rows:
+        return {"scanned": 0, "bought": 0, "conversion_pct": 0.0, "missed_top": []}
+
+    # 중복 제거 (같은 종목이 여러 스캔 사이클에서 올라올 수 있음)
+    seen: dict[str, dict] = {}
+    for r in rows:
+        tk = r["ticker"]
+        if tk not in seen:
+            seen[tk] = dict(r)
+
+    scanned = len(seen)
+    missed = [
+        {"ticker": tk, "name": d["name"],
+         "change_pct": float(d["price_change_pct"] or 0),
+         "signal_type": d["signal_type"] or ""}
+        for tk, d in seen.items()
+        if tk not in bought_tickers
+    ]
+    # 등락률 높은 순으로 상위 3개 (놓쳤는데 많이 올라간 것들)
+    missed_top = sorted(missed, key=lambda x: x["change_pct"], reverse=True)[:3]
+
+    bought_count = len(bought_tickers & set(seen.keys()))
+    conv = round(bought_count / scanned * 100, 1) if scanned else 0.0
+
+    return {
+        "scanned":        scanned,
+        "bought":         bought_count,
+        "conversion_pct": conv,
+        "missed_top":     missed_top,
+    }
+
+
+def _calc_consecutive_losses(sell_trades: list[dict]) -> int:
+    """시간 순으로 정렬 후 현재 기준 연속 손실 최대 횟수."""
+    sorted_sells = sorted(sell_trades, key=lambda x: x.get("created_at") or "")
+    max_streak = cur_streak = 0
+    for t in sorted_sells:
+        if (t.get("pnl_pct") or 0) < 0:
+            cur_streak += 1
+            max_streak = max(max_streak, cur_streak)
+        else:
+            cur_streak = 0
+    return max_streak
+
+
+def _calc_tranche_effect(trades: list[dict]) -> dict:
+    """
+    분할매수(2·3차 매수) 효과 분석.
+    2·3차 매수가 있는 종목에서 평균단가 개선폭과 최종 손익 비교.
+
+    Returns:
+        {"tickers_with_tranche": int, "avg_improvement_pct": float,
+         "tranche2_count": int, "tranche3_count": int}
+    """
+    buy_trades = [t for t in trades if t["action"] == "buy"]
+    t2 = [t for t in buy_trades if (t.get("tranche") or 1) == 2]
+    t3 = [t for t in buy_trades if (t.get("tranche") or 1) == 3]
+    tickers_with_extra = len({t["ticker"] for t in t2 + t3})
+    return {
+        "tickers_with_tranche": tickers_with_extra,
+        "tranche2_count": len(t2),
+        "tranche3_count": len(t3),
+    }
+
+
+def _calc_max_drawdown(today: str) -> float:
+    """
+    position_snapshot 기반 당일 포트폴리오 최대 미실현 손실률(%).
+    각 종목의 최악 스냅샷 손익률을 투자금액 가중 합산.
+    (동시 최악 가정 — 보수적 추정)
+    """
+    rows = fetch_all(
+        """
+        SELECT ticker, MIN(pnl_pct) AS worst_pnl, avg_price, quantity
+        FROM position_snapshot
+        WHERE DATE(snapshot_at) = ?
+        GROUP BY ticker
+        """,
+        (today,),
+    )
+    if not rows:
+        return 0.0
+
+    total_invested = sum(float(r["avg_price"] or 0) * int(r["quantity"] or 0) for r in rows)
+    if total_invested <= 0:
+        return 0.0
+
+    weighted_loss = sum(
+        float(r["worst_pnl"] or 0) / 100
+        * float(r["avg_price"] or 0) * int(r["quantity"] or 0)
+        for r in rows
+    )
+    return round(weighted_loss / total_invested * 100, 2)
 
 
 # ──────────────────────────────────────────────
@@ -93,14 +338,29 @@ def run_daily_review() -> dict | None:
     # 유사 시황 패턴 과거 복기 (데이터 쌓이면 참조용)
     similar_days = _load_similar_market_days(market_ctx, days_back=60)
 
+    # 추가 분석 지표
+    bought_tickers = {t["ticker"] for t in trades if t["action"] == "buy"}
+    sell_trades    = [t for t in trades if t["action"] not in ("buy",)]
+    extra = {
+        "profit_factor":     _calc_profit_factor(sell_trades),
+        "avg_hold_minutes":  _calc_avg_hold_minutes(trades),
+        "hot_list":          _calc_hot_list_efficiency(today, bought_tickers),
+        "consecutive_losses":_calc_consecutive_losses(sell_trades),
+        "tranche":           _calc_tranche_effect(trades),
+        "max_drawdown_pct":  _calc_max_drawdown(today),
+    }
+
+    # 장 마감 후 포트폴리오 잔고 (평가금액 + 예수금)
+    portfolio = _fetch_portfolio_summary()
+
     # Claude 분석
-    review = _ask_claude_review(today, trades, stats, snapshots, market_ctx, similar_days)
+    review = _ask_claude_review(today, trades, stats, snapshots, market_ctx, similar_days, extra)
 
     # DB 저장
     _save_review(today, stats, review, market_ctx, signal_analytics)
 
     # Telegram 발송
-    _notify_review(today, stats, review, market_ctx, signal_analytics)
+    _notify_review(today, stats, review, market_ctx, signal_analytics, extra, portfolio)
 
     logger.info(f"일일 복기 완료 — 매매 {stats['total']}건, 수익 {stats['win']}건, 손실 {stats['loss']}건")
     return review
@@ -507,20 +767,23 @@ def _ask_claude_review(
     snapshots: dict[str, list[dict]],
     market_ctx: dict,
     similar_days: list[dict],
+    extra: dict | None = None,
 ) -> dict:
     """
     Claude에게 오늘 매매 복기 및 개선점 분석 요청.
 
     Returns:
         {
-          "pattern_hits":  [...],   # 잘 작동한 패턴
-          "pattern_fails": [...],   # 실패한 패턴
-          "improvements":  [...],   # 내일 당장 적용 가능한 개선점
-          "market_regime": "...",   # 오늘 시장 성격 태그 (예: 강세_외인주도)
-          "strategy_fit":  "...",   # 이 시장 상황에 맞는 전략 평가
-          "summary":       "..."    # 한국어 총평
+          "pattern_hits":    [...],   # 잘 작동한 패턴
+          "pattern_fails":   [...],   # 실패한 패턴
+          "improvements":    [...],   # 내일 당장 적용 가능한 개선점
+          "market_regime":   "...",   # 오늘 시장 성격 태그
+          "strategy_fit":    "...",   # 전략 적합성 평가
+          "tomorrow_watch":  "...",   # 내일 주목 전략·주의사항 (2문장 이내)
+          "summary":         "..."    # 한국어 총평
         }
     """
+    extra = extra or {}
     # 종목별 페어링 요약 (진입 컨텍스트 포함)
     ticker_summary = stats.get("ticker_summary", {})
     pair_lines = []
@@ -597,22 +860,32 @@ def _ask_claude_review(
 - 손절: 트레일링 스톱(-3%), MACD 역행 시 조기 손절 (stop_loss)
 - 익절: take_profit(목표가), time_cut(14:50 수익청산), force_close(15:20 강제)
 
+## 오늘 성과 지표 요약
+- Profit Factor: {extra.get('profit_factor', 'N/A')} (1.5↑ 양호, 1.0↓ 위험)
+- 평균 보유시간: {extra.get('avg_hold_minutes', 0):.0f}분
+- 연속 최대 손절: {extra.get('consecutive_losses', 0)}회
+- Hot List 전환율: {extra.get('hot_list', {}).get('scanned', 0)}종목 스캔 → {extra.get('hot_list', {}).get('bought', 0)}개 매수 ({extra.get('hot_list', {}).get('conversion_pct', 0)}%)
+- 분할매수 실행: {extra.get('tranche', {}).get('tickers_with_tranche', 0)}종목 (2차 {extra.get('tranche', {}).get('tranche2_count', 0)}건, 3차 {extra.get('tranche', {}).get('tranche3_count', 0)}건)
+- 장중 최대 드로우다운: {extra.get('max_drawdown_pct', 0):.2f}%
+
 ## 분석 요청 (반드시 구체적으로, 종목명 + 진입 시그널 + 수치 포함)
 1. **pattern_hits**: 오늘 잘 작동한 진입/청산 패턴 (종목명·신호유형·수익률 포함, 최대 4개)
 2. **pattern_fails**: 손실이 났거나 아쉬웠던 부분 (종목명·이유 포함, 최대 4개)
 3. **improvements**: 내일 당장 바꿀 수 있는 개선점 (파라미터 수치 제안 포함, 최대 4개)
 4. **market_regime**: 오늘 시장 성격을 태그로 요약 (예: "강세_외인주도", "혼조_개인장", "약세_매도압력" 등 20자 이내)
 5. **strategy_fit**: 오늘 시장 상황에 현재 전략이 얼마나 잘 맞았는지 평가 (30자 이내)
-6. **summary**: 오늘 총평 (시황 + 승률 + 실현손익 + 특이사항 포함, 2~3문장)
+6. **tomorrow_watch**: 내일 오전 전략 방향 + 주의사항 (글로벌 선물·미청산 포지션·시장 흐름 고려, 2문장 이내)
+7. **summary**: 오늘 총평 (시황 + 승률 + 실현손익 + 특이사항 포함, 2~3문장)
 
 JSON만 응답:
 {{
-  "pattern_hits":  ["...", ...],
-  "pattern_fails": ["...", ...],
-  "improvements":  ["...", ...],
-  "market_regime": "...",
-  "strategy_fit":  "...",
-  "summary":       "..."
+  "pattern_hits":   ["...", ...],
+  "pattern_fails":  ["...", ...],
+  "improvements":   ["...", ...],
+  "market_regime":  "...",
+  "strategy_fit":   "...",
+  "tomorrow_watch": "...",
+  "summary":        "..."
 }}"""
 
     response = None
@@ -620,7 +893,7 @@ JSON만 응답:
         try:
             response = _client.messages.create(
                 model=settings.CLAUDE_MODEL_MAIN,
-                max_tokens=1024,
+                max_tokens=1500,
                 temperature=0,
                 timeout=60.0,
                 messages=[{"role": "user", "content": prompt}],
@@ -770,24 +1043,63 @@ _SIG_LABEL = {
 }
 
 
-def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, signal_analytics: dict | None = None) -> None:
-    win_rate_str = f"{stats['win_rate']*100:.0f}%"
-    total_pnl    = stats.get("total_pnl") or 0
-    pnl_emoji    = "🟢" if total_pnl >= 0 else "🔴"
+def _notify_review(
+    today: str,
+    stats: dict,
+    review: dict,
+    market_ctx: dict,
+    signal_analytics: dict | None = None,
+    extra: dict | None = None,
+    portfolio: dict | None = None,
+) -> None:
+    extra = extra or {}
+    sa    = signal_analytics or {}
+    pf    = portfolio or {}
+    total_pnl  = stats.get("total_pnl") or 0
+    pnl_emoji  = "🟢" if total_pnl >= 0 else "🔴"
+    win_rate   = stats.get("win_rate", 0)
 
-    # ── 헤더 ──────────────────────────────────────
+    # ── 1. 헤더 ───────────────────────────────────────────
     lines = [
         f"📊 <b>[일일 복기] {today}</b>",
-        f"거래 {stats['total']}건 | 승률 {win_rate_str} ({stats['win']}승/{stats['loss']}패) | {pnl_emoji} <b>{total_pnl:+,.0f}원</b>",
+        f"거래 {stats['total']}건 | 승률 {win_rate*100:.0f}% ({stats['win']}승/{stats['loss']}패)"
+        f"  |  {pnl_emoji} <b>{total_pnl:+,.0f}원</b>",
         "",
     ]
 
-    # ── 시장 상황 ──────────────────────────────────
+    # ── 2. 포트폴리오 잔고 (평가금액 + 예수금) ──────────────
+    if pf.get("total_eval_amt"):
+        total_eval  = pf["total_eval_amt"]
+        stock_eval  = pf.get("stock_eval_amt", 0)
+        avail_cash  = pf.get("available_cash", 0)
+        pf_pnl      = pf.get("total_pnl_amt", 0)
+        pf_pnl_pct  = pf.get("total_pnl_pct", 0)
+        pf_emoji    = "🟢" if pf_pnl >= 0 else "🔴"
+        lines.append("💼 <b>포트폴리오 현황 (장 마감 기준)</b>")
+        lines.append(
+            f"  총 평가금액: <b>{total_eval:,.0f}원</b>"
+            f"  (주식 {stock_eval:,.0f}원 + 예수금 {avail_cash:,.0f}원)"
+        )
+        lines.append(
+            f"  평가 손익: {pf_emoji} <b>{pf_pnl:+,.0f}원 ({pf_pnl_pct:+.2f}%)</b>"
+        )
+        # 보유 중인 종목 (미청산)
+        if pf.get("positions"):
+            pos_parts = [
+                f"{p['name']}({p['ticker']}) {p['pnl_pct']:+.1f}%"
+                for p in pf["positions"]
+            ]
+            lines.append(f"  보유종목: {' | '.join(pos_parts)}")
+        lines.append("")
+
+    # ── 3. 시장 상황 + 성격 태그 ─────────────────────────
     regime       = review.get("market_regime", "")
     strategy_fit = review.get("strategy_fit", "")
     lines.append(
-        f"📈 KOSPI {market_ctx.get('kospi_chg', 0):+.2f}% | KOSDAQ {market_ctx.get('kosdaq_chg', 0):+.2f}%"
-        f" | 외인 {market_ctx.get('foreign_dir', '-')} | 글로벌리스크 {market_ctx.get('global_risk', '-')}/10"
+        f"📈 KOSPI {market_ctx.get('kospi_chg', 0):+.2f}%"
+        f" | KOSDAQ {market_ctx.get('kosdaq_chg', 0):+.2f}%"
+        f" | 외인 {market_ctx.get('foreign_dir', '-')}"
+        f" | 글로벌리스크 {market_ctx.get('global_risk', '-')}/10"
     )
     if regime:
         lines.append(f"🏷 <b>{regime}</b>" + (f"  ·  {strategy_fit}" if strategy_fit else ""))
@@ -799,7 +1111,38 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, sign
         lines.append(f"🔚 청산: {' | '.join(exit_parts)}")
     lines.append("")
 
-    # ── 종목별 성과 ────────────────────────────────
+    # ── 4. 핵심 지표 한눈에 보기 ─────────────────────────
+    pf_val      = extra.get("profit_factor", 0)
+    pf_str      = f"{pf_val:.2f}" if pf_val != float("inf") else "∞ (손실 없음)"
+    pf_judge    = "✅ 양호" if pf_val >= 1.5 else ("⚠️ 주의" if pf_val >= 1.0 else "🚨 위험")
+    hold_min    = extra.get("avg_hold_minutes", 0)
+    cons_loss   = extra.get("consecutive_losses", 0)
+    max_dd      = extra.get("max_drawdown_pct", 0)
+    hl          = extra.get("hot_list", {})
+    tr          = extra.get("tranche", {})
+
+    lines.append("📐 <b>오늘 성과 지표</b>")
+    lines.append(f"  Profit Factor: <b>{pf_str}</b>  {pf_judge}")
+    lines.append(f"  평균 보유시간: <b>{hold_min:.0f}분</b>" + ("  ⚠️ 장기보유 의심" if hold_min > 45 else ""))
+    if cons_loss >= 3:
+        lines.append(f"  🚨 연속 손절: <b>{cons_loss}회</b> — 진입 기준 점검 필요")
+    elif cons_loss > 0:
+        lines.append(f"  연속 최대 손절: {cons_loss}회")
+    if max_dd < 0:
+        lines.append(f"  장중 최대 드로우다운: <b>{max_dd:.2f}%</b>" + ("  🚨 위험" if max_dd < -3 else ""))
+    if hl.get("scanned"):
+        lines.append(
+            f"  Hot List 전환율: {hl['scanned']}종목 스캔 → {hl['bought']}개 매수"
+            f" ({hl['conversion_pct']}%)"
+        )
+    if tr.get("tickers_with_tranche"):
+        lines.append(
+            f"  분할매수: {tr['tickers_with_tranche']}종목"
+            f" (2차 {tr.get('tranche2_count', 0)}건 / 3차 {tr.get('tranche3_count', 0)}건)"
+        )
+    lines.append("")
+
+    # ── 5. 종목별 성과 (수익 → 손실 순) ───────────────────
     ticker_summary = stats.get("ticker_summary", {})
     if ticker_summary:
         lines.append("📋 <b>종목별 성과</b>")
@@ -809,37 +1152,43 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, sign
             sig_lbl  = _SIG_LABEL.get(ts.get("signal_type", ""), ts.get("signal_type", ""))
             hhmm     = ts.get("entry_hhmm", "")
             score    = ts.get("entry_score", 0.0)
-            rsi      = ts.get("rsi", 0.0)
+            rsi_val  = ts.get("rsi", 0.0)
 
             if ts["status"] == "closed" and pnl is not None:
                 p_emoji  = "▲" if pnl >= 0 else "▼"
                 buy_str  = f"{ts['buy_price']:,.0f}" if ts.get("buy_price") else "?"
                 sell_str = f"{ts['sell_price']:,.0f}" if ts.get("sell_price") else "?"
                 exit_lbl = _EXIT_LABEL.get(ts.get("action", ""), ts.get("action", ""))
-                # 첫 줄: 종목 + 가격 + 손익
                 lines.append(
-                    f"  {p_emoji} <b>{name_str}</b>({ts['ticker']})  "
-                    f"{buy_str}→{sell_str}원  <b>{pnl:+.2f}%</b>  [{exit_lbl}]"
+                    f"  {p_emoji} <b>{name_str}</b>({ts['ticker']})"
+                    f"  {buy_str}→{sell_str}원  <b>{pnl:+.2f}%</b>  [{exit_lbl}]"
                 )
-                # 두 번째 줄: 진입 컨텍스트 (데이터 있을 때만)
-                if sig_lbl or score or rsi:
-                    ctx_parts = []
-                    if sig_lbl:
-                        ctx_parts.append(f"신호:{sig_lbl}")
-                    if score:
-                        ctx_parts.append(f"점수:{score:.0f}")
-                    if rsi:
-                        ctx_parts.append(f"RSI:{rsi:.0f}")
-                    if hhmm:
-                        ctx_parts.append(f"진입:{hhmm[:2]}:{hhmm[2:]}")
-                    if ts.get("sector"):
-                        ctx_parts.append(f"섹터:{ts['sector']}")
+                ctx_parts = []
+                if sig_lbl:   ctx_parts.append(f"신호:{sig_lbl}")
+                if score:     ctx_parts.append(f"점수:{score:.0f}")
+                if rsi_val:   ctx_parts.append(f"RSI:{rsi_val:.0f}")
+                if hhmm:      ctx_parts.append(f"진입:{hhmm[:2]}:{hhmm[2:]}")
+                if ts.get("sector"): ctx_parts.append(f"섹터:{ts['sector']}")
+                if ctx_parts:
                     lines.append(f"      └ {' | '.join(ctx_parts)}")
             else:
                 lines.append(f"  ⏳ <b>{name_str}</b>({ts['ticker']}): 보유중")
         lines.append("")
 
-    # ── Claude 분석 ────────────────────────────────
+    # ── 6. 놓친 기회 (Hot List에 올랐으나 미매수 상위 3종) ──
+    missed = hl.get("missed_top", [])
+    if missed:
+        lines.append("🔍 <b>놓친 기회 (미매수 Hot List 상위)</b>")
+        for m in missed:
+            sig = _SIG_LABEL.get(m.get("signal_type", ""), m.get("signal_type", ""))
+            lines.append(
+                f"  • {m['name']}({m['ticker']})"
+                f"  스캔시 {m['change_pct']:+.2f}%"
+                + (f"  [{sig}]" if sig else "")
+            )
+        lines.append("")
+
+    # ── 7. Claude 총평 + 분석 ────────────────────────────
     if review.get("summary"):
         lines.append(f"💬 {review['summary']}")
         lines.append("")
@@ -862,19 +1211,35 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, sign
             lines.append(f"  • {imp}")
         lines.append("")
 
-    # ── 정량 신호 분석 (trade_context 데이터 있을 때만) ──
-    sa = signal_analytics or {}
+    if review.get("tomorrow_watch"):
+        lines.append(f"📅 <b>내일 주목</b>: {review['tomorrow_watch']}")
+        lines.append("")
 
+    # ── 8. 정량 신호 분석 4종 ────────────────────────────
     by_sig = sa.get("by_signal_type", {})
     if by_sig:
         lines.append("📐 <b>신호유형별 성과</b>")
         for sig, g in sorted(by_sig.items(), key=lambda x: x[1].get("avg_pnl", 0), reverse=True):
-            total_g = g["win"] + g["loss"]
-            wr = g["win"] / total_g * 100 if total_g else 0
-            lbl = _SIG_LABEL.get(sig, sig)
+            n = g["win"] + g["loss"]
+            wr = g["win"] / n * 100 if n else 0
             lines.append(
-                f"  • {lbl}: {wr:.0f}% ({g['win']}승/{g['loss']}패) "
-                f"평균 {g['avg_pnl']:+.2f}%"
+                f"  • {_SIG_LABEL.get(sig, sig)}: {wr:.0f}%"
+                f" ({g['win']}승/{g['loss']}패) 평균 {g['avg_pnl']:+.2f}%"
+            )
+        lines.append("")
+
+    by_rsi = sa.get("by_rsi_bucket", {})
+    if by_rsi:
+        lines.append("📊 <b>RSI 구간별 성과</b>")
+        for bucket in ["35-", "35-45", "45-55", "55-65", "65-72", "72+"]:
+            g = by_rsi.get(bucket)
+            if not g:
+                continue
+            n = g["win"] + g["loss"]
+            wr = g["win"] / n * 100 if n else 0
+            lines.append(
+                f"  • RSI {bucket}: {wr:.0f}%"
+                f" ({g['win']}승/{g['loss']}패) 평균 {g['avg_pnl']:+.2f}%"
             )
         lines.append("")
 
@@ -885,11 +1250,11 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, sign
             g = by_score.get(bucket)
             if not g:
                 continue
-            total_g = g["win"] + g["loss"]
-            wr = g["win"] / total_g * 100 if total_g else 0
+            n = g["win"] + g["loss"]
+            wr = g["win"] / n * 100 if n else 0
             lines.append(
-                f"  • {bucket}점: {wr:.0f}% ({g['win']}승/{g['loss']}패) "
-                f"평균 {g['avg_pnl']:+.2f}%"
+                f"  • {bucket}점: {wr:.0f}%"
+                f" ({g['win']}승/{g['loss']}패) 평균 {g['avg_pnl']:+.2f}%"
             )
         lines.append("")
 
@@ -898,11 +1263,11 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, sign
         lines.append("🕐 <b>시간대별 성과</b>")
         for hour in sorted(by_hour.keys()):
             g = by_hour[hour]
-            total_g = g["win"] + g["loss"]
-            wr = g["win"] / total_g * 100 if total_g else 0
+            n = g["win"] + g["loss"]
+            wr = g["win"] / n * 100 if n else 0
             lines.append(
-                f"  • {hour}시: {wr:.0f}% ({g['win']}승/{g['loss']}패) "
-                f"평균 {g['avg_pnl']:+.2f}%"
+                f"  • {hour}시: {wr:.0f}%"
+                f" ({g['win']}승/{g['loss']}패) 평균 {g['avg_pnl']:+.2f}%"
             )
         lines.append("")
 
@@ -913,12 +1278,12 @@ def _notify_review(today: str, stats: dict, review: dict, market_ctx: dict, sign
             g = by_sector.get(tag)
             if not g:
                 continue
-            total_g = g["win"] + g["loss"]
-            wr = g["win"] / total_g * 100 if total_g else 0
-            tag_lbl = {"hot": "강세섹터🔥", "neutral": "중립섹터", "cold": "약세섹터🧊"}.get(tag, tag)
+            n = g["win"] + g["loss"]
+            wr = g["win"] / n * 100 if n else 0
+            lbl = {"hot": "강세섹터🔥", "neutral": "중립섹터", "cold": "약세섹터🧊"}.get(tag, tag)
             lines.append(
-                f"  • {tag_lbl}: {wr:.0f}% ({g['win']}승/{g['loss']}패) "
-                f"평균 {g['avg_pnl']:+.2f}%"
+                f"  • {lbl}: {wr:.0f}%"
+                f" ({g['win']}승/{g['loss']}패) 평균 {g['avg_pnl']:+.2f}%"
             )
 
     notify("\n".join(lines))
