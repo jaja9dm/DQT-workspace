@@ -52,6 +52,7 @@ CREATE TABLE IF NOT EXISTS hot_list (
     momentum_score   REAL DEFAULT 0.0,  -- 종합 모멘텀 점수 (0~100)
     obv_slope        REAL DEFAULT 0.0,  -- OBV 5봉 기울기
     day_range_pos    REAL DEFAULT 0.5,  -- 당일 가격 범위 내 위치 (0=저가권, 1=고가권)
+    exec_strength    REAL DEFAULT 100.0, -- 체결강도 (100=균형, 130↑=강한매수세, 80↓=매도우위)
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 

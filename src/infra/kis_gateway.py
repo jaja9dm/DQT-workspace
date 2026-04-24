@@ -206,6 +206,50 @@ class KISGateway:
             logger.debug(f"분봉 조회 실패 [{ticker}]: {e}")
             return []
 
+    def get_orderbook(
+        self,
+        ticker: str,
+        priority: Priority = Priority.TRADING,
+    ) -> dict:
+        """
+        호가창 조회 — 매수/매도 10단계 잔량.
+
+        Returns:
+            {
+                "bid_qty": int,   # 상위 5단계 매수호가 잔량 합
+                "ask_qty": int,   # 상위 5단계 매도호가 잔량 합
+                "imbalance": float,  # bid_qty / ask_qty (1.0=균형, 1.5+=매수우위)
+            }
+        실패 시: {"bid_qty": 0, "ask_qty": 0, "imbalance": 1.0}
+        """
+        _default = {"bid_qty": 0, "ask_qty": 0, "imbalance": 1.0}
+        try:
+            resp = self._request(
+                method="GET",
+                path="/uapi/domestic-stock/v1/quotations/inquire-asking-price-exp-ccn",
+                tr_id="FHKST01010200",
+                params={
+                    "FID_COND_MRKT_DIV_CODE": "J",
+                    "FID_INPUT_ISCD": ticker,
+                },
+                priority=priority,
+            )
+            output2 = resp.get("output2", {})
+            if not output2:
+                return _default
+            # 상위 5단계 매수/매도 잔량 합산
+            bid = sum(
+                int(output2.get(f"bidp_rsqn{i}", 0) or 0) for i in range(1, 6)
+            )
+            ask = sum(
+                int(output2.get(f"askp_rsqn{i}", 0) or 0) for i in range(1, 6)
+            )
+            imbalance = round(bid / ask, 3) if ask > 0 else 1.0
+            return {"bid_qty": bid, "ask_qty": ask, "imbalance": imbalance}
+        except Exception as e:
+            logger.debug(f"호가창 조회 실패 [{ticker}]: {e}")
+            return _default
+
     def get_balance(self, priority: Priority = Priority.TRADING) -> dict:
         """잔고 및 보유 포지션 조회."""
         acc, prod = self._account_no.split("-")

@@ -91,6 +91,7 @@ def init_db() -> None:
             ("stoch_rsi",      "REAL DEFAULT 50.0"),
             ("bb_width_ratio", "REAL DEFAULT 1.0"),
             ("trading_value",  "INTEGER DEFAULT 0"),
+            ("exec_strength",  "REAL DEFAULT 100.0"),
         ]:
             try:
                 conn.execute(f"ALTER TABLE hot_list ADD COLUMN {col} {typedef}")
