@@ -148,6 +148,27 @@ signal_type에 따라 아래 전략 기준을 적용하세요.
 _MARKET_SCORE_GATE = -0.5     # 국내 시황 최소 점수 (스캘핑·단타: -0.5 이하만 차단)
 _RISK_LEVEL_GATE = 4          # 이 레벨 이상이면 신규 진입 금지
 
+# 시간대 구간 (HHMM)
+_TIME_MORNING_END  = 1200   # 09:00~11:59: 오전 — 공격적 (수급 활발)
+_TIME_LUNCH_END    = 1300   # 12:00~12:59: 점심 — 보수적 (유동성 감소)
+_TIME_CLOSING_END  = 1330   # 13:00~13:29: 마감 — 매우 보수적 (리스크 최소화)
+
+
+def _get_time_regime(hm: int) -> str:
+    """
+    현재 시각(HHMM) 기준 시장 시간대 반환.
+
+    Returns:
+        "morning"  — 09:00~11:59: 수급 활발, 공격적 진입
+        "lunch"    — 12:00~12:59: 점심 유동성 감소, 보수적
+        "closing"  — 13:00~13:29: 마감 직전, 매우 보수적
+    """
+    if hm < _TIME_MORNING_END:
+        return "morning"
+    if hm < _TIME_LUNCH_END:
+        return "lunch"
+    return "closing"
+
 
 class TradingEngine:
     """매매팀 엔진 — 독립 스레드로 실행."""
@@ -573,6 +594,65 @@ class TradingEngine:
         # 리스크 레벨에 따라 실제 사용 가능 예수금 제한
         usable_cash = available_cash * position_limit_pct / 100
 
+        # ── 시간대 레짐 결정 ─────────────────────
+        # 09:00~11:59 오전: 수급 활발 → 공격적
+        # 12:00~12:59 점심: 유동성 감소 → 보수적
+        # 13:00~13:29 마감: 리스크 최소화 → 매우 보수적
+        time_regime = _get_time_regime(_hm)
+
+        # 점심/마감 구간: MACD 신호 강도 최소 기준 강화
+        # (약한 신호로 유동성 얇은 시장에 진입 방지)
+        _macd_strength_min = 0.0  # 오전: 제한 없음
+        if time_regime == "lunch":
+            _macd_strength_min = 60.0  # 점심: 신호 강도 60↑ 필요
+        elif time_regime == "closing":
+            _macd_strength_min = 70.0  # 마감: 신호 강도 70↑ 필요
+
+        if _macd_strength_min > 0:
+            pre_filter = candidates[:]
+            candidates = [
+                c for c in candidates
+                if float(c.get("_macd_strength") or 50.0) >= _macd_strength_min
+            ]
+            blocked = [c["ticker"] for c in pre_filter if c not in candidates]
+            if blocked:
+                logger.info(
+                    f"[{time_regime.upper()}] MACD 강도 필터 차단 (기준 {_macd_strength_min:.0f}): "
+                    f"{', '.join(blocked)}"
+                )
+            if not candidates:
+                logger.info(f"[{time_regime.upper()}] MACD 강도 기준 충족 종목 없음 — 대기")
+                return []
+
+        # 점심/마감 구간: Gate 4.2 신뢰도 최소 기준 강화
+        if time_regime == "lunch":
+            pre_score = candidates[:]
+            candidates = [c for c in candidates if float(c.get("_entry_score") or 0) >= 60.0]
+            blocked_s = [c["ticker"] for c in pre_score if c not in candidates]
+            if blocked_s:
+                logger.info(
+                    f"[LUNCH] 신뢰도 점수 필터 차단 (기준 60): {', '.join(blocked_s)}"
+                )
+        elif time_regime == "closing":
+            pre_score = candidates[:]
+            candidates = [c for c in candidates if float(c.get("_entry_score") or 0) >= 72.0]
+            blocked_s = [c["ticker"] for c in pre_score if c not in candidates]
+            if blocked_s:
+                logger.info(
+                    f"[CLOSING] 신뢰도 점수 필터 차단 (기준 72): {', '.join(blocked_s)}"
+                )
+
+        if not candidates:
+            return []
+
+        # 시간대별 사이즈 배율
+        # 오전: 풀사이즈, 점심: 75%, 마감: 50%
+        _time_size_mult = 1.0
+        if time_regime == "lunch":
+            _time_size_mult = 0.75
+        elif time_regime == "closing":
+            _time_size_mult = 0.50
+
         # ── Gate 5: Claude 최종 판단 (배치) ──────
         # momentum_score 기준 정렬된 상위 3종목만 (집중 투자)
         batch = candidates[:3]
@@ -581,6 +661,7 @@ class TradingEngine:
             market_score=market_score,
             global_risk_score=global_ctx.get("global_risk_score", 5),
             risk_level=level,
+            time_regime=time_regime,
         )  # {ticker: decision_dict}
 
         orders = []
@@ -616,11 +697,12 @@ class TradingEngine:
             ms_mult = max(0.7, min(1.5, ms_mult))
             score_mult = float(item.get("_score_size_mult") or 1.0)
             base_invest = usable_cash * max_single_pct / 100
-            max_invest = base_invest * ms_mult * score_mult
-            if mscore > 0:
+            max_invest = base_invest * ms_mult * score_mult * _time_size_mult
+            if mscore > 0 or _time_size_mult < 1.0:
                 logger.info(
-                    f"동적 사이징: {ticker} momentum={mscore:.0f} → "
-                    f"투자비중 ×{ms_mult:.2f} ({base_invest/1e4:.0f}만→{max_invest/1e4:.0f}만원)"
+                    f"동적 사이징: {ticker} momentum={mscore:.0f} "
+                    f"×{ms_mult:.2f}(모멘텀) ×{score_mult:.2f}(신뢰도) ×{_time_size_mult:.2f}({time_regime}) "
+                    f"→ {max_invest/1e4:.0f}만원"
                 )
 
             # RSI 과열 종목: 1차 매수 비중 50%로 축소 (40% → 20% 실효)
@@ -642,20 +724,22 @@ class TradingEngine:
                 current_price=current_price,
                 tranche=1,
                 decision=decision,
-                tight_stop=rsi_hot,   # RSI 과열 → 손절선 1.5%로 타이트
+                tight_stop=rsi_hot or time_regime != "morning",  # 오전 외 타이트 손절
             )
             if result:
                 orders.append(result)
                 self._today_tickers.add(ticker)
                 self._macd_reentry_ok.add(ticker)
 
-                # RSI 과열 종목은 2·3차 분할 매수 비중도 50% 축소
+                # 점심/마감 구간: 3차 분할 매수 차단 (tranche_limit 전달)
+                _tranche_limit = 1 if time_regime == "closing" else 3
                 self._schedule_tranches(
                     ticker=ticker,
                     name=item.get("name", ""),
                     entry_price=current_price,
                     max_invest=max_invest * (0.5 if rsi_hot else 1.0),
                     decision=decision,
+                    tranche_limit=_tranche_limit,
                 )
 
         # ── 재진입 감시 업데이트 + 신호 실행 ────
@@ -921,6 +1005,7 @@ JSON만 응답:
         market_score: float,
         global_risk_score: int,
         risk_level: int,
+        time_regime: str = "morning",
     ) -> dict[str, dict]:
         """
         후보 종목 전체를 1번의 Claude 호출로 일괄 판단.
@@ -959,11 +1044,17 @@ JSON만 응답:
                 f"감성: {sentiment.get('avg_score', 0):+.2f}({sentiment.get('direction', 'neutral')})"
             )
 
+        _regime_guide = {
+            "morning": "오전(09~12시) — 수급 활발, 공격적 판단 가능. 강한 신호면 적극 매수.",
+            "lunch":   "점심(12~13시) — 거래량 감소 구간. 신호가 명확하지 않으면 보류. target_pct를 0.5~1%p 낮추고 stop_pct를 0.5%p 줄여 손익비 유지.",
+            "closing": "마감(13~13:30) — 유동성 최저, 극보수적. 매우 강한 신호(신뢰도 72↑, MACD 70↑)만 매수. target_pct 최대 3%, stop_pct 1%로 빠른 확정 우선.",
+        }
         user_content = (
             f"## 현재 매크로 컨텍스트\n"
             f"- 리스크 레벨: {risk_level}/5\n"
             f"- 글로벌 리스크: {global_risk_score}/10\n"
-            f"- 국내 시황 점수: {market_score:+.2f}\n\n"
+            f"- 국내 시황 점수: {market_score:+.2f}\n"
+            f"- 시간대: {_regime_guide.get(time_regime, '')}\n\n"
             f"## 매수 판단 후보 ({len(items)}종목)\n"
             + "\n".join(stock_lines)
             + f"\n\n위 {len(items)}종목 전체에 대해 decisions 배열로 응답하세요."
@@ -1037,11 +1128,16 @@ JSON만 응답:
         entry_price: float,
         max_invest: float,
         decision: dict,
+        tranche_limit: int = 3,   # 최대 분할 횟수 (마감 구간: 1로 제한)
     ) -> None:
         """2차(35%)·3차(25%) 분할 매수를 별도 스레드에서 지연 실행."""
 
         def _execute_tranches():
-            for tranche_no, ratio in [(2, _TRANCHE_RATIOS[1]), (3, _TRANCHE_RATIOS[2])]:
+            tranches = [(2, _TRANCHE_RATIOS[1]), (3, _TRANCHE_RATIOS[2])]
+            for tranche_no, ratio in tranches:
+                if tranche_no > tranche_limit:
+                    logger.info(f"분할매수 {tranche_no}차 스킵: tranche_limit={tranche_limit} (시간대 제한)")
+                    break
                 # 5분 대기 후 현재가 확인
                 time.sleep(300)
                 if self._stop_event.is_set():
