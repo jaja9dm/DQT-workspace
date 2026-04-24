@@ -368,13 +368,19 @@ def _ask_claude_adjustments(
                 return []
             logger.warning(f"Claude 파라미터 튜닝 재시도 {attempt}/3: {type(e).__name__}: {e}")
             time.sleep(5 * attempt)
+    if response is None:
+        logger.error("Claude 파라미터 튜닝 응답 없음 — 모든 재시도 실패")
+        return {"adjustments": [], "code_changes_needed": []}
     try:
         raw = response.content[0].text.strip()
         result = json.loads(_extract_json(raw))
+        # 응답이 dict가 아니면(list 등) 빈 결과로 처리
+        if not isinstance(result, dict):
+            return {"adjustments": [], "code_changes_needed": []}
         return result
     except Exception as e:
         logger.error(f"Claude 파라미터 튜닝 응답 파싱 실패: {type(e).__name__}: {e}")
-        return []
+        return {"adjustments": [], "code_changes_needed": []}
 
 
 # ──────────────────────────────────────────────

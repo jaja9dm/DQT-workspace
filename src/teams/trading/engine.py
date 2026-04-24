@@ -180,8 +180,9 @@ class TradingEngine:
             daemon=True,
             name="trading-engine",
         )
-        self._today_tickers: set[str] = set()   # 당일 이미 매수한 종목 (중복 방지)
-        self._macd_reentry_ok: set[str] = set()  # MACD 조기손절 후 재진입 허용 종목
+        self._today_tickers: set[str] = set()         # 당일 이미 매수한 종목 (중복 방지)
+        self._macd_reentry_ok: set[str] = set()       # MACD 재진입 허용 종목
+        self._macd_reentry_count: dict[str, int] = {} # 종목별 당일 MACD 재진입 횟수 (최대 2회)
         # 수익 실현 후 MACD 재진입 감시 목록
         # {ticker: {"exit_price": float, "exit_time": datetime, "item": dict, "reentry_count": int}}
         self._reentry_watchlist: dict[str, dict] = {}
@@ -216,6 +217,7 @@ class TradingEngine:
                     self._today_str = date.today().isoformat()
                     self._today_tickers.clear()
                     self._macd_reentry_ok.clear()
+                    self._macd_reentry_count.clear()
                     self._reentry_watchlist.clear()
                     self._opening_gate_checked = False
                     self._buy_allowed_from = None
@@ -374,8 +376,11 @@ class TradingEngine:
             if ticker not in self._today_tickers:
                 candidates.append(h)
             elif ticker in self._macd_reentry_ok:
-                # 재진입 허용 종목: MACD buy_pre 신호 확인 후 진입
-                # 단, 당일 손절(stop_loss) 발생 종목은 재진입 완전 차단
+                # MACD 재진입: 당일 최대 2회로 제한 (무한 재진입 방지)
+                if self._macd_reentry_count.get(ticker, 0) >= 2:
+                    logger.debug(f"[재진입 한도] {ticker} — 당일 MACD 재진입 2회 소진")
+                    continue
+                # 당일 손절 종목은 재진입 완전 차단
                 was_stopped = fetch_one(
                     "SELECT id FROM trades WHERE ticker=? AND date=? AND action='stop_loss' LIMIT 1",
                     (ticker, str(date.today())),
@@ -593,7 +598,7 @@ class TradingEngine:
                 continue
 
             # 갭업 종목 11:00~13:00: MACD buy_pre 확인 시만 뒤늦은 진입 허용
-            is_c_gap_up = sig_type == "gap_up_breakout" or float(c.get("change_pct") or 0) >= 8.0
+            is_c_gap_up = sig_type == "gap_up_breakout" or float(c.get("price_change_pct") or 0) >= 8.0
             if is_c_gap_up and 1100 <= now_hm < 1300:
                 if macd_now != "buy_pre":
                     logger.info(
@@ -691,15 +696,23 @@ class TradingEngine:
                     f"×{ms_mult:.2f}(모멘텀) ×{score_mult:.2f}(신뢰도) → {max_invest/1e4:.0f}만원"
                 )
 
-            # RSI 과열 종목: 1차 매수 비중 50%로 축소 (40% → 20% 실효)
+            # 1차 매수 비중 결정 — RSI 과열 / 재진입 중 더 보수적인 쪽 하나만 적용
+            # (둘 다 곱하면 0.60 × 0.5 × 0.75 = 0.225 → 의도한 것보다 과도한 축소)
             rsi_hot = item.get("rsi_hot", False)
-            # 재진입 종목: 포지션 25% 축소 (리서치 기반 — 재진입 성공률 관리)
-            # from_negative(음수→회복)이면 신뢰도 높아 축소 없음
             is_reentry = item.get("_is_reentry", False)
             reentry_mult = 1.0 if not is_reentry else (1.0 if item.get("_from_negative") else 0.75)
-            if is_reentry and reentry_mult < 1.0:
-                logger.info(f"재진입 사이즈 축소: {ticker} × {reentry_mult} (단순 buy_pre 재진입)")
-            t1_ratio = _TRANCHE_RATIOS[0] * (0.5 if rsi_hot else 1.0) * reentry_mult
+            if rsi_hot and is_reentry:
+                # 둘 다 해당 시: 더 보수적인 쪽(0.5) 하나만 적용
+                t1_size_mult = 0.5
+                logger.info(f"사이즈 축소: {ticker} RSI과열+재진입 → 1차 50% (이중 페널티 방지)")
+            elif rsi_hot:
+                t1_size_mult = 0.5
+                logger.info(f"사이즈 축소: {ticker} RSI과열 → 1차 50%")
+            else:
+                t1_size_mult = reentry_mult
+                if is_reentry and reentry_mult < 1.0:
+                    logger.info(f"사이즈 축소: {ticker} 재진입 × {reentry_mult} (단순 buy_pre)")
+            t1_ratio = _TRANCHE_RATIOS[0] * t1_size_mult
             tranche1_amt = max_invest * t1_ratio
             qty = max(1, int(tranche1_amt / current_price))
 
@@ -717,12 +730,14 @@ class TradingEngine:
                 orders.append(result)
                 self._today_tickers.add(ticker)
                 self._macd_reentry_ok.add(ticker)
+                if item.get("_is_reentry"):
+                    self._macd_reentry_count[ticker] = self._macd_reentry_count.get(ticker, 0) + 1
 
                 self._schedule_tranches(
                     ticker=ticker,
                     name=item.get("name", ""),
                     entry_price=current_price,
-                    max_invest=max_invest * (0.5 if rsi_hot else 1.0),
+                    max_invest=max_invest * t1_size_mult,
                     decision=decision,
                 )
 

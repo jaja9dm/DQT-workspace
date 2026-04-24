@@ -232,9 +232,10 @@ CREATE TABLE IF NOT EXISTS intraday_macd_signal (
     signal_3m  REAL,
     macd_5m    REAL,
     signal_5m  REAL,
-    sig_3m     TEXT NOT NULL DEFAULT 'hold',  -- 3분봉 개별 신호 (buy_pre|sell_pre|hold)
-    sig_5m     TEXT NOT NULL DEFAULT 'hold',  -- 5분봉 개별 신호
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    sig_3m          TEXT NOT NULL DEFAULT 'hold',  -- 3분봉 개별 신호 (buy_pre|sell_pre|hold)
+    sig_5m          TEXT NOT NULL DEFAULT 'hold',  -- 5분봉 개별 신호
+    signal_strength REAL DEFAULT 0.0,              -- 신호 강도 (0~100)
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ────────────────────────────────────────

@@ -155,7 +155,7 @@ class SectorRotationCache:
     def _ensure_fresh(self) -> None:
         today = date.today()
         with self._data_lock:
-            already = self._fetched_date == today and bool(self._kospi_daily_chg != 0.0 or self._sector_map)
+            already = self._fetched_date == today and bool(self._kospi_daily_chg != 0.0 and self._sector_map)
         if not already:
             self._fetch()
 
