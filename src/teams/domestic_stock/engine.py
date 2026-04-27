@@ -125,20 +125,20 @@ class DomesticStockEngine:
             logger.info(f"관찰 모드 ({hm}) — 슬롯 배정 대기 중 (09:07 이후 시작)")
             return {s: None for s in _ALL_SLOTS}
 
-        # 6. 슬롯 탐색 마감 체크 (11:30 이후)
+        # 6. 활성 슬롯 건강 평가 — 11:30 이후에도 계속 실행 (오후 포지션 관리)
+        _evaluate_active_slots(scan)
+
+        # 7. 슬롯 탐색 마감 체크 (11:30 이후 — 신규 탐색만 중단)
         if hm >= _SLOT_CUTOFF_HHMM:
-            logger.info("슬롯 탐색 마감 (11:30) — 기존 포지션 관리 모드")
+            logger.info("슬롯 탐색 마감 (11:30) — 기존 포지션 건강 관리만 유지")
             return {s: None for s in _ALL_SLOTS}
 
-        # 7. 시장 주도주 갱신
+        # 8. 시장 주도주 갱신
         try:
             from src.infra.market_leaders import refresh as _refresh_leaders
             _refresh_leaders()
         except Exception as _le:
             logger.debug(f"주도주 갱신 실패: {_le}")
-
-        # 8. 활성 슬롯 건강 평가 (보유 중인 슬롯도 5분마다 재채점)
-        _evaluate_active_slots(scan)
 
         # 9. 비어 있는 슬롯만 탐색
         slots_to_fill = _get_empty_slots()
