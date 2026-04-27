@@ -924,6 +924,7 @@ class TradingEngine:
                     entry_price=current_price,
                     max_invest=max_invest * t1_size_mult,
                     decision=decision,
+                    slot=item.get("slot", "leader"),
                 )
 
         # ── 재진입 감시 업데이트 + 신호 실행 ────
@@ -1373,39 +1374,35 @@ JSON만 응답:
         entry_price: float,
         max_invest: float,
         decision: dict,
-        tranche_limit: int = 3,   # 최대 분할 횟수 (마감 구간: 1로 제한)
+        tranche_limit: int = 3,
+        slot: str = "leader",
     ) -> None:
-        """2차(35%)·3차(25%) 분할 매수를 별도 스레드에서 지연 실행."""
+        """
+        2차·3차 분할 매수를 지표 기반으로 판단 후 실행.
+
+        슬롯별 전략:
+          breakout (갭업돌파) — 불타기 우선: 상승 모멘텀 지속 확인 후 추가
+          pullback (눌림반등) — 물타기 우선: 건강한 눌림(-1%) + OBV 양수 확인 후 추가
+          leader  (모멘텀)   — 양방향: 불타기·물타기 중 더 강한 신호 따름
+        """
 
         def _execute_tranches():
+            ref_price = entry_price  # 각 차수의 기준가 (직전 체결가로 갱신)
             tranches = [(2, _TRANCHE_RATIOS[1]), (3, _TRANCHE_RATIOS[2])]
             for tranche_no, ratio in tranches:
                 if tranche_no > tranche_limit:
-                    logger.info(f"분할매수 {tranche_no}차 스킵: tranche_limit={tranche_limit} (시간대 제한)")
+                    logger.info(f"분할매수 {tranche_no}차 스킵: tranche_limit={tranche_limit}")
                     break
-                # 5분 대기 후 현재가 확인
+                # 5분 대기
                 time.sleep(300)
                 if self._stop_event.is_set():
                     break
 
-                # 12:00 이후 추가 분할매수 차단 (오전 타이밍 종료)
+                # 12:00 이후 추가 분할매수 차단
                 _now_hm = datetime.now().hour * 100 + datetime.now().minute
                 if _now_hm >= _TIME_BUY_CUTOFF:
                     logger.info(f"분할매수 {tranche_no}차 중단: 12:00 이후 추가 진입 차단")
                     break
-
-                current = _fetch_current_price(ticker)
-                if current <= 0:
-                    break
-
-                # 1차 진입가 대비 -1% 이상 하락 시에만 추가 진입
-                drop_pct = (current - entry_price) / entry_price * 100
-                if drop_pct > -1.0:
-                    logger.debug(
-                        f"분할 매수 {tranche_no}차 보류: {ticker} "
-                        f"하락폭 {drop_pct:.2f}% < -1% 기준"
-                    )
-                    continue
 
                 # 리스크 레벨 재확인
                 risk = get_current_risk()
@@ -1413,24 +1410,39 @@ JSON만 응답:
                     logger.info(f"분할 매수 {tranche_no}차 중단: 리스크 레벨 상승")
                     break
 
-                # 장중 KOSPI 방향 재확인 — 하락장에서 추가 물타기 방지
+                # 장중 KOSPI 방향 재확인
                 kospi_now = _load_live_index_change()
                 if kospi_now is not None and kospi_now < -0.5:
                     logger.info(
-                        f"분할 매수 {tranche_no}차 중단: KOSPI {kospi_now:+.2f}% 하락 중 — 추가 진입 보류"
+                        f"분할 매수 {tranche_no}차 중단: KOSPI {kospi_now:+.2f}% 하락 중"
                     )
                     break
 
-                amt = max_invest * ratio
-                qty = max(1, int(amt / current))
-                self._place_buy(
-                    ticker=ticker,
-                    name=name,
-                    quantity=qty,
-                    current_price=current,
-                    tranche=tranche_no,
-                    decision=decision,
-                )
+                # 지표 기반 분할 방향 판단
+                signal, reason, current = _assess_tranche_signal(ticker, ref_price, slot)
+                logger.info(f"분할 판단 [{tranche_no}차] {ticker} [{slot}] → {signal} | {reason}")
+
+                if signal == "abort":
+                    logger.info(f"분할매수 {tranche_no}차 중단: {reason}")
+                    break
+                elif signal == "hold":
+                    logger.debug(f"분할매수 {tranche_no}차 대기: {reason}")
+                    continue
+                elif signal in ("scale_up", "scale_down"):
+                    if current <= 0:
+                        break
+                    amt = max_invest * ratio
+                    qty = max(1, int(amt / current))
+                    result = self._place_buy(
+                        ticker=ticker,
+                        name=name,
+                        quantity=qty,
+                        current_price=current,
+                        tranche=tranche_no,
+                        decision=decision,
+                    )
+                    if result:
+                        ref_price = current  # 다음 차수 기준가 갱신
 
         t = threading.Thread(
             target=_execute_tranches,
@@ -2237,6 +2249,146 @@ def _count_open_positions() -> int:
     """현재 보유 종목 수 (trailing_stop 행 수)."""
     row = fetch_one("SELECT COUNT(*) AS cnt FROM trailing_stop")
     return int(row["cnt"]) if row else 0
+
+
+def _assess_tranche_signal(
+    ticker: str,
+    ref_price: float,
+    slot: str,
+) -> tuple[str, str, float]:
+    """
+    분할 매수 방향을 지표 기반으로 판단.
+
+    슬롯별 전략:
+      breakout — 불타기 우선 (모멘텀 지속 확인)
+      pullback — 물타기 우선 (건강한 눌림 확인)
+      leader   — 양방향 (더 강한 신호 따름)
+
+    Returns:
+        ("scale_up" | "scale_down" | "hold" | "abort", reason, current_price)
+        scale_up  : 불타기 — 상승 모멘텀 지속, 추가 매수
+        scale_down: 물타기 — 건강한 눌림, 평단 낮추기
+        hold      : 판단 유보 — 다음 사이클 재시도
+        abort     : 중단 — 모멘텀 소멸 또는 손절 임박
+    """
+    current = _fetch_current_price(ticker)
+    if current <= 0:
+        return "abort", "현재가 조회 실패", 0.0
+
+    price_chg_pct = (current - ref_price) / ref_price * 100 if ref_price > 0 else 0.0
+
+    # ── intraday_candles 최근 5봉 조회 ────────────────────────
+    candles = fetch_all(
+        """
+        SELECT open, high, low, close, volume
+        FROM intraday_candles
+        WHERE ticker = ?
+        ORDER BY bar_time DESC
+        LIMIT 5
+        """,
+        (ticker,),
+    )
+
+    # 데이터 부족: 가격 기준 폴백
+    if len(candles) < 3:
+        if slot == "breakout":
+            return "hold", f"캔들 부족({len(candles)}봉) — 대기", current
+        return ("scale_down", f"캔들 부족 → 가격 기준 물타기 ({price_chg_pct:.1f}%)", current) \
+            if price_chg_pct <= -1.0 else ("hold", f"캔들 부족 + 미하락 ({price_chg_pct:.1f}%)", current)
+
+    # ── 지표 계산 ──────────────────────────────────────────────
+
+    # 1. OBV 방향 (최근 3봉 기준)
+    obv = 0.0
+    closes = [float(c["close"]) for c in candles]
+    vols   = [float(c["volume"]) for c in candles]
+    for i in range(len(closes) - 1):
+        if closes[i] > closes[i + 1]:
+            obv += vols[i]
+        elif closes[i] < closes[i + 1]:
+            obv -= vols[i]
+    obv_positive = obv > 0
+
+    # 2. 거래량 가속: 최근 2봉 평균 vs 이전 2봉 평균
+    recent_vol = (vols[0] + vols[1]) / 2
+    older_vol  = (vols[2] + vols[3]) / 2 if len(candles) >= 4 else vols[2]
+    vol_accelerating = recent_vol > older_vol * 1.15  # 15% 이상 증가
+
+    # 3. 연속 양봉: 최근 2봉 모두 양봉
+    consecutive_bull = (closes[0] > float(candles[0]["open"])) and \
+                       (closes[1] > float(candles[1]["open"]))
+
+    # 4. VWAP 위치
+    vwap, _ = _get_vwap_position(ticker)
+    above_vwap = (vwap > 0) and (current > vwap)
+
+    # 5. MACD 신호
+    try:
+        from src.teams.intraday_macd.engine import get_latest_macd_signal as _get_macd_sig
+        macd_sig = _get_macd_sig(ticker, max_age_minutes=8)
+        macd_bullish = macd_sig in ("buy_pre", "buy")
+        macd_bearish = macd_sig in ("sell_pre", "sell")
+    except Exception:
+        macd_sig = "unknown"
+        macd_bullish = macd_bearish = False
+
+    # ── 불타기 점수 (0~5점) ────────────────────────────────────
+    bull_score = sum([
+        price_chg_pct >= 0.3,      # 1차 대비 상승 중
+        obv_positive,               # OBV 순매수 방향
+        vol_accelerating,           # 거래량 가속 (매수세 유입)
+        consecutive_bull,           # 연속 양봉 (추세 지속)
+        above_vwap,                 # VWAP 위 (기관 지지선 상회)
+        macd_bullish,               # MACD 강세 신호
+    ])
+
+    # ── 물타기 점수 (0~4점) — 건강한 눌림 기준 ────────────────
+    bear_score = sum([
+        price_chg_pct <= -1.0,     # 1차 대비 -1% 이상 하락
+        obv_positive,               # OBV 양수 (기관이 받아주는 중)
+        not vol_accelerating,       # 거래량 감소 (패닉 아닌 조정)
+        not macd_bearish,           # MACD 매도 신호 없음
+    ])
+
+    # ── 중단 조건 (공통) ───────────────────────────────────────
+    # 손절 트리거 수준 하락 또는 MACD 강한 매도 신호
+    if price_chg_pct <= -3.0:
+        return "abort", f"손절 임박: {price_chg_pct:.1f}% 급락", current
+    if macd_bearish and price_chg_pct < 0:
+        return "abort", f"MACD 매도({macd_sig}) + 하락 {price_chg_pct:.1f}% — 모멘텀 소멸", current
+
+    reason_detail = (
+        f"가격{price_chg_pct:+.1f}% | OBV{'✓' if obv_positive else '✗'}"
+        f" | 거래량가속{'✓' if vol_accelerating else '✗'}"
+        f" | 연속양봉{'✓' if consecutive_bull else '✗'}"
+        f" | VWAP위{'✓' if above_vwap else '✗'}"
+        f" | MACD={macd_sig}"
+    )
+
+    # ── 슬롯별 판단 ────────────────────────────────────────────
+    if slot == "breakout":
+        # 갭업돌파: 불타기 우선 — 모멘텀 지속 시 추가, 소멸 시 중단
+        if bull_score >= 3:
+            return "scale_up", f"불타기 ({bull_score}/6점) | {reason_detail}", current
+        if price_chg_pct < -1.5 or (macd_bearish and not obv_positive):
+            return "abort", f"돌파 모멘텀 소멸 | {reason_detail}", current
+        return "hold", f"불타기 미충족 ({bull_score}/6점) — 대기 | {reason_detail}", current
+
+    elif slot == "pullback":
+        # 눌림반등: 물타기 우선 — 건강한 눌림 확인 후 추가
+        if bear_score >= 3:
+            return "scale_down", f"물타기 ({bear_score}/4점) | {reason_detail}", current
+        if price_chg_pct <= -2.5 and not obv_positive:
+            return "abort", f"눌림 과다 + OBV음수 — 추가 매수 포기 | {reason_detail}", current
+        return "hold", f"물타기 미충족 ({bear_score}/4점) — 대기 | {reason_detail}", current
+
+    else:  # leader (모멘텀)
+        # 양방향: 더 강한 신호 따름
+        if bull_score >= 4:
+            return "scale_up", f"리더 불타기 ({bull_score}/6점) | {reason_detail}", current
+        if bear_score >= 3:
+            return "scale_down", f"리더 물타기 ({bear_score}/4점) | {reason_detail}", current
+        return "hold", f"방향 불명확 (bull={bull_score} bear={bear_score}) — 대기", current
 
 
 def _calc_dynamic_trail_params(
