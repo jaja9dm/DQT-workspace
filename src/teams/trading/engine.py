@@ -22,9 +22,9 @@ engine.py — 매매팀 메인 엔진
   9:10 이후에는 시황 무관하게 매수 재개 (스케줄러가 강제 트리거).
 
 분할 매수 (3회):
-  1차: 40% 즉시 실행
-  2차: 35% — 1차 체결 확인 후 5분 이내 또는 -1% 하락 시 추가 진입
-  3차: 25% — 2차 이후 추가 하락(-1%) 시 진입
+  1차: 60% 즉시 실행 (신뢰도 높은 1차에 집중)
+  2차: 25% — 1차 체결 확인 후 5분 이내 또는 -1% 하락 시 추가 진입
+  3차: 15% — 2차 이후 추가 하락(-1%) 시 진입
 
 실행 주기: 5분마다 (국내 주식팀과 동기)
 """
@@ -122,6 +122,7 @@ signal_type에 따라 아래 전략 기준을 적용하세요.
 - stop_pct: 1.5% (타이트 — 반등 실패 시 즉시 컷)
 - RSI 55↑이면 보류 (이미 오른 구간에서 반등 진입은 위험)
 - 기술적 반등 신호 없으면 보류
+- **14:00 이후 진입 금지** — 장 마감 1시간 전 눌림 반등은 세력 마무리 매도와 겹쳐 되돌림 빠름
 
 ### 전략 C: market_momentum (시장 강세 편승)
 - KOSPI 강세 + 외인+기관 동시 순매수 + RSI 45~70 → buy: true
@@ -138,11 +139,22 @@ signal_type에 따라 아래 전략 기준을 적용하세요.
 
 **중요: 손익비(target_pct / stop_pct) ≥ 2.0 이상으로 설정하세요.**
 
+## 과거 통계 활용 ([과거통계] 항목)
+- 제공된 경우: 종목별 실적 데이터 (총 거래수·승률·평균손익·평균보유·최적신호)
+- **승률 30% 미만 + 평균손익 마이너스**: 강한 기술지표에도 buy=false 권고 (패턴 실패 종목)
+- **승률 65% 이상 + 최적신호 일치**: 동일 점수 종목 중 우선 진입 (검증된 패턴)
+- **평균보유 60분↑**: 당일 청산이 어려운 종목 — target_pct를 보수적으로 설정
+- [과거통계] 없으면 (신규 종목) 기술지표만으로 판단
+
 ## 공통 보류 기준
 - 글로벌 리스크 8 이상
 - 국내 시황 점수 -0.2 이하
-- 감성 점수 -0.5 이하 (강한 부정 뉴스)
+- 감성 점수 해석:
+  - -0.3 ~ -0.5: 주의 (target_pct -1% 하향 보수적 설정)
+  - -0.5↓: 보류 권고 (강한 부정 뉴스 — 기술적 신호 무력화 위험)
+  - 종목 특정 부정 뉴스(산업재해·소송·부도)는 수치 무관 보류
 - pullback_rebound/market_momentum 외 종목에서 RSI 75 초과
+- 14:00 이후 pullback_rebound 전략: 보류 (마감 근접 눌림 반등 신뢰도 급감)
 
 예시: target_pct=6, stop_pct=2 → 손익비 3:1 ✅
       target_pct=4, stop_pct=3 → 손익비 1.33:1 ❌ (buy=false 권고)
@@ -170,6 +182,11 @@ _RISK_LEVEL_GATE = 4          # 이 레벨 이상이면 신규 진입 금지
 _TIME_BUY_CUTOFF = 1200
 
 
+_WATCHDOG_INTERVAL_SEC  = 45    # 관심종목 폴링 주기 (45초)
+_WATCHDOG_EXEC_SURGE    = 145.0 # 체결강도 임계값 — 이 이상이면 FOMO 매수세 급등
+_WATCHDOG_VOL_ACCEL     = 3.0   # 거래량 가속도 임계값 — 현재 페이스가 일평균의 3배↑
+
+
 class TradingEngine:
     """매매팀 엔진 — 독립 스레드로 실행."""
 
@@ -191,19 +208,124 @@ class TradingEngine:
         self._opening_gate_checked: bool = False  # 당일 오프닝 게이트 판단 완료 여부
         self._buy_allowed_from: datetime | None = None  # 매수 허용 시작 시각 (None=즉시)
 
+        # 관심종목 거래량 급등 감시 — 45초 폴링
+        self._force_run = threading.Event()           # 감시 스레드가 즉시 실행 요청 시 set
+        self._watchdog_vol: dict[str, dict] = {}      # {ticker: {"vol": int, "ts": float}}
+        self._watchdog_thread = threading.Thread(
+            target=self._watchdog_loop,
+            daemon=True,
+            name="trading-watchdog",
+        )
+
     def start(self) -> None:
         logger.info("매매팀 엔진 시작")
         self._thread.start()
+        self._watchdog_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
         self._thread.join(timeout=15)
+        self._watchdog_thread.join(timeout=10)
         logger.info("매매팀 엔진 종료")
 
     def reset_opening_gate(self) -> None:
         """오프닝 게이트 해제 — 09:10 재점검 시 스케줄러가 호출."""
         self._buy_allowed_from = None
         logger.info("오프닝 게이트 해제 — 매수 재개")
+
+    # ──────────────────────────────────────────
+    # 관심종목 거래량/체결강도 감시 (45초 폴링)
+    # ──────────────────────────────────────────
+
+    def _watchdog_loop(self) -> None:
+        """
+        매수 대기 중인 hot_list 종목을 45초 주기로 경량 폴링.
+
+        감지 조건 (둘 중 하나):
+          A. exec_strength ≥ 145 — FOMO 매수세 폭발 (체결강도 급등)
+          B. 1분 거래량 페이스가 당일 평균의 3배 이상 — 거래량 가속 폭발
+
+        감지 시: _force_run 이벤트 set → 메인 루프가 즉시 run_once() 실행
+        """
+        from src.teams.domestic_stock.collector import _fetch_price_from_kis
+        import time as _time
+
+        _MARKET_OPEN_SEC = 9 * 3600  # 09:00 기준 일일 경과초 계산
+
+        while not self._stop_event.is_set():
+            self._stop_event.wait(timeout=_WATCHDOG_INTERVAL_SEC)
+            if self._stop_event.is_set():
+                break
+
+            _hm = datetime.now().hour * 100 + datetime.now().minute
+            # 장 외 시간 / 매수 마감 / 관찰 모드(09:07 이전) 폴링 생략
+            if not (907 <= _hm < _TIME_BUY_CUTOFF):
+                continue
+
+            # 현재 매수 대기 중인 hot_list 종목 (당일 미매수 + 최근 10분 이내)
+            try:
+                pending = [
+                    row for row in _load_hot_list()
+                    if row["ticker"] not in self._today_tickers
+                ]
+            except Exception:
+                continue
+
+            if not pending:
+                continue
+
+            now_ts = _time.time()
+            now_dt = datetime.now()
+            elapsed_since_open = max(60.0, (
+                (now_dt.hour - 9) * 3600 + now_dt.minute * 60 + now_dt.second
+            ))
+
+            surge_tickers: list[tuple[str, str]] = []  # [(ticker, reason)]
+
+            for item in pending:
+                ticker = item["ticker"]
+                try:
+                    price, chg_pct, volume, _, _, _, _, _, _, exec_str = _fetch_price_from_kis(ticker)
+                except Exception:
+                    continue
+
+                if volume <= 0:
+                    continue
+
+                # ── A. 체결강도 급등 감지 ──────────────────────────
+                if exec_str >= _WATCHDOG_EXEC_SURGE:
+                    surge_tickers.append((
+                        ticker,
+                        f"체결강도 {exec_str:.0f} ≥ {_WATCHDOG_EXEC_SURGE:.0f} (FOMO 매수세)"
+                    ))
+                    self._watchdog_vol[ticker] = {"vol": volume, "ts": now_ts}
+                    continue
+
+                # ── B. 거래량 가속 감지 ─────────────────────────────
+                # 일평균 페이스(주/초) = 현재누적거래량 / 장 경과초
+                avg_pace = volume / elapsed_since_open  # 주/초
+
+                prev = self._watchdog_vol.get(ticker)
+                if prev and (now_ts - prev["ts"]) >= 20:
+                    delta_vol = volume - prev["vol"]
+                    delta_sec = now_ts - prev["ts"]
+                    if delta_vol > 0 and delta_sec > 0:
+                        cur_pace = delta_vol / delta_sec  # 최근 N초 페이스
+                        if avg_pace > 0 and (cur_pace / avg_pace) >= _WATCHDOG_VOL_ACCEL:
+                            surge_tickers.append((
+                                ticker,
+                                f"거래량 가속 {cur_pace/avg_pace:.1f}x "
+                                f"(최근{delta_sec:.0f}초 {delta_vol:,}주)"
+                            ))
+
+                self._watchdog_vol[ticker] = {"vol": volume, "ts": now_ts}
+
+            if surge_tickers:
+                for tk, reason in surge_tickers:
+                    logger.warning(
+                        f"[관심종목 급등 감지] {tk} — {reason} → 즉시 매수 사이클 트리거"
+                    )
+                self._force_run.set()  # 메인 루프에 즉시 실행 신호
 
     # ──────────────────────────────────────────
     # 메인 루프
@@ -219,13 +341,20 @@ class TradingEngine:
                     self._macd_reentry_ok.clear()
                     self._macd_reentry_count.clear()
                     self._reentry_watchlist.clear()
+                    self._watchdog_vol.clear()
                     self._opening_gate_checked = False
                     self._buy_allowed_from = None
 
                 self.run_once()
+                self._force_run.clear()  # 정상 사이클 완료 후 강제실행 플래그 초기화
             except Exception as e:
                 logger.error(f"매매팀 오류: {e}", exc_info=True)
-            self._stop_event.wait(timeout=_INTERVAL_SEC)
+
+            # _force_run 이벤트 대기: 감시 스레드 신호 오면 즉시 깨어남
+            # 아니면 5분 대기 (정상 주기)
+            self._force_run.wait(timeout=_INTERVAL_SEC)
+            if self._force_run.is_set():
+                logger.info("관심종목 급등 감지 — 정규 주기 무시하고 즉시 매수 사이클 실행")
 
     def run_once(self) -> list[dict]:
         """
@@ -323,7 +452,7 @@ class TradingEngine:
         # ── Gate 3: 국내 시황 ────────────────────
         market_ctx = _load_market_context()
         market_score = market_ctx.get("market_score", 0.0)
-        if market_score < _MARKET_SCORE_GATE:
+        if market_score <= _MARKET_SCORE_GATE:
             logger.info(f"Gate 3 차단: 국내 시황 점수 {market_score:.2f} — 진입 보류")
             return []
 
@@ -425,6 +554,33 @@ class TradingEngine:
         _max_rsi_soft = _gp("hot_list_rsi_hot_limit", 72.0)
         _min_rsi      = _gp("hot_list_min_rsi",       35.0)
 
+        # 피드백 루프 입력 — 최근 20일 신호 유형별 성과 (루프 외부에서 1회 조회)
+        try:
+            from src.teams.review.engine import _load_signal_feedback as _lsf
+            _sig_feedback = _lsf(days=20)
+        except Exception:
+            _sig_feedback = {}
+
+        # 현재 포트폴리오 섹터 분포 (섹터 집중 리스크 측정용)
+        # position_snapshot = 현재 보유 종목, trade_context = 진입 시 섹터 기록
+        try:
+            _sector_rows = fetch_all(
+                """
+                SELECT tc.sector FROM position_snapshot ps
+                JOIN trade_context tc ON tc.ticker = ps.ticker
+                WHERE tc.sector IS NOT NULL
+                GROUP BY ps.ticker
+                """,
+                (),
+            )
+            _portfolio_sector_counts: dict[str, int] = {}
+            for _sr in _sector_rows:
+                _s = str(_sr["sector"] or "")
+                if _s:
+                    _portfolio_sector_counts[_s] = _portfolio_sector_counts.get(_s, 0) + 1
+        except Exception:
+            _portfolio_sector_counts = {}
+
         filtered_candidates = []
         for c in candidates:
             tk        = c["ticker"]
@@ -438,6 +594,10 @@ class TradingEngine:
             is_mkt_mom   = signal_type == "market_momentum"
             is_op_plunge = signal_type == "opening_plunge_rebound"
 
+            _tk_stats      = _load_ticker_stats(tk)
+            _sector_for_tk = str(c.get("sector") or "")
+            _sector_cnt    = _portfolio_sector_counts.get(_sector_for_tk, 0) if _sector_for_tk else 0
+
             hard_fails, score, size_mult = _compute_entry_score(
                 c=c,
                 is_gap_up=is_gap_up,
@@ -449,6 +609,9 @@ class TradingEngine:
                 _max_rsi_hard=_max_rsi_hard,
                 _max_rsi_soft=_max_rsi_soft,
                 _min_rsi=_min_rsi,
+                ticker_stats=_tk_stats,
+                signal_feedback=_sig_feedback,
+                sector_holdings=_sector_cnt,
             )
 
             if hard_fails:
@@ -681,19 +844,41 @@ class TradingEngine:
             if current_price <= 0:
                 continue
 
-            # 종목당 투자 한도 — momentum_score × 신뢰도 점수 이중 사이징
-            # ms_mult: momentum_score(0~130) → 0.7~1.5x (강한 신호에 집중)
+            # 종목당 투자 한도 — momentum_score × 신뢰도 점수 × Kelly 이중 사이징
+            # ms_mult:    momentum_score(0~130) → 0.7~1.5x (강한 신호에 집중)
             # score_mult: Gate 4.2 신뢰도(50~100) → 0.75~1.0x (경계 종목 보수적)
+            # kelly_mult: 종목별 과거 통계 기반 Kelly fraction → 0.25~1.0x
             mscore = float(item.get("momentum_score") or 0.0)
             ms_mult = 0.7 + (mscore / 130.0) * 0.8   # 0 → 0.7x, 130 → 1.5x
             ms_mult = max(0.7, min(1.5, ms_mult))
             score_mult = float(item.get("_score_size_mult") or 1.0)
+
+            # Kelly Criterion: kelly_f = W - (1-W)/R
+            # W = 승률, R = 평균이익/평균손실 비율
+            # 충분한 표본(≥5회) 있을 때만 적용, 아니면 중립(1.0)
+            kelly_mult = 1.0
+            _ts_kelly = _load_ticker_stats(ticker)
+            if _ts_kelly and _ts_kelly.get("total_trades", 0) >= 5:
+                _wr   = float(_ts_kelly.get("win_rate", 0.5))
+                _wwin = float(_ts_kelly.get("avg_win_pct", 0.0))
+                _wloss = float(_ts_kelly.get("avg_loss_pct", 0.0))
+                if _wwin > 0 and _wloss > 0:
+                    _rr = _wwin / _wloss
+                    _kf = _wr - (1 - _wr) / _rr
+                    kelly_mult = max(0.25, min(1.0, _kf))
+                    if kelly_mult < 0.9:
+                        logger.info(
+                            f"Kelly 사이징: {ticker} W={_wr:.0%} win={_wwin:.1f}%/loss={_wloss:.1f}% "
+                            f"→ Kelly={_kf:.2f} → ×{kelly_mult:.2f}"
+                        )
+
             base_invest = usable_cash * max_single_pct / 100
-            max_invest = base_invest * ms_mult * score_mult
+            max_invest = base_invest * ms_mult * score_mult * kelly_mult
             if mscore > 0:
                 logger.info(
                     f"동적 사이징: {ticker} momentum={mscore:.0f} "
-                    f"×{ms_mult:.2f}(모멘텀) ×{score_mult:.2f}(신뢰도) → {max_invest/1e4:.0f}만원"
+                    f"×{ms_mult:.2f}(모멘텀) ×{score_mult:.2f}(신뢰도) ×{kelly_mult:.2f}(Kelly)"
+                    f" → {max_invest/1e4:.0f}만원"
                 )
 
             # 1차 매수 비중 결정 — RSI 과열 / 재진입 중 더 보수적인 쪽 하나만 적용
@@ -815,15 +1000,16 @@ class TradingEngine:
         max_single_pct: float,
     ) -> list[dict]:
         """
-        재진입 감시 종목 중 MACD 골든크로스 + 거래량 급증 + RSI/VWAP 조건 충족 시 재진입.
+        재진입 감시 종목 중 3분봉+5분봉 MACD 동시 신호 + 거래량 급증 + RSI/VWAP 조건 충족 시 재진입.
 
-        재진입 신호 (AND 조건):
-          1. 5분봉 MACD hist: 음수 구간 통과 후 양수로 전환 (from_negative=True) — 강한 반전
-          2. MACD 최종 신호 buy_pre — 크로스 임박 확인
-          3. 최근 2봉 평균 거래량 ≥ 이전 4봉 평균 × 1.3 — 거래량 재급증
-          4. RSI < 75 — 재상승 여력
-          5. 현재가 ≥ VWAP × 0.995 — 수급 중심선 위 (하락 재개 아님)
+        재진입 신호 (AND 조건 — 모두 충족해야 진입):
+          1. 3분봉 AND 5분봉 모두 음수→양수 전환 (from_negative=True) — 양쪽 동시 반전만 유효
+          2. 3분봉 AND 5분봉 개별 신호 모두 buy_pre (both_buy_pre=True) — 한 쪽만은 불충분
+          3. 최근 2봉 평균 거래량 ≥ 이전 4봉 평균 × 1.3 — 거래량 재급증 확인
+          4. RSI < 72 — 재상승 여력 충분 (75→72로 강화)
+          5. 현재가 ≥ VWAP × 0.998 — 수급 중심선 위 (0.995→0.998로 강화)
           6. 1회 재진입만 허용 (당일)
+        1분봉 MACD는 변동성이 너무 커 미사용 — 3분봉/5분봉만 참조.
         """
         from src.teams.intraday_macd.engine import get_macd_details as _get_macd_det
 
@@ -842,9 +1028,14 @@ class TradingEngine:
                 to_remove.append(ticker)
                 continue
 
-            # ① MACD 음수→양수 전환 (from_negative) + buy_pre
+            # ① 3분봉+5분봉 모두 음수→양수 전환 + 개별 신호 모두 buy_pre
             macd = _get_macd_det(ticker, max_age_minutes=6)
-            if not macd.get("from_negative") or macd["signal"] != "buy_pre":
+            if not macd.get("from_negative") or not macd.get("both_buy_pre"):
+                logger.debug(
+                    f"[재진입 보류] {ticker} — 3분봉/5분봉 동시 조건 미충족 "
+                    f"(from_neg={macd.get('from_negative')}, "
+                    f"sig_3m={macd.get('sig_3m')}, sig_5m={macd.get('sig_5m')})"
+                )
                 continue
 
             # ② 거래량 재급증 확인
@@ -862,13 +1053,13 @@ class TradingEngine:
             # ③ RSI + VWAP 확인 (hot_list 스냅샷에서 RSI 읽기)
             item = watch["item"]
             rsi = float(item.get("rsi") or 55.0)
-            if rsi >= 75.0:
-                logger.debug(f"[재진입 보류] {ticker} — RSI {rsi:.0f} ≥ 75 (재상승 여력 부족)")
+            if rsi >= 72.0:
+                logger.debug(f"[재진입 보류] {ticker} — RSI {rsi:.0f} ≥ 72 (재상승 여력 부족)")
                 continue
 
             vwap, cur_px = _get_vwap_position(ticker)
-            if vwap > 0 and cur_px < vwap * 0.995:
-                logger.debug(f"[재진입 보류] {ticker} — 현재가 {cur_px:,.0f} < VWAP {vwap:,.0f} (수급 중심선 하회)")
+            if vwap > 0 and cur_px < vwap * 0.998:
+                logger.debug(f"[재진입 보류] {ticker} — 현재가 {cur_px:,.0f} < VWAP {vwap:,.0f}×0.998 (수급 중심선 하회)")
                 continue
 
             # 모든 조건 충족 → 재진입 실행
@@ -884,8 +1075,9 @@ class TradingEngine:
             qty = max(1, int(max_invest * _TRANCHE_RATIOS[0] / current_price))
 
             logger.info(
-                f"[MACD 재진입] {ticker} — 5분봉 hist 음수→양수 전환 + buy_pre + 거래량↑ + VWAP 위 "
-                f"| RSI {rsi:.0f} | 수량 {qty}주 @ {current_price:,.0f}"
+                f"[MACD 재진입] {ticker} — 3분봉+5분봉 동시 음수→양수 전환 + both_buy_pre + 거래량↑ + VWAP 위 "
+                f"| RSI {rsi:.0f} | 3m={macd.get('sig_3m')} 5m={macd.get('sig_5m')} "
+                f"| 수량 {qty}주 @ {current_price:,.0f}"
             )
 
             # 재진입 판단: 간소화 (Claude 재호출 없이 지표 기반으로 직접 진입)
@@ -1035,6 +1227,33 @@ JSON만 응답:
             rs_daily      = float(item.get("rs_daily") or 0.0)
             rs_5d         = float(item.get("rs_5d") or 0.0)
             sector        = item.get("sector") or "기타"
+            frgn_net      = int(item.get("frgn_net_buy") or 0)
+            inst_net      = int(item.get("inst_net_buy") or 0)
+            # 수급 태그
+            if frgn_net > 0 and inst_net > 0:
+                _supply_tag = f" 💰외인+기관동시매수(외인{frgn_net:+,}/기관{inst_net:+,})"
+            elif frgn_net > 0:
+                _supply_tag = f" 외인매수{frgn_net:+,}"
+            elif inst_net > 0:
+                _supply_tag = f" 기관매수{inst_net:+,}"
+            elif frgn_net < 0 and inst_net < 0:
+                _supply_tag = f" ⚠️외인+기관동시매도(외인{frgn_net:+,}/기관{inst_net:+,})"
+            else:
+                _supply_tag = ""
+            # 종목 과거 통계
+            _ts = _load_ticker_stats(ticker)
+            _ts_tag = ""
+            if _ts:
+                _ts_tag = (
+                    f"\n  [과거통계] {_ts['total_trades']}회 | "
+                    f"승률{_ts['win_rate']:.0%} | "
+                    f"평균손익{_ts['avg_pnl_pct']:+.1f}% | "
+                    f"평균보유{_ts['avg_hold_minutes']:.0f}분"
+                )
+                if _ts.get("best_signal_type"):
+                    _ts_tag += f" | 최적신호:{_ts['best_signal_type']}"
+                if _ts.get("notes"):
+                    _ts_tag += f" | {_ts['notes']}"
             # 섹터 강/약세 태그
             try:
                 from src.infra.sector_rotation import get_hot_sectors, get_cold_sectors
@@ -1043,9 +1262,19 @@ JSON만 응답:
                 )
             except Exception:
                 _sector_tag = ""
+            # ATR 기반 제안 손절가 계산 (Claude 참고용)
+            _atr = float(item.get("atr_pct") or 0.0)
+            _sig = item.get("signal_type", "")
+            if _atr > 0:
+                _atr_mult = 1.2 if _sig in ("pullback_rebound", "opening_plunge_rebound") else 1.5
+                _atr_stop_suggest = round(max(1.0, min(3.5, _atr * _atr_mult)), 1)
+                _atr_tag = f" | ATR({_atr:.2f}%)→제안손절{_atr_stop_suggest}%"
+            else:
+                _atr_tag = ""
+
             stock_lines.append(
                 f"- 티커: {ticker} ({item.get('name', '')})\n"
-                f"  신호: {item.get('signal_type', '')} | "
+                f"  신호: {_sig} | "
                 f"등락: {item.get('price_change_pct', 0):+.1f}% | "
                 f"거래량: {item.get('volume_ratio', 0):.1f}배 | "
                 f"RSI: {item.get('rsi', 50):.0f} | "
@@ -1056,11 +1285,12 @@ JSON만 응답:
                 f"공매도비율: {short_ratio:.1f}%{squeeze_tag}\n"
                 f"  모멘텀점수: {mscore:.0f}/130 | "
                 f"당일범위위치: {drp:.2f} | "
-                f"OBV기울기: {'↑' if obv > 0 else '↓'}{obv:+.2f}\n"
+                f"OBV기울기: {'↑' if obv > 0 else '↓'}{obv:+.2f}{_atr_tag}\n"
                 f"  RS당일: {rs_daily:+.2f}% | RS5일: {rs_5d:+.2f}% | "
-                f"섹터: {sector}{_sector_tag}\n"
+                f"섹터: {sector}{_sector_tag}{_supply_tag}\n"
                 f"  선정근거: {item.get('reason', '')} | "
                 f"감성: {sentiment.get('avg_score', 0):+.2f}({sentiment.get('direction', 'neutral')})"
+                + _ts_tag
             )
 
         user_content = (
@@ -1112,6 +1342,7 @@ JSON만 응답:
                     d["volume_ratio"] = meta.get("volume_ratio", 1.0)
                     d["signal_type"] = meta.get("signal_type", "")
                     d["market_score"] = market_score
+                    d["atr_pct"] = meta.get("atr_pct", 0.0)  # ATR 손절 계산용
                     decisions[t] = d
                     logger.info(
                         f"매수 판단 [{t}] → {'BUY' if d.get('buy') else 'PASS'} | {d.get('reason', '')}"
@@ -1323,6 +1554,7 @@ JSON만 응답:
                     target_pct=decision.get("target_pct", 5.0),
                     stop_pct=decision.get("stop_pct", 2.0),
                     market_score=decision.get("market_score", 0.0),
+                    atr_pct=decision.get("atr_pct", 0.0),
                 )
                 # RSI 과열 → 손절선 강제 1.5% (동적 계산값보다 타이트하게)
                 if tight_stop:
@@ -1369,6 +1601,9 @@ def _compute_entry_score(
     _max_rsi_hard: float,
     _max_rsi_soft: float,
     _min_rsi: float,
+    ticker_stats: dict | None = None,
+    signal_feedback: dict | None = None,
+    sector_holdings: int = 0,
 ) -> tuple[list[str], float, float]:
     """
     진입 신뢰도 점수 (0~110) + 하드 차단 사유 + 사이즈 배율.
@@ -1592,6 +1827,81 @@ def _compute_entry_score(
         except Exception:
             pass
 
+    # 외인·기관 수급 (±8pt) — 동시 매수 = 가장 강한 확인 신호
+    frgn_net = int(c.get("frgn_net_buy") or 0)
+    inst_net  = int(c.get("inst_net_buy") or 0)
+    if frgn_net > 0 and inst_net > 0:
+        score += 8.0   # 외인+기관 동시 매수 — 세력 매집 확인
+    elif frgn_net > 0:
+        score += 4.0   # 외인 단독 매수
+    elif inst_net > 0:
+        score += 3.0   # 기관 단독 매수
+    elif frgn_net < 0 and inst_net < 0:
+        score -= 5.0   # 외인+기관 동시 매도 — 세력 이탈 경고
+        score = max(0.0, score)
+
+    score = min(100.0, score)
+
+    # 과거 거래 통계 반영 (±3pt) — 같은 종목 검증된 패턴
+    if ticker_stats and ticker_stats.get("total_trades", 0) >= 3:
+        wr  = float(ticker_stats.get("win_rate", 0.5))
+        apnl = float(ticker_stats.get("avg_pnl_pct", 0.0))
+        if wr >= 0.65 and apnl > 0:
+            score += 3.0   # 검증된 승률 종목 — 신뢰도 보강
+        elif wr < 0.30 or apnl < -0.5:
+            score -= 4.0   # 반복 패배 종목 — 기술적 신호에도 불구 불리
+            score = max(0.0, score)
+
+    # 신호 유형 피드백 루프 (±3pt) — 최근 N일 성과 기반 자기학습
+    if signal_feedback:
+        sig_type = str(c.get("signal_type") or "momentum")
+        fb = signal_feedback.get(sig_type)
+        if fb and fb.get("n", 0) >= 5:
+            exp = float(fb.get("expectancy", 0.0))
+            wr_fb = float(fb.get("win_rate", 0.5))
+            if exp > 0.5 and wr_fb >= 0.60:
+                score += 3.0   # 최근 N일 해당 신호 기대값 양호
+            elif exp < -0.3 or wr_fb < 0.35:
+                score -= 3.0   # 최근 N일 해당 신호 기대값 부진
+                score = max(0.0, score)
+
+    # 섹터 집중 리스크 패널티 (0 ~ -10pt)
+    # 동일 섹터 보유가 많을수록 추가 진입 시 섹터 리스크 집중 → 점수 차감
+    if sector_holdings >= 2:
+        score -= 10.0  # 동일 섹터 2종목 이상 보유 — 집중 리스크 경고
+        score = max(0.0, score)
+    elif sector_holdings == 1:
+        score -= 4.0   # 동일 섹터 1종목 보유 — 분산 권고
+        score = max(0.0, score)
+
+    score = min(100.0, score)
+
+    # 시간대 가중치 (±5pt) — 수급 활동 밀도 반영
+    # 오프닝·전반전: 하루 중 가장 강한 수급 활동 → 신호 신뢰도 최고
+    # 점심: 수급 공백, 마감 근접: 청산 물량 출회 위험
+    if 900 <= _hm < 1030:
+        score += 5.0   # 오프닝 황금시간 — 갭업·급락·수급 집중
+    elif 1030 <= _hm < 1130:
+        score += 2.0   # 전반전 후반 — 추세 확립 구간
+    elif 1130 <= _hm < 1330:
+        score -= 2.0   # 점심 시간대 — 수급 공백, 허수 신호 증가
+        score = max(0.0, score)
+    elif _hm >= 1400:
+        score -= 5.0   # 마감 근접 — 세력 청산 출회, 신규 진입 위험
+        score = max(0.0, score)
+
+    # best_entry_hour 가중치 (±5pt) — 종목별 과거 최고 성과 시간대
+    # 이 종목이 특정 시간대에 잘 움직이는 패턴이 있으면 해당 시간에 가산
+    _best_h = ticker_stats.get("best_entry_hour") if ticker_stats else None
+    if _best_h is not None:
+        _cur_hour = _hm // 100
+        _hour_diff = abs(_cur_hour - int(_best_h))
+        if _hour_diff <= 1:
+            score += 5.0   # 최적 진입 시간대 ±1시간 이내 → 신뢰도 상향
+        elif _hour_diff >= 3:
+            score -= 3.0   # 최적 시간대와 3시간 이상 차이 → 패턴 불일치
+            score = max(0.0, score)
+
     score = min(100.0, score)
 
     # 사이즈 배율
@@ -1783,27 +2093,60 @@ def _load_live_index_change() -> float | None:
 
 
 def _load_hot_list() -> list[dict]:
-    """최근 10분 이내 hot_list 항목 반환 (momentum_score 기준 내림차순)."""
+    """
+    최근 10분 이내 hot_list에서 종목별 최신 레코드만 반환 (momentum_score 내림차순).
+
+    같은 종목이 여러 사이클에 올라온 경우 가장 최근 레코드만 사용
+    (GROUP BY ticker + MAX(created_at)) — 중복 Gate 처리 방지.
+    """
     rows = fetch_all(
         """
-        SELECT ticker, name, signal_type, volume_ratio, price_change_pct, rsi, reason,
-               COALESCE(momentum_score, 0.0) AS momentum_score,
-               COALESCE(obv_slope, 0.0) AS obv_slope,
-               COALESCE(day_range_pos, 0.5) AS day_range_pos,
-               COALESCE(stoch_rsi, 50.0) AS stoch_rsi,
-               COALESCE(bb_width_ratio, 1.0) AS bb_width_ratio,
-               COALESCE(trading_value, 0) AS trading_value,
-               COALESCE(exec_strength, 100.0) AS exec_strength,
-               COALESCE(rs_daily, 0.0) AS rs_daily,
-               COALESCE(rs_5d, 0.0) AS rs_5d,
-               COALESCE(sector, '') AS sector
-        FROM hot_list
-        WHERE created_at >= datetime('now', '-10 minutes')
-        ORDER BY COALESCE(momentum_score, 0.0) DESC, volume_ratio DESC
+        SELECT h.ticker, h.name, h.signal_type, h.volume_ratio, h.price_change_pct, h.rsi, h.reason,
+               COALESCE(h.momentum_score, 0.0) AS momentum_score,
+               COALESCE(h.obv_slope, 0.0) AS obv_slope,
+               COALESCE(h.day_range_pos, 0.5) AS day_range_pos,
+               COALESCE(h.stoch_rsi, 50.0) AS stoch_rsi,
+               COALESCE(h.bb_width_ratio, 1.0) AS bb_width_ratio,
+               COALESCE(h.trading_value, 0) AS trading_value,
+               COALESCE(h.exec_strength, 100.0) AS exec_strength,
+               COALESCE(h.rs_daily, 0.0) AS rs_daily,
+               COALESCE(h.rs_5d, 0.0) AS rs_5d,
+               COALESCE(h.sector, '') AS sector,
+               COALESCE(h.frgn_net_buy, 0) AS frgn_net_buy,
+               COALESCE(h.inst_net_buy, 0) AS inst_net_buy,
+               COALESCE(h.atr_pct, 0.0) AS atr_pct,
+               COALESCE(h.slot, '') AS slot
+        FROM hot_list h
+        INNER JOIN (
+            SELECT ticker, MAX(created_at) AS latest
+            FROM hot_list
+            WHERE created_at >= datetime('now', '-10 minutes')
+            GROUP BY ticker
+        ) latest_only ON h.ticker = latest_only.ticker AND h.created_at = latest_only.latest
+        ORDER BY COALESCE(h.momentum_score, 0.0) DESC, h.volume_ratio DESC
         LIMIT 10
         """
     )
     return [dict(r) for r in rows]
+
+
+def _load_ticker_stats(ticker: str) -> dict | None:
+    """ticker_stats 테이블에서 종목 과거 통계 조회. 없으면 None."""
+    try:
+        row = fetch_one(
+            """
+            SELECT total_trades, win_rate, avg_pnl_pct,
+                   COALESCE(avg_win_pct, 0.0) AS avg_win_pct,
+                   COALESCE(avg_loss_pct, 0.0) AS avg_loss_pct,
+                   avg_hold_minutes, best_entry_hour,
+                   best_signal_type, notes, frgn_buy_win_rate, inst_buy_win_rate
+            FROM ticker_stats WHERE ticker = ?
+            """,
+            (ticker,),
+        )
+        return dict(row) if row and row["total_trades"] > 0 else None
+    except Exception:
+        return None
 
 
 def _load_sentiment(ticker: str) -> dict:
@@ -1887,54 +2230,74 @@ def _calc_dynamic_trail_params(
     target_pct: float,
     stop_pct: float,
     market_score: float,
+    atr_pct: float = 0.0,
 ) -> tuple[float, float, float]:
     """
-    종목·시황 특성에 따라 트레일링 스톱 파라미터를 동적으로 산출.
+    ATR 기반 트레일링 스톱 파라미터 동적 산출.
 
     Returns:
         (initial_stop_pct, trigger_pct, floor_pct)
         - initial_stop_pct: 진입 직후 초기 손절선 간격 (%)
         - trigger_pct: 이 수익률 도달 시 트레일링 시작 (%)
         - floor_pct: 트레일링 손절선 간격 (현재가 대비 %)
+
+    손절 산출 원리 (ATR 기반):
+        눌림·오프닝급락: ATR × 1.2 (이미 하락 중 — 타이트하게 대응)
+        갭업·거래량폭발: ATR × 1.5 (추세 지속 중 — 노이즈 여유 필요)
+        일반 모멘텀:     ATR × 1.5
+        상한: 3.5% / 하한: 1.0% (param_tuner 오버라이드 가능)
     """
-    # ── 초기 손절선 ─────────────────────────────────────────────
-    # Claude 제시 stop_pct를 베이스로 RSI·시황 보정
-    # 기준값·하한·상한을 strategy_params에서 읽어 자동 튜닝 가능
     from src.teams.research.param_tuner import get_param as _gp
-    _stop_base = _gp("initial_stop_pct",     2.0)  # 기준 초기 손절 %
-    _stop_min  = _gp("initial_stop_min_pct", 1.5)  # 하한 (이 아래로 안 내림)
-    _stop_max  = _gp("initial_stop_max_pct", 3.5)  # 상한 (이 위로 안 올림)
+    _stop_min = _gp("initial_stop_min_pct", 1.0)
+    _stop_max = _gp("initial_stop_max_pct", 3.5)
 
-    initial_stop = max(_stop_min, min(_stop_max, stop_pct if stop_pct else _stop_base))
+    # ── 초기 손절선: ATR primary ────────────────────────────────
+    if atr_pct and atr_pct > 0:
+        # 전략별 ATR 배수: 눌림·급락은 이미 하락 중이므로 더 타이트하게
+        _is_pullback = signal_type in ("pullback_rebound", "opening_plunge_rebound")
+        atr_mult = 1.2 if _is_pullback else 1.5
+        atr_stop = round(max(_stop_min, min(_stop_max, atr_pct * atr_mult)), 2)
 
+        # Claude 제시값이 ATR보다 더 타이트하면 존중
+        # (Claude가 "이건 1%에 끊어야 해"라고 하면 ATR 기준보다 우선)
+        if stop_pct and stop_pct < atr_stop:
+            initial_stop = max(_stop_min, stop_pct)
+        else:
+            initial_stop = atr_stop
+    else:
+        # ATR 없으면 Claude 제시값 또는 기본값
+        _stop_base = _gp("initial_stop_pct", 2.0)
+        initial_stop = max(_stop_min, min(_stop_max, stop_pct if stop_pct else _stop_base))
+
+    # RSI 과열권 → 추가 타이트
     if rsi > 65:
-        initial_stop = min(initial_stop, _stop_min)   # 과열권 — 타이트
-    elif rsi < 45:
-        initial_stop = min(initial_stop + 0.5, _stop_max * 0.86)  # 약한 모멘텀 — 여유
-
+        initial_stop = min(initial_stop, round(_stop_min + 0.3, 1))
+    # 하락장 → 손실 최소화
     if market_score < -0.1:
-        initial_stop = min(initial_stop, _stop_min)   # 하락장 — 손실 최소화
+        initial_stop = min(initial_stop, round(_stop_min + 0.2, 1))
+
+    initial_stop = round(max(_stop_min, min(_stop_max, initial_stop)), 1)
 
     # ── 트레일링 시작 수익률 ─────────────────────────────────
-    # 목표의 절반 지점부터 손절선 올리기 시작 (목표에 가까울수록 수익 보호)
     trigger_pct = max(2.0, target_pct * 0.5)
-
     if signal_type == "breakout":
-        trigger_pct = max(2.5, trigger_pct)     # 돌파 신호 — 약간 더 주가 오른 후 트리거
+        trigger_pct = max(2.5, trigger_pct)
     elif signal_type == "volume_surge" and volume_ratio > 5:
-        trigger_pct = max(1.5, trigger_pct * 0.7)  # 거래량 폭발 — 빠른 반전 대비 일찍 트리거
+        trigger_pct = max(1.5, trigger_pct * 0.7)
 
-    # ── 트레일링 간격 ─────────────────────────────────────────
-    # 변동성(거래량·RSI)이 클수록 간격 넓게, 작을수록 좁게
-    if rsi > 65 or volume_ratio > 5:
-        floor_pct = 2.0                         # 고변동성 — 타이트하게 추적
+    # ── 트레일링 간격 (ATR 기반) ─────────────────────────────
+    if atr_pct and atr_pct > 0:
+        # 실제 변동폭의 2배 = 노이즈 제거 후 추세 이탈 감지
+        floor_pct = round(max(1.5, min(3.5, atr_pct * 2.0)), 1)
+    elif rsi > 65 or volume_ratio > 5:
+        floor_pct = 2.0
     elif volume_ratio > 3:
         floor_pct = 2.5
     else:
-        floor_pct = 3.0                         # 저변동성 — 여유 있게
+        floor_pct = 3.0
 
     if market_score < -0.1:
-        floor_pct = min(floor_pct, 2.0)         # 하락장 — 수익 빠르게 보호
+        floor_pct = min(floor_pct, 2.0)
 
     return round(initial_stop, 1), round(trigger_pct, 1), round(floor_pct, 1)
 

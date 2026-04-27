@@ -177,7 +177,7 @@ def _calc_avg_hold_minutes(trades: list[dict]) -> float:
             buy_time[tk] = ts
         elif t["action"] in _SELL_ACTIONS and tk in buy_time:
             diff = (ts - buy_time[tk]).total_seconds() / 60
-            if 0 < diff < 480:  # 8시간 이내 (오버나잇 제외)
+            if 0 < diff < 480:
                 hold_minutes.append(diff)
             del buy_time[tk]
 
@@ -359,8 +359,14 @@ def run_daily_review() -> dict | None:
     # DB 저장
     _save_review(today, stats, review, market_ctx, signal_analytics)
 
+    # 종목별 패턴 메모를 ticker_stats에 반영
+    _update_ticker_stats_from_review(stats, review)
+
+    # 오늘 슬롯 배정 현황 (ticker → slot)
+    slot_map = _load_slot_map(today)
+
     # Telegram 발송
-    _notify_review(today, stats, review, market_ctx, signal_analytics, extra, portfolio)
+    _notify_review(today, stats, review, market_ctx, signal_analytics, extra, portfolio, slot_map)
 
     logger.info(f"일일 복기 완료 — 매매 {stats['total']}건, 수익 {stats['win']}건, 손실 {stats['loss']}건")
     return review
@@ -432,13 +438,18 @@ def _compute_signal_analytics(today: str) -> dict:
         return {}
 
     def _bucket(analytics: dict, key: str, subkey: str, pnl: float) -> None:
-        grp = analytics.setdefault(subkey, {}).setdefault(key, {"win": 0, "loss": 0, "pnl_sum": 0.0, "count": 0})
+        grp = analytics.setdefault(subkey, {}).setdefault(key, {
+            "win": 0, "loss": 0, "pnl_sum": 0.0, "count": 0,
+            "win_pnl_sum": 0.0, "loss_pnl_sum": 0.0,
+        })
         grp["count"] += 1
         grp["pnl_sum"] += pnl
         if pnl > 0:
             grp["win"] += 1
+            grp["win_pnl_sum"] += pnl
         else:
             grp["loss"] += 1
+            grp["loss_pnl_sum"] += pnl
 
     analytics: dict = {
         "by_signal_type": {},
@@ -490,26 +501,115 @@ def _compute_signal_analytics(today: str) -> dict:
         hour_key = hhmm[:2] if len(hhmm) >= 2 else "?"
         _bucket(analytics, hour_key, "by_entry_hour", pnl)
 
-    # avg_pnl 계산 (pnl_sum/count)
+    # avg_pnl / profit_factor / expectancy 계산
+    total_gross_profit = total_gross_loss = 0.0
     for dim in analytics.values():
         for grp in dim.values():
-            grp["avg_pnl"] = round(grp["pnl_sum"] / grp["count"], 3) if grp["count"] else 0.0
-            del grp["pnl_sum"]
+            cnt   = grp["count"]
+            grp["avg_pnl"] = round(grp["pnl_sum"] / cnt, 3) if cnt else 0.0
+
+            gp = grp.get("win_pnl_sum", 0.0)
+            gl = abs(grp.get("loss_pnl_sum", 0.0))
+            grp["profit_factor"] = round(gp / gl, 2) if gl > 0 else (float("inf") if gp > 0 else 0.0)
+
+            wr = grp["win"] / cnt if cnt else 0.0
+            avg_win  = grp["win_pnl_sum"]  / grp["win"]  if grp["win"]  else 0.0
+            avg_loss = grp["loss_pnl_sum"] / grp["loss"] if grp["loss"] else 0.0
+            grp["expectancy"] = round(wr * avg_win + (1 - wr) * avg_loss, 3)
+
+            # 전체 통계용 누적
+            total_gross_profit += grp.get("win_pnl_sum", 0.0)
+            total_gross_loss   += abs(grp.get("loss_pnl_sum", 0.0))
+
+            del grp["pnl_sum"], grp["win_pnl_sum"], grp["loss_pnl_sum"]
 
     total = total_win + total_loss
+    overall_pf = round(total_gross_profit / total_gross_loss, 2) if total_gross_loss > 0 else (float("inf") if total_gross_profit > 0 else 0.0)
+    wr_overall = total_win / total if total else 0.0
+    avg_win_all  = total_gross_profit / total_win  if total_win  else 0.0
+    avg_loss_all = -total_gross_loss  / total_loss if total_loss else 0.0
     analytics["overall"] = {
         "win": total_win,
         "loss": total_loss,
-        "win_rate": round(total_win / total, 3) if total else 0.0,
+        "win_rate": round(wr_overall, 3),
         "avg_pnl": round(total_pnl / total, 3) if total else 0.0,
+        "profit_factor": overall_pf,
+        "expectancy": round(wr_overall * avg_win_all + (1 - wr_overall) * avg_loss_all, 3) if total else 0.0,
     }
 
     logger.info(
         f"신호 분석 완료 — 총 {total}건 | "
         f"신호유형 {len(analytics['by_signal_type'])}종 | "
-        f"RSI구간 {len(analytics['by_rsi_bucket'])}종"
+        f"RSI구간 {len(analytics['by_rsi_bucket'])}종 | "
+        f"Profit Factor {overall_pf} | Expectancy {analytics['overall']['expectancy']:+.3f}%"
     )
     return analytics
+
+
+def _load_signal_feedback(days: int = 20) -> dict[str, dict]:
+    """
+    최근 N일 signal_analytics를 집계해 신호 유형별 통합 성과를 반환.
+
+    매매팀 진입 점수 조정의 피드백 루프 입력.
+
+    Returns:
+        {
+            "gap_up_breakout":      {"win_rate": 0.72, "expectancy": 1.2, "profit_factor": 1.8, "n": 18},
+            "pullback_rebound":     {"win_rate": 0.55, "expectancy": 0.3, "profit_factor": 1.1, "n": 12},
+            ...
+        }
+        신호 유형별 집계가 3건 미만이면 해당 신호 제외 (통계 신뢰도 부족).
+    """
+    try:
+        rows = fetch_all(
+            """
+            SELECT signal_analytics FROM review_reports
+            WHERE signal_analytics IS NOT NULL AND signal_analytics != '{}'
+            ORDER BY review_date DESC LIMIT ?
+            """,
+            (days,),
+        )
+    except Exception:
+        return {}
+
+    # 신호 유형별 원시 누적
+    agg: dict[str, dict] = {}
+    for row in rows:
+        try:
+            sa = json.loads(row["signal_analytics"] or "{}")
+            by_sig = sa.get("by_signal_type") or {}
+        except Exception:
+            continue
+        for sig, grp in by_sig.items():
+            if not isinstance(grp, dict):
+                continue
+            acc = agg.setdefault(sig, {"win": 0, "loss": 0, "gp": 0.0, "gl": 0.0})
+            acc["win"]  += grp.get("win", 0)
+            acc["loss"] += grp.get("loss", 0)
+            # profit_factor이 있으면 역산, 없으면 avg_pnl로 추정
+            n = grp.get("win", 0) + grp.get("loss", 0)
+            avg_pnl = grp.get("avg_pnl", 0.0)
+            if "expectancy" in grp:
+                acc["gp"] += max(0.0, grp["expectancy"]) * n
+                acc["gl"] += abs(min(0.0, grp["expectancy"])) * n
+            else:
+                acc["gp"] += max(0.0, avg_pnl) * n
+                acc["gl"] += abs(min(0.0, avg_pnl)) * n
+
+    result: dict[str, dict] = {}
+    for sig, acc in agg.items():
+        total = acc["win"] + acc["loss"]
+        if total < 3:  # 통계 신뢰도 부족
+            continue
+        wr = acc["win"] / total
+        pf = round(acc["gp"] / acc["gl"], 2) if acc["gl"] > 0 else (float("inf") if acc["gp"] > 0 else 0.0)
+        # 단순 expectancy 근사: win_rate * avg_gp_per_win - loss_rate * avg_gl_per_loss
+        avg_win  = acc["gp"] / acc["win"]  if acc["win"]  else 0.0
+        avg_loss = acc["gl"] / acc["loss"] if acc["loss"] else 0.0
+        exp = round(wr * avg_win - (1 - wr) * avg_loss, 3)
+        result[sig] = {"win_rate": round(wr, 3), "expectancy": exp, "profit_factor": pf, "n": total}
+
+    return result
 
 
 def _load_market_context(today: str) -> dict:
@@ -626,6 +726,18 @@ def _load_similar_market_days(market_ctx: dict, days_back: int = 60) -> list[dic
     except Exception as e:
         logger.debug(f"유사 시황 조회 실패: {e}")
         return []
+
+
+def _load_slot_map(today: str) -> dict[str, str]:
+    """오늘 slot_assignments에서 ticker → slot 매핑 반환."""
+    try:
+        rows = fetch_all(
+            "SELECT ticker, slot FROM slot_assignments WHERE trade_date = ?",
+            (today,),
+        )
+        return {r["ticker"]: r["slot"] for r in rows if r["ticker"]}
+    except Exception:
+        return {}
 
 
 def _load_snapshots_context(today: str, tickers: list[str]) -> dict[str, list[dict]]:
@@ -832,7 +944,7 @@ def _ask_claude_review(
 
     prompt = f"""당신은 국내 주식 단타 퀀트 트레이딩 시스템의 성과 분석 AI입니다.
 오늘({today}) 매매 전체를 분석하고, 시장 상황과 연결하여 무엇이 잘 됐는지·무엇을 고쳐야 하는지 판단하세요.
-시스템은 당일 매수·매도 단타 전략(스캘핑 포함)입니다. 오버나잇은 예외적입니다.
+시스템은 당일 매수·매도 단타 전략(스캘핑 포함)입니다. 오버나잇은 하지 않습니다.
 
 ## 오늘 시장 상황
 - KOSPI: {market_ctx['kospi_chg']:+.2f}% | KOSDAQ: {market_ctx['kosdaq_chg']:+.2f}%
@@ -970,6 +1082,55 @@ def _fallback_review(stats: dict) -> dict:
 # DB 저장
 # ──────────────────────────────────────────────
 
+def _update_ticker_stats_from_review(stats: dict, review: dict) -> None:
+    """
+    오늘 거래한 종목들의 avg_hold_minutes·best_signal_type·notes를 ticker_stats에 갱신.
+    position_monitor가 pnl 기반 win/loss를 이미 갱신했으므로, 여기서는 추가 메타만 보강.
+    """
+    try:
+        ticker_summary = stats.get("ticker_summary", {})
+        pattern_hits = review.get("pattern_hits", [])
+        # pattern_hits에서 종목명 → 패턴 매핑 (best_signal_type 힌트)
+        _hit_map: dict[str, str] = {}
+        for hit in pattern_hits:
+            if isinstance(hit, str):
+                # 예: "005930(삼성) gap_up_breakout +3.2%"
+                parts = hit.split()
+                if parts:
+                    # 첫 번째 괄호 앞 숫자열이 ticker일 수 있음
+                    for tk in ticker_summary:
+                        if tk in hit:
+                            _hit_map[tk] = hit[:80]
+                            break
+
+        for tk, ts in ticker_summary.items():
+            if ts.get("status") != "closed":
+                continue
+            # avg_hold_minutes 갱신 (buy_time → sell_time)
+            _hold = ts.get("hold_minutes")
+            _sig  = ts.get("signal_type", "")
+            _note = _hit_map.get(tk)
+            try:
+                execute(
+                    """
+                    UPDATE ticker_stats
+                    SET avg_hold_minutes = CASE
+                            WHEN total_trades <= 1 THEN ?
+                            ELSE (avg_hold_minutes * (total_trades - 1) + ?) / total_trades
+                        END,
+                        best_signal_type = COALESCE(NULLIF(?, ''), best_signal_type),
+                        notes = CASE WHEN ? IS NOT NULL THEN ? ELSE notes END,
+                        last_updated = CURRENT_TIMESTAMP
+                    WHERE ticker = ?
+                    """,
+                    (_hold or 0, _hold or 0, _sig, _note, _note, tk),
+                )
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"ticker_stats 메타 갱신 실패: {e}")
+
+
 def _save_review(today: str, stats: dict, review: dict, market_ctx: dict, signal_analytics: dict | None = None) -> None:
     best_t  = stats.get("best")
     worst_t = stats.get("worst")
@@ -1043,6 +1204,13 @@ _SIG_LABEL = {
 }
 
 
+_SLOT_LABEL = {
+    "leader":   "👑주도주",
+    "breakout": "🚀돌파",
+    "pullback": "🔄눌림목",
+}
+
+
 def _notify_review(
     today: str,
     stats: dict,
@@ -1051,10 +1219,12 @@ def _notify_review(
     signal_analytics: dict | None = None,
     extra: dict | None = None,
     portfolio: dict | None = None,
+    slot_map: dict[str, str] | None = None,
 ) -> None:
-    extra = extra or {}
-    sa    = signal_analytics or {}
-    pf    = portfolio or {}
+    extra    = extra or {}
+    sa       = signal_analytics or {}
+    pf       = portfolio or {}
+    slot_map = slot_map or {}
     total_pnl  = stats.get("total_pnl") or 0
     pnl_emoji  = "🟢" if total_pnl >= 0 else "🔴"
     win_rate   = stats.get("win_rate", 0)
@@ -1085,10 +1255,11 @@ def _notify_review(
         )
         # 보유 중인 종목 (미청산)
         if pf.get("positions"):
-            pos_parts = [
-                f"{p['name']}({p['ticker']}) {p['pnl_pct']:+.1f}%"
-                for p in pf["positions"]
-            ]
+            pos_parts = []
+            for p in pf["positions"]:
+                sl = _SLOT_LABEL.get(slot_map.get(p["ticker"], ""), "")
+                tag = f" {sl}" if sl else ""
+                pos_parts.append(f"{p['name']}({p['ticker']}){tag} {p['pnl_pct']:+.1f}%")
             lines.append(f"  보유종목: {' | '.join(pos_parts)}")
         lines.append("")
 
@@ -1154,13 +1325,15 @@ def _notify_review(
             score    = ts.get("entry_score", 0.0)
             rsi_val  = ts.get("rsi", 0.0)
 
+            slot_lbl = _SLOT_LABEL.get(slot_map.get(ts["ticker"], ""), "")
             if ts["status"] == "closed" and pnl is not None:
                 p_emoji  = "▲" if pnl >= 0 else "▼"
                 buy_str  = f"{ts['buy_price']:,.0f}" if ts.get("buy_price") else "?"
                 sell_str = f"{ts['sell_price']:,.0f}" if ts.get("sell_price") else "?"
                 exit_lbl = _EXIT_LABEL.get(ts.get("action", ""), ts.get("action", ""))
+                slot_tag = f" {slot_lbl}" if slot_lbl else ""
                 lines.append(
-                    f"  {p_emoji} <b>{name_str}</b>({ts['ticker']})"
+                    f"  {p_emoji} <b>{name_str}</b>({ts['ticker']}){slot_tag}"
                     f"  {buy_str}→{sell_str}원  <b>{pnl:+.2f}%</b>  [{exit_lbl}]"
                 )
                 ctx_parts = []
@@ -1172,7 +1345,8 @@ def _notify_review(
                 if ctx_parts:
                     lines.append(f"      └ {' | '.join(ctx_parts)}")
             else:
-                lines.append(f"  ⏳ <b>{name_str}</b>({ts['ticker']}): 보유중")
+                slot_tag = f" {slot_lbl}" if slot_lbl else ""
+                lines.append(f"  ⏳ <b>{name_str}</b>({ts['ticker']}){slot_tag}: 보유중")
         lines.append("")
 
     # ── 6. 놓친 기회 (Hot List에 올랐으나 미매수 상위 3종) ──
@@ -1181,9 +1355,11 @@ def _notify_review(
         lines.append("🔍 <b>놓친 기회 (미매수 Hot List 상위)</b>")
         for m in missed:
             sig = _SIG_LABEL.get(m.get("signal_type", ""), m.get("signal_type", ""))
+            sl  = _SLOT_LABEL.get(slot_map.get(m.get("ticker", ""), ""), "")
             lines.append(
                 f"  • {m['name']}({m['ticker']})"
-                f"  스캔시 {m['change_pct']:+.2f}%"
+                + (f" {sl}" if sl else "")
+                + f"  스캔시 {m['change_pct']:+.2f}%"
                 + (f"  [{sig}]" if sig else "")
             )
         lines.append("")

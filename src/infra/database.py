@@ -164,6 +164,75 @@ def init_db() -> None:
             )
         except Exception:
             pass
+        # 기존 DB 마이그레이션: hot_list 외인·기관 순매수 + ATR 컬럼 추가
+        for col, typedef in [
+            ("frgn_net_buy", "INTEGER DEFAULT 0"),
+            ("inst_net_buy",  "INTEGER DEFAULT 0"),
+            ("atr_pct",       "REAL DEFAULT 0.0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE hot_list ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
+        # 기존 DB 마이그레이션: hot_list slot 컬럼 추가
+        try:
+            conn.execute("ALTER TABLE hot_list ADD COLUMN slot TEXT DEFAULT NULL")
+        except Exception:
+            pass
+        # 기존 DB 마이그레이션: slot_assignments 테이블 생성
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS slot_assignments (
+                slot         TEXT PRIMARY KEY,
+                ticker       TEXT,
+                name         TEXT,
+                signal_type  TEXT,
+                reason       TEXT,
+                trade_date   DATE NOT NULL,
+                status       TEXT DEFAULT 'empty',
+                assigned_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        # 기존 DB 마이그레이션: slot_assignments 건강 점수 컬럼 추가
+        for col, typedef in [
+            ("health_score",      "REAL DEFAULT 100.0"),
+            ("replace_requested", "INTEGER DEFAULT 0"),
+            ("replace_reason",    "TEXT DEFAULT NULL"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE slot_assignments ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
+        # 기존 DB 마이그레이션: ticker_stats avg_win_pct / avg_loss_pct 컬럼 추가
+        for col, typedef in [
+            ("avg_win_pct",  "REAL DEFAULT 0.0"),
+            ("avg_loss_pct", "REAL DEFAULT 0.0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE ticker_stats ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass
+        # 기존 DB 마이그레이션: ticker_stats 테이블 생성 (종목별 누적 패턴 통계)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS ticker_stats (
+                ticker            TEXT PRIMARY KEY,
+                name              TEXT,
+                total_trades      INTEGER NOT NULL DEFAULT 0,
+                win_count         INTEGER NOT NULL DEFAULT 0,
+                loss_count        INTEGER NOT NULL DEFAULT 0,
+                win_rate          REAL DEFAULT 0.0,
+                avg_pnl_pct       REAL DEFAULT 0.0,
+                avg_win_pct       REAL DEFAULT 0.0,
+                avg_loss_pct      REAL DEFAULT 0.0,
+                avg_hold_minutes  REAL DEFAULT 0.0,
+                best_entry_hour   INTEGER DEFAULT NULL,
+                frgn_buy_win_rate REAL DEFAULT NULL,
+                inst_buy_win_rate REAL DEFAULT NULL,
+                best_signal_type  TEXT DEFAULT NULL,
+                notes             TEXT DEFAULT NULL,
+                last_updated      DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

@@ -160,11 +160,6 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=9, minute=10, timezone="Asia/Seoul"
         ), id="open_recheck", name="9:10 장 시작 재점검")
 
-        # 15:10 — 오버나잇 보유 판단
-        s.add_job(self._overnight_judge, CronTrigger(
-            day_of_week="mon-fri", hour=15, minute=10, timezone="Asia/Seoul"
-        ), id="overnight_judge", name="15:10 오버나잇 판단")
-
         # 장 마감 — 실시간 엔진 정지
         s.add_job(self._stop_realtime_engines, CronTrigger(
             day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
@@ -307,15 +302,6 @@ class DQTScheduler:
             notify("🔄 <b>[09:10 재점검]</b> Hot List 재스캔 + 매수 재개")
         except Exception as e:
             logger.error(f"09:10 재점검 오류: {e}", exc_info=True)
-
-    def _overnight_judge(self) -> None:
-        """15:10 — 오버나잇 보유 판단."""
-        logger.info("15:10 오버나잇 판단 실행")
-        try:
-            from src.teams.trading.overnight import evaluate_overnight
-            evaluate_overnight()
-        except Exception as e:
-            logger.error(f"오버나잇 판단 오류: {e}", exc_info=True)
 
     def _stop_realtime_engines(self, notify_market_close: bool = True) -> None:
         """실시간 엔진 정지 (역순).

@@ -90,10 +90,10 @@ class SectorRotationCache:
         sector_returns: dict[str, list[float]] = defaultdict(list)
 
         for snap in snapshots:
-            sector = getattr(snap, "sector", "") or "기타"
-            chg    = getattr(snap, "change_pct", 0.0) or 0.0
-            if snap.error:
+            if getattr(snap, "error", False):
                 continue
+            chg    = getattr(snap, "change_pct", 0.0) or 0.0
+            sector = self.get_sector(snap.ticker) or "기타"
             sector_returns[sector].append(chg)
 
         kospi_chg = self.get_kospi_daily_chg()

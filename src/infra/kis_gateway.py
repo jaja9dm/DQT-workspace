@@ -206,6 +206,63 @@ class KISGateway:
             logger.debug(f"분봉 조회 실패 [{ticker}]: {e}")
             return []
 
+    def get_trading_value_ranking(
+        self,
+        market: str = "J",   # J=KOSPI, Q=KOSDAQ
+        top_n: int = 20,
+        priority: Priority = Priority.BACKGROUND,
+    ) -> list[dict]:
+        """
+        거래대금 순위 조회 (KIS FHPST01730000).
+
+        Args:
+            market: "J"=KOSPI, "Q"=KOSDAQ
+            top_n:  상위 N종목
+
+        Returns:
+            [{"ticker", "name", "price", "change_pct", "trading_value",
+              "volume", "frgn_net_buy", "inst_net_buy"}, ...]
+        """
+        try:
+            resp = self._request(
+                method="GET",
+                path="/uapi/domestic-stock/v1/ranking/trading-value",
+                tr_id="FHPST01730000",
+                params={
+                    "fid_cond_mrkt_div_code": market,
+                    "fid_cond_scr_div_code":  "20173",
+                    "fid_input_iscd":          "0000",
+                    "fid_div_cls_code":        "0",
+                    "fid_blng_cls_code":       "0",
+                    "fid_trgt_cls_code":       "111111111",
+                    "fid_trgt_exls_cls_code":  "0000000000",
+                    "fid_input_price_1":       "",
+                    "fid_input_price_2":       "",
+                    "fid_vol_cnt":             "",
+                    "fid_input_date_1":        "",
+                },
+                priority=priority,
+            )
+            result = []
+            for item in resp.get("output", [])[:top_n]:
+                try:
+                    result.append({
+                        "ticker":       str(item.get("stck_shrn_iscd", "")).zfill(6),
+                        "name":         str(item.get("hts_kor_isnm", "")),
+                        "price":        float(item.get("stck_prpr", 0) or 0),
+                        "change_pct":   float(item.get("prdy_ctrt", 0) or 0),
+                        "trading_value": int(item.get("acml_tr_pbmn", 0) or 0),
+                        "volume":       int(item.get("acml_vol", 0) or 0),
+                        "frgn_net_buy": int(item.get("frgn_ntby_qty", 0) or 0),
+                        "inst_net_buy": int(item.get("orgn_ntby_qty", 0) or 0),
+                    })
+                except (ValueError, TypeError):
+                    continue
+            return result
+        except Exception as e:
+            logger.debug(f"거래대금 순위 조회 실패 ({market}): {e}")
+            return []
+
     def get_orderbook(
         self,
         ticker: str,

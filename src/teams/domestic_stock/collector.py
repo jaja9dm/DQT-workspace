@@ -51,8 +51,9 @@ RSI_OVERBOUGHT = 70.0
 RSI_OVERSOLD = 30.0
 
 # 잡주 필터: 당일 거래대금 최소 기준 (원)
-# 30억 미만 → 유동성 부족 (3종목 집중 투자 — 체결 슬리피지 최소화)
-MIN_TRADING_VALUE = 3_000_000_000   # 30억원
+# 50억 미만 → 유동성 부족 (3종목 집중 투자 — 체결 슬리피지 최소화)
+# 거래대금은 "가격이 많이 올랐느냐"와 무관한 유동성 지표
+MIN_TRADING_VALUE = 5_000_000_000   # 50억원
 
 # 체결강도 기준값 (100 = 매수/매도 균형)
 EXEC_STRENGTH_BASELINE = 100.0
@@ -128,7 +129,7 @@ class StockSnapshot:
     day_range_pos: float = 0.5    # (현재가-저가)/(고가-저가) — 0=저가권, 1=고가권
 
     # 갭업 돌파 플래그
-    is_gap_up: bool = False        # 전일 종가 대비 +8% 이상 갭업 (돌파매매 대상)
+    is_gap_up: bool = False        # 전일 종가 대비 +3% 이상 갭업 (돌파매매 대상)
     gap_up_pct: float = 0.0        # 갭업 비율 (≈ change_pct, 당일 등락률 활용)
 
     # 장중 위치 (눌림목 반등 감지용)
@@ -137,6 +138,9 @@ class StockSnapshot:
     # 체결강도 (KIS tntm_vol_tnrt, 없으면 vol_ratio+등락률 근사)
     # 100 기준 — 130↑ 강한 매수세(FOMO), 80↓ 매도세 우위
     exec_strength: float = 100.0
+
+    # ATR (Average True Range) — 종목별 실제 변동폭 기반 손절가 산출
+    atr_pct: float = 0.0          # ATR 14봉 / 현재가 × 100 (%) — 손절 = max(1.0, min(3.5, ATR×1.5))
 
     # 상대강도 & 섹터
     rs_daily: float = 0.0        # 당일 KOSPI 대비 초과수익률 (%) — 양수=강세
@@ -160,12 +164,13 @@ class UniverseScan:
 
 # ── KIS 현재가 조회 ───────────────────────────────────────────
 
-def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int, float, float]:
+def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int, float, float, float, float]:
     """
-    KIS API로 현재가·등락률·거래량·거래대금·외인순매수·기관순매수·당일고가·당일저가 조회.
+    KIS API로 현재가·등락률·거래량·거래대금·외인순매수·기관순매수·당일고가·저가·시가·체결강도 조회.
 
     Returns:
-        (current_price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low)
+        (current_price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy,
+         day_high, day_low, day_open, exec_strength)
     """
     gw = KISGateway()
     try:
@@ -243,11 +248,23 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
         if df.empty or len(df) < 20:
             return _default
 
-        # ATR 최소 기준 필터: 일봉 기준 평균 변동폭 < 1.5% 종목은 수수료 후 수익 불가
+        # ATR 14봉 계산 — 손절가 산출 기준 + 잡주 필터
+        atr_pct = 0.0
         try:
-            tr_pct = ((df["High"] - df["Low"]) / df["Close"]).tail(14).mean() * 100
-            if tr_pct < _FDR_MIN_ATR_PCT:
-                _default["_low_atr"] = True  # 호출측에서 스킵 여부 판단
+            _high  = df["High"].astype(float)
+            _low   = df["Low"].astype(float)
+            _close = df["Close"].astype(float)
+            _prev  = _close.shift(1)
+            _tr = pd.concat([
+                _high - _low,
+                (_high - _prev).abs(),
+                (_low  - _prev).abs(),
+            ], axis=1).max(axis=1)
+            _atr14 = float(_tr.rolling(14).mean().iloc[-1])
+            _ref   = float(_close.iloc[-1])
+            atr_pct = round(_atr14 / _ref * 100, 3) if _ref > 0 else 0.0
+            if atr_pct < _FDR_MIN_ATR_PCT:
+                _default["_low_atr"] = True
                 return _default
         except Exception:
             pass
@@ -357,14 +374,16 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
         except Exception:
             stoch_rsi = 50.0
 
-        # 종합 모멘텀 점수 (0~130): Gate 4.2에서 종목 우선순위 결정에 사용
-        # 거래량(35%) + MACD(25%) + BB폭(20%) + OBV(20%) + 120일신고가(+10)
+        # 종합 모멘텀 점수 (0~140): Gate 4.2에서 종목 우선순위 결정에 사용
+        # 거래량(30) + MACD(25) + BB폭(20) + OBV(15) + 외인기관(10)
         try:
-            vol_score   = min(volume_ratio / 5.0, 1.0) * 35
+            import math as _math
+            # 거래량: log 스케일로 포화 방지 (5배=23pt, 10배=28pt, 20배=33pt)
+            vol_score   = min(_math.log1p(volume_ratio) / _math.log1p(20) * 30.0, 30.0)
             macd_score  = (25 if macd_hist > 0 and macd_hist > macd_hist_prev else
                            15 if macd_hist > macd_hist_prev else 0)
             bbw_score   = min((bb_width_ratio - 1.0) / 0.5, 1.0) * 20 if bb_width_ratio > 1.0 else 0.0
-            obv_score   = 20 if obv_slope > 0 else 0.0
+            obv_score   = 15 if obv_slope > 0 else 0.0
             momentum_score = round(vol_score + macd_score + bbw_score + obv_score, 1)
         except Exception:
             momentum_score = 0.0
@@ -402,6 +421,7 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
             "stoch_rsi": stoch_rsi,
             "momentum_score": momentum_score,
             "at_new_high": at_new_high,
+            "atr_pct": atr_pct,
         }
 
     except Exception as e:
@@ -468,9 +488,9 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     # 당일 가격 범위 내 현재 위치 (0=저가권, 1=고가권)
     day_range = day_high - day_low
     snap.day_range_pos = round((price - day_low) / day_range, 3) if day_range > 0 else 0.5
-    # 갭업 돌파 플래그: +8% 이상 갭업이면 돌파매매 대상
+    # 갭업 돌파 플래그: +3% 이상 갭업이면 돌파매매 대상
     snap.gap_up_pct = change_pct
-    snap.is_gap_up  = change_pct >= 8.0
+    snap.is_gap_up  = change_pct >= 3.0
     # 장중 위치: 시가 대비 현재가 위치 (눌림목 반등 감지)
     snap.intraday_chg_pct = round((price - day_open) / day_open * 100, 2) if day_open > 0 else 0.0
 
@@ -501,15 +521,24 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.stoch_rsi      = ind.get("stoch_rsi", 50.0)
     snap.momentum_score = ind.get("momentum_score", 0.0)
     snap.at_new_high    = ind.get("at_new_high", False)
+    snap.atr_pct        = ind.get("atr_pct", 0.0)
 
     # 거래대금 가중치: 단타 유동성 가산점 (같은 기술 점수면 거래대금 높은 종목 우선)
     # 이수페타시스(1.1조)와 나노캠텍(53억)이 동점 되는 문제 해결
     if trading_value >= 200_000_000_000:    # 2000억↑
-        snap.momentum_score = min(130.0, snap.momentum_score + 25.0)
+        snap.momentum_score = min(140.0, snap.momentum_score + 25.0)
     elif trading_value >= 50_000_000_000:   # 500억↑
-        snap.momentum_score = min(130.0, snap.momentum_score + 15.0)
+        snap.momentum_score = min(140.0, snap.momentum_score + 15.0)
     elif trading_value >= 10_000_000_000:   # 100억↑
-        snap.momentum_score = min(130.0, snap.momentum_score + 5.0)
+        snap.momentum_score = min(140.0, snap.momentum_score + 5.0)
+
+    # 외인+기관 수급 가산 (최대 +10pt) — 세력 매집 종목 우선 선별
+    if frgn_net_buy > 0 and inst_net_buy > 0:
+        snap.momentum_score = min(140.0, snap.momentum_score + 10.0)
+    elif frgn_net_buy > 0 or inst_net_buy > 0:
+        snap.momentum_score = min(140.0, snap.momentum_score + 5.0)
+    elif frgn_net_buy < 0 and inst_net_buy < 0:
+        snap.momentum_score = max(0.0, snap.momentum_score - 5.0)
 
     # 일봉 MACD 강세 여부 (is_daily_macd_bullish 유틸 사용)
     from src.utils.macd import is_daily_macd_bullish

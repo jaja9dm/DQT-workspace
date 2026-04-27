@@ -58,7 +58,27 @@ CREATE TABLE IF NOT EXISTS hot_list (
     exec_strength    REAL DEFAULT 100.0, -- 체결강도 (100=균형, 130↑=강한매수세, 80↓=매도우위)
     rs_daily         REAL DEFAULT 0.0,  -- 당일 KOSPI 대비 초과수익률 (%)
     rs_5d            REAL DEFAULT 0.0,  -- 5일 KOSPI 대비 누적 초과수익률 (%)
+    frgn_net_buy     INTEGER DEFAULT 0, -- 외국인 순매수량 (주, 양수=매수우위)
+    inst_net_buy     INTEGER DEFAULT 0, -- 기관 순매수량 (주, 양수=매수우위)
+    atr_pct          REAL DEFAULT 0.0,  -- ATR 14봉 / 현재가 × 100 (%) — 손절가 산출 기준
+    slot             TEXT DEFAULT NULL, -- 'leader' | 'breakout' | 'pullback'
     created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
+-- 슬롯 배정: 당일 3개 슬롯 상태 관리
+-- leader(주도주) / breakout(돌파) / pullback(눌림목)
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS slot_assignments (
+    slot         TEXT PRIMARY KEY,  -- 'leader' | 'breakout' | 'pullback'
+    ticker       TEXT,              -- 배정된 종목코드 (NULL=비어있음)
+    name         TEXT,
+    signal_type  TEXT,
+    reason       TEXT,
+    trade_date   DATE NOT NULL,     -- 당일만 유효 (날짜 바뀌면 초기화)
+    status       TEXT DEFAULT 'empty',  -- 'active' | 'empty'
+    assigned_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ────────────────────────────────────────
@@ -330,6 +350,29 @@ CREATE TABLE IF NOT EXISTS trade_context (
     ob_imbalance   REAL,
     entry_hhmm     TEXT,                  -- 진입 시각 (HHMM 문자열)
     created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ────────────────────────────────────────
+-- 종목별 누적 패턴 통계 (자기학습 피드백)
+-- 매도 체결 시 자동 갱신 → 다음 스캔 때 Claude 프롬프트에 반영
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS ticker_stats (
+    ticker            TEXT PRIMARY KEY,
+    name              TEXT,
+    total_trades      INTEGER NOT NULL DEFAULT 0,
+    win_count         INTEGER NOT NULL DEFAULT 0,
+    loss_count        INTEGER NOT NULL DEFAULT 0,
+    win_rate          REAL DEFAULT 0.0,        -- win_count / total_trades
+    avg_pnl_pct       REAL DEFAULT 0.0,        -- 평균 손익률 (%)
+    avg_win_pct       REAL DEFAULT 0.0,        -- 평균 이익 거래 수익률 (%) — Kelly 분자
+    avg_loss_pct      REAL DEFAULT 0.0,        -- 평균 손실 거래 손실률 (양수, %) — Kelly 분모
+    avg_hold_minutes  REAL DEFAULT 0.0,        -- 평균 보유 시간 (분)
+    best_entry_hour   INTEGER DEFAULT NULL,    -- 최고 성과 진입 시각 (시 단위, 0~15)
+    frgn_buy_win_rate REAL DEFAULT NULL,       -- 외국인 순매수 시 승률
+    inst_buy_win_rate REAL DEFAULT NULL,       -- 기관 순매수 시 승률
+    best_signal_type  TEXT DEFAULT NULL,       -- 가장 성과 좋은 신호 유형
+    notes             TEXT DEFAULT NULL,       -- Claude 패턴 메모 (복기 엔진 갱신)
+    last_updated      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ────────────────────────────────────────

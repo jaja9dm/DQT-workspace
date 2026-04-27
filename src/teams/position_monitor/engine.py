@@ -205,9 +205,127 @@ class PositionMonitorEngine:
             actions = self._liquidate_all(positions, reason="level5_emergency")
             return actions
 
+        # 5.5. 섹터 업그레이드 교체 — 동일 섹터에 더 강한 Hot List 종목이 있으면 약한 포지션 매도
+        try:
+            from src.infra.sector_rotation import get_sector
+            from src.infra.database import fetch_all
+            hl_rows = fetch_all(
+                "SELECT ticker, name, signal_type FROM hot_list "
+                "WHERE created_at >= datetime('now','-10 minutes') "
+                "ORDER BY created_at DESC",
+            )
+            hl_tickers = {r["ticker"] for r in hl_rows}
+            for pos in list(positions):
+                pos_ticker = pos["ticker"]
+                if pos_ticker in hl_tickers:
+                    continue  # 현재 포지션이 Hot List에 있으면 유지
+                pos_pnl = pos.get("pnl_pct", 0.0)
+                if pos_pnl >= 1.5:
+                    continue  # 수익 1.5% 이상이면 교체 안 함
+                pos_sector = get_sector(pos_ticker)
+                if not pos_sector or pos_sector == "기타":
+                    continue
+                # 같은 섹터에 Hot List 종목이 있으면 교체
+                for hl in hl_rows:
+                    if get_sector(hl["ticker"]) == pos_sector and hl["ticker"] != pos_ticker:
+                        logger.info(
+                            f"[섹터 업그레이드] {pos_ticker}({pos_sector}) → "
+                            f"{hl['ticker']} 교체 | 현재손익 {pos_pnl:+.2f}%"
+                        )
+                        from src.utils.notifier import notify
+                        notify(
+                            f"🔄 <b>[섹터 교체]</b> {pos.get('name', pos_ticker)}({pos_ticker})\n"
+                            f"섹터 [{pos_sector}] 내 더 강한 종목 {hl.get('name', hl['ticker'])}({hl['ticker']}) 감지\n"
+                            f"현재 손익 {pos_pnl:+.2f}% → 청산 후 교체"
+                        )
+                        self._place_sell(
+                            ticker=pos_ticker,
+                            quantity=pos["quantity"],
+                            current_price=pos["current_price"],
+                            action="time_cut",
+                            reason=f"섹터 업그레이드 교체 ({pos_sector} → {hl['ticker']})",
+                            avg_price=pos["avg_price"],
+                            name=pos.get("name", pos_ticker),
+                        )
+                        positions = [p for p in positions if p["ticker"] != pos_ticker]
+                        break
+        except Exception as _se:
+            logger.debug(f"섹터 업그레이드 체크 실패: {_se}")
+
+        # 5.6. 슬롯 건강 교체 — domestic_stock 엔진이 replace_requested 플래그를 세운 슬롯 처리
+        try:
+            from datetime import date as _date
+            from src.infra.database import fetch_all as _fa
+            _today = _date.today().isoformat()
+            _replace_rows = _fa(
+                """
+                SELECT slot, ticker, replace_reason, health_score
+                FROM slot_assignments
+                WHERE trade_date = ? AND status = 'active' AND replace_requested = 1
+                """,
+                (_today,),
+            )
+            _pos_map = {p["ticker"]: p for p in positions}
+            for _rr in _replace_rows:
+                _slot_ticker = _rr["ticker"]
+                _pos = _pos_map.get(_slot_ticker)
+                if not _pos:
+                    # 포지션 없음(아직 미매수) → 플래그만 해제, 슬롯 재탐색 허용
+                    from src.teams.domestic_stock.engine import release_slot
+                    release_slot(_rr["slot"])
+                    logger.info(
+                        f"[슬롯 건강 재배정] {_rr['slot']}/{_slot_ticker} — "
+                        f"미매수 상태에서 건강 악화, 슬롯 해제 | {_rr['replace_reason']}"
+                    )
+                    continue
+
+                _pnl = _pos.get("pnl_pct", 0.0)
+                _score = _rr["health_score"] or 0.0
+
+                # 수익이 충분하면 트레일링 스톱에 맡기고 교체 보류
+                from src.teams.domestic_stock.engine import _SLOT_HEALTH_SAFE_PNL
+                if _pnl >= _SLOT_HEALTH_SAFE_PNL:
+                    # 플래그 해제 (다음 평가 때 다시 체크)
+                    from src.infra.database import execute as _ex
+                    _ex(
+                        "UPDATE slot_assignments SET replace_requested = 0 WHERE slot = ?",
+                        (_rr["slot"],),
+                    )
+                    logger.debug(
+                        f"슬롯 교체 보류 [{_rr['slot']}/{_slot_ticker}] — "
+                        f"수익 {_pnl:+.1f}% ≥ {_SLOT_HEALTH_SAFE_PNL}% (트레일링 스톱에 위임)"
+                    )
+                    continue
+
+                logger.warning(
+                    f"[슬롯 건강 교체] {_rr['slot']} / {_slot_ticker} | "
+                    f"건강점수 {_score:.0f}점 | 손익 {_pnl:+.2f}% | {_rr['replace_reason']}"
+                )
+                from src.utils.notifier import notify
+                notify(
+                    f"🔁 <b>[슬롯 교체]</b> {_pos.get('name', _slot_ticker)}({_slot_ticker})"
+                    f" [{_rr['slot']}슬롯]\n"
+                    f"건강점수 {_score:.0f}점 | 손익 {_pnl:+.2f}%\n"
+                    f"사유: {_rr['replace_reason']}"
+                )
+                _sell_result = self._place_sell(
+                    ticker=_slot_ticker,
+                    quantity=_pos["quantity"],
+                    current_price=_pos["current_price"],
+                    action="time_cut",
+                    reason=f"슬롯 건강 교체 ({_rr['replace_reason']})",
+                    avg_price=_pos["avg_price"],
+                    name=_pos.get("name", _slot_ticker),
+                )
+                if _sell_result:
+                    positions = [p for p in positions if p["ticker"] != _slot_ticker]
+                    # _place_sell 내부에서 release_slot() 이미 호출됨
+        except Exception as _she:
+            logger.debug(f"슬롯 건강 교체 체크 실패: {_she}")
+
         # 6. 초과 포지션 정리 (보유 수 > max_positions)
         from src.teams.research.param_tuner import get_param
-        max_pos = int(get_param("max_positions", 5.0))
+        max_pos = int(get_param("max_positions", 3.0))
         if len(positions) > max_pos:
             excess = len(positions) - max_pos
 
@@ -747,43 +865,32 @@ class PositionMonitorEngine:
                     avg_price=avg_price, name=name,
                 )
 
-        # ── 4.5. 장마감 자동 청산 (단타 전략 핵심) ───────────────
-        # 당일 매수·매도 원칙: 오버나잇은 예외적으로만 허용
-        #
-        # 14:50 ~ 15:20 (마감 30분~10분 전): 수익권이면 무조건 익절
-        #   - 오버나잇 허용 예외: MACD 강세 + 수익 3% 이상 (강한 모멘텀)
-        # 15:20 이후 (마감 10분 전): 손익 무관 전량 청산 (오버나잇 금지)
+        # ── 4.5. 장마감 자동 청산 ─────────────────────────────────
+        # 14:50 ~ 수익권: 손익 실현 (수수료 커버 후 이익 구간)
+        # 15:20 이후 : 손익 무관 전량 강제 청산
         _now = datetime.now()
         _hm = _now.hour * 100 + _now.minute
-        _commission = _p("commission_rate", 0.35)  # 왕복 수수료 + 세금 (%)
+        _commission = _p("commission_rate", 0.35)
 
         if 1450 <= _hm < 1520:
-            # 수익 = 수수료 커버 후 실질 이익
             net_pnl = pnl_pct - _commission
             if net_pnl > 0:
-                # 오버나잇 허용 예외: MACD 강세 + 순수익 3% 이상
-                overnight_ok = macd_bullish and net_pnl >= 3.0
-                if not overnight_ok:
-                    logger.info(
-                        f"[장마감 익절] {ticker} | 순수익 {net_pnl:+.2f}% "
-                        f"(수익 {pnl_pct:+.2f}% - 수수료 {_commission:.2f}%) | "
-                        f"MACD:{macd_sig} | {quantity}주 전량 청산"
-                    )
-                    _delete_trailing_stop(ticker)
-                    from src.utils.notifier import notify
-                    notify(
-                        f"🔔 <b>[장마감 익절]</b> {name}({ticker})\n"
-                        f"수익 {pnl_pct:+.2f}% | 14:50 마감 전 전량 청산\n"
-                        f"(오버나잇 조건 미충족: MACD 또는 수익 3% 미만)"
-                    )
-                    return self._place_sell(
-                        ticker=ticker, quantity=quantity, current_price=current_price,
-                        action="take_profit", reason=f"장마감 익절 (순수익 {net_pnl:+.2f}%)",
-                        avg_price=avg_price, name=name,
-                    )
+                logger.info(
+                    f"[장마감 익절] {ticker} | 순수익 {net_pnl:+.2f}% | {quantity}주 전량 청산"
+                )
+                _delete_trailing_stop(ticker)
+                from src.utils.notifier import notify
+                notify(
+                    f"🔔 <b>[장마감 익절]</b> {name}({ticker})\n"
+                    f"수익 {pnl_pct:+.2f}% | 14:50 마감 전 전량 청산"
+                )
+                return self._place_sell(
+                    ticker=ticker, quantity=quantity, current_price=current_price,
+                    action="take_profit", reason=f"장마감 익절 (순수익 {net_pnl:+.2f}%)",
+                    avg_price=avg_price, name=name,
+                )
 
         elif _hm >= 1520:
-            # 마감 10분 전: 손익 무관 전량 강제 청산
             action_type = "take_profit" if pnl_pct > 0 else "stop_loss"
             logger.warning(
                 f"[장마감 강제청산] {ticker} | 15:20 경과 | 손익 {pnl_pct:+.2f}% | {quantity}주"
@@ -792,8 +899,7 @@ class PositionMonitorEngine:
             from src.utils.notifier import notify
             notify(
                 f"⏰ <b>[장마감 강제청산]</b> {name}({ticker})\n"
-                f"15:20 경과 — 오버나잇 방지 전량 청산\n"
-                f"손익 {pnl_pct:+.2f}%"
+                f"15:20 경과 — 전량 청산 | 손익 {pnl_pct:+.2f}%"
             )
             return self._place_sell(
                 ticker=ticker, quantity=quantity, current_price=current_price,
@@ -1065,6 +1171,15 @@ class PositionMonitorEngine:
             self._ws_subscribed.discard(ticker)
             self._ws_triggered.discard(ticker)
             self._qty_cache.pop(ticker, None)
+
+            # 슬롯 해제 — 포지션 청산 시 해당 슬롯을 재탐색 가능 상태로
+            try:
+                from src.teams.domestic_stock.engine import release_slot, get_slot_for_ticker
+                _slot = get_slot_for_ticker(ticker)
+                if _slot:
+                    release_slot(_slot)
+            except Exception:
+                pass
 
             return {
                 "ticker": ticker,
@@ -1777,3 +1892,116 @@ def _record_trade(
             reason,
         ),
     )
+    # 종목별 누적 통계 갱신 (ticker_stats)
+    if pnl_pct is not None:
+        try:
+            _update_ticker_stats(ticker, name, pnl_pct)
+        except Exception as _e:
+            logger.debug(f"ticker_stats 갱신 실패 [{ticker}]: {_e}")
+
+
+def _update_ticker_stats(ticker: str, name: str, pnl_pct: float) -> None:
+    """매도 체결 시 ticker_stats 누적 통계 갱신 (avg_win/loss, best_entry_hour 포함)."""
+    is_win = 1 if pnl_pct > 0 else 0
+    row = fetch_one("SELECT * FROM ticker_stats WHERE ticker = ?", (ticker,))
+
+    if row:
+        total  = row["total_trades"] + 1
+        wins   = row["win_count"] + is_win
+        losses = row["loss_count"] + (1 - is_win)
+        new_avg_pnl = (row["avg_pnl_pct"] * row["total_trades"] + pnl_pct) / total
+
+        # 이익/손실 평균 누적 (Kelly 분자·분모)
+        old_win_pct  = float(row["avg_win_pct"]  or 0.0)
+        old_loss_pct = float(row["avg_loss_pct"] or 0.0)
+        if is_win:
+            new_avg_win  = (old_win_pct * row["win_count"] + pnl_pct) / wins if wins else pnl_pct
+            new_avg_loss = old_loss_pct
+        else:
+            new_avg_win  = old_win_pct
+            new_avg_loss = (old_loss_pct * row["loss_count"] + abs(pnl_pct)) / losses if losses else abs(pnl_pct)
+
+        # best_entry_hour: 이긴 거래의 진입 시각 집계 → 가장 빈도 높은 시간대
+        best_hour = row["best_entry_hour"]
+        if is_win:
+            best_hour = _compute_best_entry_hour(ticker)
+
+        execute(
+            """
+            UPDATE ticker_stats
+            SET total_trades = ?, win_count = ?, loss_count = ?,
+                win_rate = ?, avg_pnl_pct = ?, avg_win_pct = ?, avg_loss_pct = ?,
+                best_entry_hour = ?, name = ?,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE ticker = ?
+            """,
+            (
+                total, wins, losses,
+                wins / total,
+                round(new_avg_pnl, 3),
+                round(new_avg_win, 3),
+                round(new_avg_loss, 3),
+                best_hour,
+                name,
+                ticker,
+            ),
+        )
+    else:
+        best_hour = None
+        if is_win:
+            best_hour = _compute_best_entry_hour(ticker)
+        execute(
+            """
+            INSERT INTO ticker_stats
+                (ticker, name, total_trades, win_count, loss_count, win_rate,
+                 avg_pnl_pct, avg_win_pct, avg_loss_pct, best_entry_hour)
+            VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                ticker, name,
+                is_win, 1 - is_win,
+                float(is_win),
+                round(pnl_pct, 3),
+                round(pnl_pct, 3) if is_win else 0.0,
+                round(abs(pnl_pct), 3) if not is_win else 0.0,
+                best_hour,
+            ),
+        )
+
+
+def _compute_best_entry_hour(ticker: str) -> int | None:
+    """
+    trade_context에서 이 종목의 승리 거래 진입 시각을 조회해
+    가장 빈도 높은 시간대(시 단위)를 반환한다.
+    데이터 부족 시 None 반환.
+
+    NOTE: trade_context.trade_id는 매수 레코드 id → 매수 레코드엔 pnl이 없음.
+    같은 날 해당 티커에 수익 매도(take_profit)가 있으면 해당 진입 시각을 승리로 집계.
+    """
+    try:
+        rows = fetch_all(
+            """
+            SELECT tc.entry_hhmm
+            FROM trade_context tc
+            WHERE tc.ticker = ?
+              AND tc.entry_hhmm IS NOT NULL
+              AND EXISTS (
+                  SELECT 1 FROM trades t
+                  WHERE t.ticker = tc.ticker
+                    AND t.date   = tc.trade_date
+                    AND t.pnl_pct > 0
+                    AND t.action IN ('take_profit', 'partial_exit')
+              )
+            """,
+            (ticker,),
+        )
+        if not rows:
+            return None
+        hour_counts: dict[int, int] = {}
+        for r in rows:
+            hhmm = str(r["entry_hhmm"]).zfill(4)
+            hour = int(hhmm[:2])
+            hour_counts[hour] = hour_counts.get(hour, 0) + 1
+        return max(hour_counts, key=hour_counts.get)
+    except Exception:
+        return None

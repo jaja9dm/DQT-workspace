@@ -513,15 +513,21 @@ def get_macd_details(ticker: str, max_age_minutes: int = 6) -> dict:
     Returns:
         {
             "signal": "buy_pre"|"sell_pre"|"sell_prep"|"hold",
+            "sig_3m": "buy_pre"|"sell_pre"|"hold",   # 3분봉 개별 신호
+            "sig_5m": "buy_pre"|"sell_pre"|"hold",   # 5분봉 개별 신호
             "hist_3m": float | None,
             "hist_5m": float | None,
-            "from_negative": bool,   # 5분봉 hist가 음수에서 회복 중 (강한 반전 신호)
-            "hist_5m_peak_decline": bool,  # 5분봉 hist 양수 고점 꺾임 (sell_prep 판단용)
+            "both_buy_pre": bool,   # 3분봉 AND 5분봉 모두 buy_pre (강한 매수 신호)
+            "from_negative": bool,  # 3분봉/5분봉 hist 모두 음수→양수 회복 (최강 반전)
+            "hist_5m_peak_decline": bool,  # 5분봉 hist 양수 고점 꺾임
         }
     """
     rows = fetch_all(
         """
-        SELECT signal, hist_3m, hist_5m FROM intraday_macd_signal
+        SELECT signal, hist_3m, hist_5m,
+               COALESCE(sig_3m, 'hold') AS sig_3m,
+               COALESCE(sig_5m, 'hold') AS sig_5m
+        FROM intraday_macd_signal
         WHERE ticker = ?
           AND created_at >= datetime('now', ?)
         ORDER BY created_at DESC
@@ -532,18 +538,29 @@ def get_macd_details(ticker: str, max_age_minutes: int = 6) -> dict:
     if rows:
         curr = rows[0]
         prev = rows[1] if len(rows) >= 2 else curr
+        hist_3m_curr = float(curr["hist_3m"] or 0)
+        hist_3m_prev = float(prev["hist_3m"] or 0)
         hist_5m_curr = float(curr["hist_5m"] or 0)
         hist_5m_prev = float(prev["hist_5m"] or 0)
+        sig_3m = str(curr["sig_3m"] or "hold")
+        sig_5m = str(curr["sig_5m"] or "hold")
         return {
             "signal": curr["signal"],
+            "sig_3m": sig_3m,
+            "sig_5m": sig_5m,
             "hist_3m": curr["hist_3m"],
             "hist_5m": curr["hist_5m"],
-            "from_negative": hist_5m_prev < 0.0 and hist_5m_curr > hist_5m_prev,
+            "both_buy_pre": sig_3m == "buy_pre" and sig_5m == "buy_pre",
+            "from_negative": (
+                hist_3m_prev < 0.0 and hist_3m_curr > hist_3m_prev and
+                hist_5m_prev < 0.0 and hist_5m_curr > hist_5m_prev
+            ),
             "hist_5m_peak_decline": hist_5m_prev > 0.0 and hist_5m_curr < hist_5m_prev,
         }
     return {
-        "signal": "hold", "hist_3m": None, "hist_5m": None,
-        "from_negative": False, "hist_5m_peak_decline": False,
+        "signal": "hold", "sig_3m": "hold", "sig_5m": "hold",
+        "hist_3m": None, "hist_5m": None,
+        "both_buy_pre": False, "from_negative": False, "hist_5m_peak_decline": False,
     }
 
 
