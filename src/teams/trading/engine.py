@@ -1656,8 +1656,24 @@ def _compute_entry_score(
         hard_fails.append(f"RSI {rsi:.0f} < {_min_rsi:.0f} (과매도 붕괴)")
         return hard_fails, 0.0, 0.0
 
-    # 거래량 절대 최소 (전략별 완화)
-    _vol_floor = 1.2 if (is_gap_up or is_pullback or is_mkt_mom or is_op_plunge) else max(1.5, _min_vol * 0.75)
+    # 거래량 절대 최소 — 거래대금(시총 프록시) 기준 대형주는 완화
+    # 대형주는 1.5x만 돼도 절대 거래량이 이미 수백억 → 유동성·관심도 충분히 확인됨
+    tv = float(c.get("trading_value") or 0)
+    if tv >= 500_000_000_000:    # 5000억+ (삼성전자급)
+        _tv_floor = 1.0
+    elif tv >= 100_000_000_000:  # 1000억+ (중대형주)
+        _tv_floor = 1.2
+    elif tv >= 30_000_000_000:   # 300억+ (중형주)
+        _tv_floor = 1.5
+    else:
+        _tv_floor = _min_vol     # 소형주 — 기존 기준 유지 (기본 2.0)
+
+    # 전략별 추가 완화 (갭업/눌림목/시장강세/오프닝급락은 어떤 크기든 1.2 이하 허용)
+    if is_gap_up or is_pullback or is_mkt_mom or is_op_plunge:
+        _vol_floor = min(_tv_floor, 1.2)
+    else:
+        _vol_floor = _tv_floor
+
     if vol_ratio < _vol_floor:
         hard_fails.append(f"거래량비 {vol_ratio:.1f}x < {_vol_floor:.1f}x (최소 기준 미달)")
         return hard_fails, 0.0, 0.0
@@ -2120,7 +2136,7 @@ def _load_hot_list() -> list[dict]:
         INNER JOIN (
             SELECT ticker, MAX(created_at) AS latest
             FROM hot_list
-            WHERE created_at >= datetime('now', '-10 minutes')
+            WHERE created_at >= datetime('now', '-15 minutes')
             GROUP BY ticker
         ) latest_only ON h.ticker = latest_only.ticker AND h.created_at = latest_only.latest
         ORDER BY COALESCE(h.momentum_score, 0.0) DESC, h.volume_ratio DESC

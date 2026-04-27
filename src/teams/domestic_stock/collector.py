@@ -724,7 +724,7 @@ def collect(max_workers: int = 10) -> UniverseScan:
             scan.candidates.append(s)
 
     if filtered_out:
-        logger.info(f"잡주 필터: {filtered_out}종목 제외 (거래대금 30억 미만)")
+        logger.info(f"잡주 필터: {filtered_out}종목 제외 (거래대금 50억 미만)")
 
     logger.info(
         f"스캔 완료 — {len(scan.snapshots)}종목 / "

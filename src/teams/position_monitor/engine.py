@@ -211,7 +211,7 @@ class PositionMonitorEngine:
             from src.infra.database import fetch_all
             hl_rows = fetch_all(
                 "SELECT ticker, name, signal_type FROM hot_list "
-                "WHERE created_at >= datetime('now','-10 minutes') "
+                "WHERE created_at >= datetime('now','-15 minutes') "
                 "ORDER BY created_at DESC",
             )
             hl_tickers = {r["ticker"] for r in hl_rows}
