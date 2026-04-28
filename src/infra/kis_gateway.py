@@ -458,7 +458,7 @@ class KISGateway:
             except Exception as e:
                 msg = str(e)
                 if "500" in msg or "장외시간" in msg:
-                    logger.debug(f"KIS API 서버 오류 (장외시간): {e}")
+                    logger.debug(f"KIS API 서버 오류 (500): {e}")
                 else:
                     logger.error(f"KIS API 오류: {e}")
                 req.error = e
@@ -497,9 +497,9 @@ class KISGateway:
                 else:
                     resp = requests.post(url, headers=headers, json=req.body, timeout=10)
 
-                # 500 서버 오류 — 장외시간 등으로 재시도 의미 없음 → 즉시 실패
+                # 500 서버 오류 — KIS 서버 내부 오류, 재시도 의미 없음 → 즉시 실패
                 if resp.status_code == 500:
-                    raise RuntimeError(f"KIS API 서버 오류 (500) — 장외시간 가능성")
+                    raise RuntimeError(f"KIS API 서버 오류 (500)")
 
                 resp.raise_for_status()
                 data = resp.json()

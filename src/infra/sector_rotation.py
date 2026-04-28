@@ -198,7 +198,7 @@ class SectorRotationCache:
 
             # FDR StockListing 컬럼: Code/Symbol, Name, Sector, Industry 등 버전마다 다름
             code_col   = next((c for c in ["Code", "Symbol", "ISU_SRT_CD"] if c in df.columns), None)
-            sector_col = next((c for c in ["Sector", "업종명", "Industry", "sector"] if c in df.columns), None)
+            sector_col = next((c for c in ["Sector", "업종명", "Industry", "sector", "Dept"] if c in df.columns), None)
 
             if code_col is None or sector_col is None:
                 logger.warning(f"섹터 매핑 컬럼 없음. 사용 가능 컬럼: {list(df.columns)}")

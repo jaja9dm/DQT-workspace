@@ -130,7 +130,11 @@ class DomesticMarketEngine:
         if alerts:
             for alert in alerts:
                 logger.warning(f"[국내시황 경보] {alert}")
-            # TODO: 위기 관리팀 즉시 트리거 (7단계 구현 후 연결)
+            try:
+                from src.teams.risk.engine import trigger_emergency
+                trigger_emergency()
+            except Exception:
+                pass
 
     # ──────────────────────────────────────────
     # 감성 분석 제출

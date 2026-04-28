@@ -102,6 +102,15 @@ class DQTScheduler:
             else:
                 # 09:00~15:35: 전체 엔진 기동
                 logger.info(f"장중 재시작 감지 ({_now.strftime('%H:%M')}) — 전체 엔진 즉시 기동")
+                # 유니버스가 오늘 것이 없으면 즉시 재구성 (08:50 스케줄 놓친 경우)
+                try:
+                    from src.infra.universe import UniverseManager
+                    _um = UniverseManager()
+                    if _um.get_today_count() == 0:
+                        logger.info("장중 재시작: 오늘 유니버스 없음 → _pre_market_setup 즉시 실행")
+                        self._pre_market_setup()
+                except Exception as _e:
+                    logger.warning(f"유니버스 확인 오류: {_e}")
                 self._start_realtime_engines()
 
     def stop(self) -> None:

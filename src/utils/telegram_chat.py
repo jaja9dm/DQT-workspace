@@ -603,8 +603,8 @@ def _tool_buy_stock(inputs: dict) -> str:
                VALUES (?, ?, ?, 'buy', 'market', ?, ?, ?, 1, 'filled', 'chat')""",
             (today, ticker, name, current_price, current_price, quantity),
         )
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.error(f"trades INSERT 실패 [{ticker}]: {_e}")
 
     # hot_list 등록 + 슬롯 배정 → 이후 position_monitor·trading engine이 자동 관리
     slot = inputs.get("slot", "leader")
@@ -633,9 +633,10 @@ def _tool_buy_stock(inputs: dict) -> str:
         floor = round(current_price * 0.98)
         db_execute(
             """INSERT OR REPLACE INTO trailing_stop
-               (ticker, entry_price, current_floor, trigger_pct, floor_pct, updated_at)
-               VALUES (?, ?, ?, 3.0, 2.5, CURRENT_TIMESTAMP)""",
-            (ticker, current_price, floor),
+               (ticker, entry_price, trailing_floor, highest_price, ladder_bought,
+                trigger_pct, floor_pct, updated_at)
+               VALUES (?, ?, ?, ?, 0, 3.0, 2.5, CURRENT_TIMESTAMP)""",
+            (ticker, current_price, floor, current_price),
         )
     except Exception as e:
         logger.warning(f"자동 슬롯 등록 실패 [{ticker}]: {e}")
@@ -701,8 +702,8 @@ def _tool_sell_stock(inputs: dict) -> str:
                VALUES (?, ?, ?, 'sell', 'market', ?, ?, ?, 1, 'filled', 'chat', ?)""",
             (str(date.today()), ticker, held_name, curr_price, curr_price, quantity, pnl),
         )
-    except Exception:
-        pass
+    except Exception as _e:
+        logger.error(f"trades INSERT 실패 [{ticker}]: {_e}")
 
     pnl_sign = "+" if pnl >= 0 else ""
     return (

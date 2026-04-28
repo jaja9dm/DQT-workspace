@@ -130,7 +130,11 @@ class GlobalMarketEngine:
         if alerts:
             for alert in alerts:
                 logger.warning(f"[글로벌 경보] {alert}")
-            # TODO: 위기 관리팀에 즉시 알림 (위기 관리팀 구현 후 연결)
+            try:
+                from src.teams.risk.engine import trigger_emergency
+                trigger_emergency()
+            except Exception:
+                pass
 
 
 # ──────────────────────────────────────────────

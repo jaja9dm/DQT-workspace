@@ -18,11 +18,10 @@ notifier.py — 텔레그램 공통 알림 모듈
 
 from __future__ import annotations
 
-import json
 import threading
 from datetime import datetime
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+
+import requests as _requests
 
 from src.config.settings import settings
 from src.utils.logger import get_logger
@@ -32,6 +31,8 @@ logger = get_logger(__name__)
 _BASE_URL = "https://api.telegram.org/bot{token}/sendMessage"
 _TIMEOUT = 10
 _lock = threading.Lock()  # 동시 발송 직렬화
+_session = _requests.Session()
+_session.headers.update({"Content-Type": "application/json"})
 
 
 # ── 공개 API ──────────────────────────────────────────────────
@@ -223,29 +224,19 @@ def check_claude_error(e: Exception, source: str) -> None:
 def _send(payload: dict) -> bool:
     """텔레그램 API HTTP 요청 (재시도 1회)."""
     url = _BASE_URL.format(token=settings.TELEGRAM_BOT_TOKEN)
-    data = json.dumps(payload).encode("utf-8")
-    req = Request(
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
 
     with _lock:
         for attempt in range(2):
             try:
-                with urlopen(req, timeout=_TIMEOUT) as resp:
-                    body = json.loads(resp.read())
-                    if body.get("ok"):
-                        return True
-                    logger.warning(f"텔레그램 발송 실패: {body.get('description')}")
-                    return False
-            except URLError as e:
+                resp = _session.post(url, json=payload, timeout=_TIMEOUT)
+                body = resp.json()
+                if body.get("ok"):
+                    return True
+                logger.warning(f"텔레그램 발송 실패: {body.get('description')}")
+                return False
+            except Exception as e:
                 if attempt == 0:
                     logger.warning(f"텔레그램 연결 오류 (재시도): {e}")
                 else:
                     logger.error(f"텔레그램 발송 최종 실패: {e}")
-            except Exception as e:
-                logger.error(f"텔레그램 예외: {e}")
-                return False
     return False

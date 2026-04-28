@@ -53,6 +53,14 @@ _LEVEL_SPEC: dict[int, tuple[int, float, int, str]] = {
 }
 
 
+_emergency_trigger: threading.Event = threading.Event()
+
+
+def trigger_emergency() -> None:
+    """외부(글로벌/국내 시황팀)에서 긴급 경보 발생 시 위기 엔진 즉시 재평가 요청."""
+    _emergency_trigger.set()
+
+
 class RiskEngine:
     """위기 관리팀 엔진 — 독립 스레드로 실행."""
 
@@ -87,7 +95,17 @@ class RiskEngine:
             except Exception as e:
                 logger.error(f"위기 관리팀 오류: {e}", exc_info=True)
 
-            self._stop_event.wait(timeout=_INTERVAL_SEC)
+            # 15분 대기 중 긴급 트리거 수신 시 즉시 재평가
+            deadline = time.monotonic() + _INTERVAL_SEC
+            while not self._stop_event.is_set():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                fired = _emergency_trigger.wait(timeout=min(remaining, 5.0))
+                if fired:
+                    _emergency_trigger.clear()
+                    logger.info("긴급 경보 수신 — 위기 레벨 즉시 재평가")
+                    break
 
     def run_once(self) -> dict:
         """
