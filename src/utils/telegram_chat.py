@@ -23,6 +23,10 @@ from typing import Any
 import anthropic
 import requests as _requests
 
+# HTTP 세션 재사용 (keep-alive) — 매번 TLS 핸드셰이크 방지
+_session = _requests.Session()
+_session.headers.update({"Content-Type": "application/json"})
+
 from src.config.settings import settings
 from src.infra.database import execute, fetch_all, fetch_one
 from src.utils.logger import get_logger
@@ -48,7 +52,7 @@ _history_lock = threading.Lock()
 def _tg(method: str, payload: dict | None = None, timeout: int = 10) -> dict:
     url = _BASE_URL.format(token=settings.TELEGRAM_BOT_TOKEN, method=method)
     try:
-        resp = _requests.post(url, json=payload or {}, timeout=timeout)
+        resp = _session.post(url, json=payload or {}, timeout=timeout)
         if resp.status_code == 409 and method == "getUpdates":
             wait = _POLL_TIMEOUT + 5
             logger.debug(f"Telegram 409: 이전 세션 만료 대기 {wait}s")
@@ -194,6 +198,7 @@ _TOOLS: list[dict] = [
                 "name":     {"type": "string", "description": "종목명"},
                 "amount":   {"type": "integer", "description": "매수 금액 (원). quantity 없으면 필수."},
                 "quantity": {"type": "integer", "description": "매수 수량 (주). amount 없으면 필수."},
+                "slot":     {"type": "string", "enum": ["leader", "breakout", "pullback"], "description": "슬롯 배정 (기본 leader)"},
                 "reason":   {"type": "string", "description": "매수 근거"},
             },
             "required": ["ticker", "name", "reason"],
@@ -551,6 +556,15 @@ def _tool_buy_stock(inputs: dict) -> str:
     reason  = inputs["reason"]
     gw      = KISGateway()
 
+    # 중복 매수 방지 (오늘 이미 매수했으면 거부)
+    today = str(date.today())
+    existing = fetch_one(
+        "SELECT id FROM trades WHERE ticker=? AND action='buy' AND date=? AND signal_source='chat' LIMIT 1",
+        (ticker, today),
+    )
+    if existing:
+        return f"⚠️ 오늘 이미 {name}({ticker}) 매수 완료. 중복 주문 방지."
+
     # 현재가 조회
     try:
         price_data = gw.get_current_price(ticker)
@@ -580,23 +594,59 @@ def _tool_buy_stock(inputs: dict) -> str:
         return f"매수 주문 실패: {e}"
 
     # trades 테이블 기록
+    today = str(date.today())
     try:
         db_execute(
             """INSERT INTO trades
                (date, ticker, name, action, order_type, order_price, exec_price,
                 quantity, tranche, status, signal_source)
                VALUES (?, ?, ?, 'buy', 'market', ?, ?, ?, 1, 'filled', 'chat')""",
-            (str(date.today()), ticker, name, current_price, current_price, quantity),
+            (today, ticker, name, current_price, current_price, quantity),
         )
     except Exception:
         pass
 
+    # hot_list 등록 + 슬롯 배정 → 이후 position_monitor·trading engine이 자동 관리
+    slot = inputs.get("slot", "leader")
+    try:
+        db_execute(
+            """INSERT OR REPLACE INTO hot_list
+               (ticker, name, signal_type, momentum_score, price_change_pct,
+                volume_ratio, slot, created_at)
+               VALUES (?, ?, 'chat_buy', 80.0, 0.0, 1.0, ?, CURRENT_TIMESTAMP)""",
+            (ticker, name, slot),
+        )
+        db_execute(
+            """INSERT INTO slot_assignments
+               (slot, ticker, name, signal_type, reason, trade_date, status,
+                health_score, replace_requested)
+               VALUES (?, ?, ?, 'chat_buy', ?, ?, 'active', 100.0, 0)
+               ON CONFLICT(slot) DO UPDATE SET
+                   ticker=excluded.ticker, name=excluded.name,
+                   signal_type=excluded.signal_type, reason=excluded.reason,
+                   trade_date=excluded.trade_date, status='active',
+                   health_score=100.0, replace_requested=0,
+                   updated_at=CURRENT_TIMESTAMP""",
+            (slot, ticker, name, reason, today),
+        )
+        # trailing stop 초기화 (초기 손절 2%)
+        floor = round(current_price * 0.98)
+        db_execute(
+            """INSERT OR REPLACE INTO trailing_stop
+               (ticker, entry_price, current_floor, trigger_pct, floor_pct, updated_at)
+               VALUES (?, ?, ?, 3.0, 2.5, CURRENT_TIMESTAMP)""",
+            (ticker, current_price, floor),
+        )
+    except Exception as e:
+        logger.warning(f"자동 슬롯 등록 실패 [{ticker}]: {e}")
+
     total = current_price * quantity
     return (
-        f"✅ 매수 완료\n"
+        f"✅ 매수 완료 — 이후 자동 관리 시작\n"
         f"  종목: {name}({ticker})\n"
         f"  수량: {quantity:,}주 @ {current_price:,}원\n"
         f"  총액: {total:,}원\n"
+        f"  슬롯: {slot} | 손절선: {floor:,}원\n"
         f"  주문번호: {order_no}\n"
         f"  근거: {reason}"
     )
