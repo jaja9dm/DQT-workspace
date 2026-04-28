@@ -58,6 +58,17 @@ def init_db() -> None:
                 )
             except Exception:
                 pass  # 이미 존재하면 무시
+        # 기존 DB 마이그레이션: trailing_stop 포지션 관리 카운터 컬럼 추가
+        for col, typedef in [
+            ("scale_in_count",   "INTEGER NOT NULL DEFAULT 0"),
+            ("dip_buy_count",    "INTEGER NOT NULL DEFAULT 0"),
+            ("scalp_exit_price", "REAL DEFAULT NULL"),
+            ("scalp_exit_qty",   "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                conn.execute(f"ALTER TABLE trailing_stop ADD COLUMN {col} {typedef}")
+            except Exception:
+                pass  # 이미 존재하면 무시
         # 기존 DB 마이그레이션: intraday_macd_signal 타임프레임별 개별 신호 컬럼 추가
         for col in ["sig_3m", "sig_5m"]:
             try:
