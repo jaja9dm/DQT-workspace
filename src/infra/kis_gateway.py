@@ -141,15 +141,10 @@ class KISGateway:
 
     def get_price(self, ticker: str, priority: Priority = Priority.DATA_COLLECTION) -> dict:
         """
-        현재가 조회.
-
-        Returns:
-            {
-                "ticker": "005930",
-                "price": 70000,
-                "change_pct": 1.23,
-                "volume": 12345678,
-            }
+        현재가 조회. KIS raw 응답 반환.
+        현재가: resp["output"]["stck_prpr"]
+        등락률: resp["output"]["prdy_ctrt"]
+        거래량: resp["output"]["acml_vol"]
         """
         return self._request(
             method="GET",

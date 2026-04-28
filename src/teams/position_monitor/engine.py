@@ -140,12 +140,13 @@ class PositionMonitorEngine:
 
     def stop(self) -> None:
         self._stop_event.set()
-        # 모든 WebSocket 구독 해제
+        # WebSocket 구독 해제 후 연결 종료
         try:
             from src.infra.kis_websocket import KISWebSocket
             ws = KISWebSocket()
             for ticker in list(self._ws_subscribed):
                 ws.unsubscribe(ticker)
+            ws.stop()
         except Exception:
             pass
         self._thread.join(timeout=15)

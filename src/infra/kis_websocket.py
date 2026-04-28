@@ -130,6 +130,9 @@ class KISWebSocket:
                 self._ws.close()
             except Exception:
                 pass
+        # 싱글톤 초기화 — 다음 기동 시 새 인스턴스 생성
+        with KISWebSocket._lock:
+            KISWebSocket._instance = None
 
     # ──────────────────────────────────────────
     # 연결 루프
