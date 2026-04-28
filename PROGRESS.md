@@ -5,9 +5,9 @@
 
 ---
 
-## 최종 업데이트: 2026-04-28
+## 최종 업데이트: 2026-04-28 (야간 점검 완료)
 
-**상태: 완전체 구현 완료 — 실전 전환 준비 완료**
+**상태: 완전체 구현 완료 — 버그 점검 및 수정 완료**
 
 GitHub: https://github.com/jaja9dm/DQT-workspace (최신 커밋 반영)
 
@@ -125,6 +125,20 @@ GitHub: https://github.com/jaja9dm/DQT-workspace (최신 커밋 반영)
 - **실전 전환 방법**: `.env`에서 `KIS_MODE=live` + 실계좌 앱키로 변경
 - **API 오류 이력**: KIS 토큰 만료 시 403 → 자동 재발급 로직 구현됨
 - **websocket-client**: `pip install websocket-client` 필요 (체결강도 실시간)
+
+## 2026-04-28 버그 수정 이력
+
+- **장중 재시작 시 유니버스 자동 재구성** — 08:50 스케줄 놓쳐도 즉시 재구성 (스캔 정상화)
+- **섹터 매핑 컬럼 오류** — FDR `Dept` 컬럼 인식 추가 → 2880종목 로드 정상
+- **텔레그램 알림 타임아웃** — notifier.py urllib → requests.Session 교체
+- **trailing_stop INSERT 컬럼 오류** — `current_floor` → `trailing_floor` 수정
+- **trailing_stop 컬럼 4개 누락** — `scale_in_count`, `dip_buy_count`, `scalp_exit_price`, `scalp_exit_qty` DB/스키마/마이그레이션 동기화 (불타기·물타기 횟수 제한 정상화)
+- **장 마감 후 스캐너 계속 실행** — `collect()`에 stop_event 전달, 정지 신호 수신 시 즉시 중단
+- **WebSocket 장 마감 후 무한 재연결** — `position_monitor.stop()`에서 `ws.stop()` 호출 추가
+- **WebSocket 싱글톤 재기동 불가** — `stop()` 시 `_instance` 초기화, 다음 날 새 인스턴스 생성
+- **위기 관리팀 즉시 트리거 미연결** — 글로벌·국내 경보 발생 시 `trigger_emergency()` 호출 연결
+- **trades INSERT 에러 로깅** — silent pass → logger.error로 변경 (중복 매수 방지 진단 가능)
+- **KIS 500 오류 메시지** — "장외시간 가능성" 오해 표현 제거
 
 ## 알려진 이슈
 
