@@ -567,8 +567,8 @@ def _tool_buy_stock(inputs: dict) -> str:
 
     # 현재가 조회
     try:
-        price_data = gw.get_current_price(ticker)
-        current_price = int(price_data.get("stck_prpr", 0))
+        price_data = gw.get_price(ticker)
+        current_price = int(price_data.get("output", {}).get("stck_prpr", 0))
     except Exception:
         current_price = 0
 
