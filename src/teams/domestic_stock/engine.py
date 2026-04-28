@@ -110,7 +110,7 @@ class DomesticStockEngine:
         global_risk_score = _get_global_risk_score()
 
         # 2. 유니버스 스캔
-        scan = collect()
+        scan = collect(stop_event=self._stop_event)
 
         # 3. 즉시 트리거 경보
         self._check_immediate_alerts(scan)

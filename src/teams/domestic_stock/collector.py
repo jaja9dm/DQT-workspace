@@ -597,7 +597,7 @@ def _scan_ticker_safe(ticker: str, name: str, max_attempts: int = 3) -> StockSna
 
 # ── 통합 수집 (체크포인트 + 재시도) ──────────────────────────
 
-def collect(max_workers: int = 10) -> UniverseScan:
+def collect(max_workers: int = 10, stop_event=None) -> UniverseScan:
     """
     유니버스 전체 스캔.
 
@@ -651,6 +651,9 @@ def collect(max_workers: int = 10) -> UniverseScan:
     logger.info(f"종목 스캔 시작 — {len(remaining)}종목")
 
     for ticker in remaining:
+        if stop_event is not None and stop_event.is_set():
+            logger.info(f"스캔 중단 — 엔진 정지 신호 수신 ({len(scan.snapshots)}종목 처리 완료)")
+            break
         snap = _scan_ticker_safe(ticker, name_map.get(ticker, ""))
         scan.snapshots.append(snap)
 
