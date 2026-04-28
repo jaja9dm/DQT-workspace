@@ -608,13 +608,13 @@ def _save_candles(ticker: str, candles: list[dict]) -> None:
                 """,
                 (ticker, c["time"], c["open"], c["high"], c["low"], c["close"], c["volume"]),
             )
-        # 30봉 초과분 삭제
+        # 30봉 초과분 삭제 (rowid 기반 — NOT IN 서브쿼리보다 빠름)
         execute(
             """
             DELETE FROM intraday_candles
             WHERE ticker = ?
-              AND bar_time NOT IN (
-                  SELECT bar_time FROM intraday_candles
+              AND rowid NOT IN (
+                  SELECT rowid FROM intraday_candles
                   WHERE ticker = ?
                   ORDER BY bar_time DESC
                   LIMIT 30

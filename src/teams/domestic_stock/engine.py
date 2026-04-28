@@ -287,8 +287,8 @@ def _evaluate_active_slots(scan: UniverseScan) -> None:
         # DB에 건강 점수 갱신
         try:
             execute(
-                "UPDATE slot_assignments SET health_score = ?, updated_at = CURRENT_TIMESTAMP WHERE slot = ?",
-                (score, slot),
+                "UPDATE slot_assignments SET health_score = ?, updated_at = CURRENT_TIMESTAMP WHERE slot = ? AND trade_date = ?",
+                (score, slot, today),
             )
         except Exception:
             pass
@@ -305,9 +305,9 @@ def _evaluate_active_slots(scan: UniverseScan) -> None:
                     SET replace_requested = 1,
                         replace_reason    = ?,
                         updated_at        = CURRENT_TIMESTAMP
-                    WHERE slot = ?
+                    WHERE slot = ? AND trade_date = ?
                     """,
-                    (reason, slot),
+                    (reason, slot, today),
                 )
             except Exception:
                 pass

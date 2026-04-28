@@ -1404,6 +1404,11 @@ JSON만 응답:
                     logger.info(f"분할매수 {tranche_no}차 중단: 12:00 이후 추가 진입 차단")
                     break
 
+                # 포지션 존재 여부 재확인 — 5분 대기 중 손절/익절로 청산됐으면 중단
+                if not _has_open_position(ticker):
+                    logger.info(f"분할매수 {tranche_no}차 중단: {ticker} 포지션 이미 청산됨")
+                    break
+
                 # 리스크 레벨 재확인
                 risk = get_current_risk()
                 if risk.get("risk_level", 1) >= _RISK_LEVEL_GATE:
