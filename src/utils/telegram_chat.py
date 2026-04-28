@@ -19,10 +19,9 @@ import threading
 import time
 from datetime import date, datetime
 from typing import Any
-from urllib.error import URLError
-from urllib.request import Request, urlopen
 
 import anthropic
+import requests as _requests
 
 from src.config.settings import settings
 from src.infra.database import execute, fetch_all, fetch_one
@@ -33,7 +32,7 @@ logger = get_logger(__name__)
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 _BASE_URL = "https://api.telegram.org/bot{token}/{method}"
-_POLL_TIMEOUT = 30      # long polling 대기 시간 (초)
+_POLL_TIMEOUT = 10      # long polling 대기 시간 (초) — 짧게 해야 재시작 시 409 회피
 _HISTORY_MAX  = 30      # 채팅별 최대 보관 메시지 수 (15회 왕복)
 _MAX_TOKENS   = 1024
 
@@ -48,28 +47,37 @@ _history_lock = threading.Lock()
 
 def _tg(method: str, payload: dict | None = None, timeout: int = 10) -> dict:
     url = _BASE_URL.format(token=settings.TELEGRAM_BOT_TOKEN, method=method)
-    data = json.dumps(payload or {}).encode("utf-8")
-    req = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     try:
-        with urlopen(req, timeout=timeout) as resp:
-            return json.loads(resp.read())
+        resp = _requests.post(url, json=payload or {}, timeout=timeout)
+        if resp.status_code == 409 and method == "getUpdates":
+            wait = _POLL_TIMEOUT + 5
+            logger.debug(f"Telegram 409: 이전 세션 만료 대기 {wait}s")
+            time.sleep(wait)
+            return {}
+        resp.raise_for_status()
+        return resp.json()
     except Exception as e:
         logger.debug(f"Telegram {method} 오류: {e}")
         return {}
 
 
 def _send_message(chat_id: str, text: str) -> None:
-    text = text[:4000]  # Telegram 메시지 길이 제한
-    _tg("sendMessage", {
+    text = text[:4000]
+    payload = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
-    })
+    }
+    for _ in range(3):  # 최대 3회 재시도
+        result = _tg("sendMessage", payload, timeout=20)
+        if result.get("ok") or result:
+            break
+        time.sleep(2)
 
 
 def _send_typing(chat_id: str) -> None:
-    _tg("sendChatAction", {"chat_id": chat_id, "action": "typing"})
+    _tg("sendChatAction", {"chat_id": chat_id, "action": "typing"}, timeout=5)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -172,6 +180,43 @@ _TOOLS: list[dict] = [
             "required": ["slot", "old_ticker", "new_ticker", "new_name", "reason"],
         },
     },
+    {
+        "name": "buy_stock",
+        "description": (
+            "KIS API로 시장가 매수 주문 실행. "
+            "amount(원) 또는 quantity(주) 중 하나를 지정. "
+            "반드시 종목 분석 후 사용자 동의('사줘', '매수해줘', '응' 등)를 받은 후에만 실행."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker":   {"type": "string", "description": "종목코드 6자리"},
+                "name":     {"type": "string", "description": "종목명"},
+                "amount":   {"type": "integer", "description": "매수 금액 (원). quantity 없으면 필수."},
+                "quantity": {"type": "integer", "description": "매수 수량 (주). amount 없으면 필수."},
+                "reason":   {"type": "string", "description": "매수 근거"},
+            },
+            "required": ["ticker", "name", "reason"],
+        },
+    },
+    {
+        "name": "sell_stock",
+        "description": (
+            "KIS API로 시장가 매도 주문 실행. "
+            "quantity(주) 또는 pct(보유수량 %)로 지정. 미지정 시 전량 매도. "
+            "반드시 사용자 동의('팔아줘', '매도해줘', '응' 등)를 받은 후에만 실행."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker":   {"type": "string", "description": "종목코드 6자리"},
+                "quantity": {"type": "integer", "description": "매도 수량. 미지정 시 전량."},
+                "pct":      {"type": "number", "description": "보유수량 대비 비율 (0~100). quantity 없을 때 사용."},
+                "reason":   {"type": "string", "description": "매도 근거"},
+            },
+            "required": ["ticker", "reason"],
+        },
+    },
 ]
 
 
@@ -197,6 +242,10 @@ def _exec_tool(name: str, inputs: dict) -> str:
             return _tool_remove_from_hot_list(inputs["ticker"], inputs["reason"])
         elif name == "replace_slot":
             return _tool_replace_slot(inputs)
+        elif name == "buy_stock":
+            return _tool_buy_stock(inputs)
+        elif name == "sell_stock":
+            return _tool_sell_stock(inputs)
         return f"알 수 없는 툴: {name}"
     except Exception as e:
         logger.warning(f"툴 실행 오류 [{name}]: {e}")
@@ -334,7 +383,7 @@ def _tool_get_market_condition() -> str:
         "SELECT global_risk_score, korea_market_outlook FROM global_condition ORDER BY created_at DESC LIMIT 1"
     )
     risk_row = fetch_one(
-        "SELECT risk_level FROM risk_status ORDER BY updated_at DESC LIMIT 1"
+        "SELECT risk_level FROM risk_status ORDER BY created_at DESC LIMIT 1"
     )
 
     lines = ["📈 시장 현황"]
@@ -493,6 +542,129 @@ def _tool_replace_slot(inputs: dict) -> str:
     return f"🔄 교체 완료: {inputs['old_ticker']} → {inputs['new_ticker']}\n{result}"
 
 
+def _tool_buy_stock(inputs: dict) -> str:
+    from src.infra.kis_gateway import KISGateway
+    from src.infra.database import execute as db_execute
+
+    ticker  = inputs["ticker"]
+    name    = inputs["name"]
+    reason  = inputs["reason"]
+    gw      = KISGateway()
+
+    # 현재가 조회
+    try:
+        price_data = gw.get_current_price(ticker)
+        current_price = int(price_data.get("stck_prpr", 0))
+    except Exception:
+        current_price = 0
+
+    # 수량 계산
+    quantity = inputs.get("quantity")
+    if not quantity:
+        amount = inputs.get("amount", 0)
+        if amount and current_price:
+            quantity = max(1, int(amount / current_price))
+        else:
+            return "오류: amount(원) 또는 quantity(주) 중 하나를 지정해야 합니다."
+
+    if current_price == 0:
+        return f"오류: {ticker} 현재가 조회 실패"
+    if quantity <= 0:
+        return "오류: 수량은 1 이상이어야 합니다."
+
+    # KIS 시장가 매수
+    try:
+        resp = gw.place_order(ticker, "buy", quantity=quantity, price=0)
+        order_no = resp.get("output", {}).get("ODNO", "")
+    except Exception as e:
+        return f"매수 주문 실패: {e}"
+
+    # trades 테이블 기록
+    try:
+        db_execute(
+            """INSERT INTO trades
+               (date, ticker, name, action, order_type, order_price, exec_price,
+                quantity, tranche, status, signal_source)
+               VALUES (?, ?, ?, 'buy', 'market', ?, ?, ?, 1, 'filled', 'chat')""",
+            (str(date.today()), ticker, name, current_price, current_price, quantity),
+        )
+    except Exception:
+        pass
+
+    total = current_price * quantity
+    return (
+        f"✅ 매수 완료\n"
+        f"  종목: {name}({ticker})\n"
+        f"  수량: {quantity:,}주 @ {current_price:,}원\n"
+        f"  총액: {total:,}원\n"
+        f"  주문번호: {order_no}\n"
+        f"  근거: {reason}"
+    )
+
+
+def _tool_sell_stock(inputs: dict) -> str:
+    from src.infra.kis_gateway import KISGateway
+    from src.infra.database import execute as db_execute
+
+    ticker = inputs["ticker"]
+    reason = inputs["reason"]
+    gw     = KISGateway()
+
+    # 현재 보유수량 조회
+    try:
+        balance = gw.get_balance()
+        holdings = {item["pdno"]: item for item in balance.get("output1", [])}
+        held = holdings.get(ticker)
+        if not held:
+            return f"오류: {ticker} 보유 없음"
+        held_qty   = int(held.get("hldg_qty", 0))
+        held_name  = held.get("prdt_name", ticker)
+        avg_price  = float(held.get("pchs_avg_pric", 0))
+        curr_price = int(held.get("prpr", 0))
+    except Exception as e:
+        return f"보유수량 조회 실패: {e}"
+
+    # 매도 수량 결정
+    quantity = inputs.get("quantity")
+    if not quantity:
+        pct = inputs.get("pct", 100)
+        quantity = max(1, int(held_qty * pct / 100))
+
+    quantity = min(quantity, held_qty)
+    if quantity <= 0:
+        return "오류: 매도 수량이 0입니다."
+
+    # KIS 시장가 매도
+    try:
+        resp = gw.place_order(ticker, "sell", quantity=quantity, price=0)
+        order_no = resp.get("output", {}).get("ODNO", "")
+    except Exception as e:
+        return f"매도 주문 실패: {e}"
+
+    # trades 테이블 기록
+    pnl = (curr_price - avg_price) * quantity if avg_price else 0
+    try:
+        db_execute(
+            """INSERT INTO trades
+               (date, ticker, name, action, order_type, order_price, exec_price,
+                quantity, tranche, status, signal_source, pnl)
+               VALUES (?, ?, ?, 'sell', 'market', ?, ?, ?, 1, 'filled', 'chat', ?)""",
+            (str(date.today()), ticker, held_name, curr_price, curr_price, quantity, pnl),
+        )
+    except Exception:
+        pass
+
+    pnl_sign = "+" if pnl >= 0 else ""
+    return (
+        f"✅ 매도 완료\n"
+        f"  종목: {held_name}({ticker})\n"
+        f"  수량: {quantity:,}주 @ {curr_price:,}원\n"
+        f"  손익: {pnl_sign}{pnl:,.0f}원\n"
+        f"  주문번호: {order_no}\n"
+        f"  근거: {reason}"
+    )
+
+
 # ─────────────────────────────────────────────────────────────
 # Claude 대화 처리
 # ─────────────────────────────────────────────────────────────
@@ -516,11 +688,13 @@ def _system_prompt() -> str:
 - pullback (🔄눌림목): 강한 종목의 일시 조정, 물타기 전략
 
 중요 규칙:
-1. add_to_hot_list, remove_from_hot_list, replace_slot은 실제 매매 시스템을 변경합니다
-2. 변경 전 반드시 분석 근거를 설명하고 "바꿀까요?", "추가할까요?" 형태로 동의를 구하세요
-3. 사용자가 "응", "해줘", "그래", "넣어줘", "빼줘" 등으로 동의하면 즉시 실행하세요
-4. 데이터 없이 추측하지 말고 get_stock_data로 확인 후 판단하세요
-5. 답변은 간결하게, 핵심 수치 중심으로 (텔레그램 메시지 특성상 짧게)"""
+1. add_to_hot_list, remove_from_hot_list, replace_slot, buy_stock, sell_stock은 실제 시스템을 변경합니다
+2. 변경 전 반드시 분석 근거를 설명하고 "바꿀까요?", "살까요?", "팔까요?" 형태로 동의를 구하세요
+3. 사용자가 "응", "해줘", "그래", "사줘", "팔아줘", "매수해줘", "매도해줘" 등으로 동의하면 즉시 실행하세요
+4. 매수 시: get_stock_data로 현재가·지표 확인 → 금액 또는 수량 제안 → 동의 후 buy_stock 실행
+5. 매도 시: get_positions로 보유수량 확인 → 전량/일부 제안 → 동의 후 sell_stock 실행
+6. 데이터 없이 추측하지 말고 반드시 조회 후 판단하세요
+7. 답변은 간결하게, 핵심 수치 중심으로 (텔레그램 메시지 특성상 짧게)"""
 
 
 def _call_claude(chat_id: str, user_text: str) -> str:
@@ -606,6 +780,15 @@ class TelegramChatBot:
         if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
             logger.info("텔레그램 설정 없음 — 챗봇 비활성")
             return
+        # webhook 제거 (409 Conflict 방지) 후 Telegram 서버 이전 세션 만료 대기
+        _tg("deleteWebhook", {"drop_pending_updates": False})
+        time.sleep(2)
+        # 기존 pending 업데이트를 flush해서 offset 동기화
+        result = _tg("getUpdates", {"offset": -1, "timeout": 1}, timeout=5)
+        updates = result.get("result", [])
+        if updates:
+            self._last_update_id = updates[-1]["update_id"]
+        time.sleep(1)
         self._thread.start()
         logger.info("텔레그램 AI 파트너 봇 시작")
 
@@ -626,6 +809,15 @@ class TelegramChatBot:
                     self._last_update_id = max(self._last_update_id, update["update_id"])
                     self._handle_update(update)
                 retry_delay = 5  # 성공 시 리셋
+            except HTTPError as e:
+                if e.code == 409:
+                    # 이전 세션이 Telegram 서버에 남아있음 — 세션 만료까지 대기
+                    logger.debug(f"폴링 409: 이전 세션 대기 중 ({_POLL_TIMEOUT + 5}s)")
+                    time.sleep(_POLL_TIMEOUT + 5)
+                else:
+                    logger.debug(f"폴링 오류: {e}")
+                    time.sleep(retry_delay)
+                    retry_delay = min(retry_delay * 2, 60)
             except Exception as e:
                 logger.debug(f"폴링 오류: {e}")
                 time.sleep(retry_delay)
