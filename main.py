@@ -67,6 +67,16 @@ def main() -> None:
     scheduler = DQTScheduler()
     scheduler.start()
 
+    # 6. 텔레그램 AI 파트너 봇 기동
+    chat_bot = None
+    try:
+        from src.utils.telegram_chat import TelegramChatBot
+        chat_bot = TelegramChatBot()
+        chat_bot.start()
+        logger.info("텔레그램 AI 파트너 봇 기동 완료")
+    except Exception as e:
+        logger.warning(f"텔레그램 AI 파트너 봇 기동 실패 (무시하고 계속): {e}")
+
     # --now 플래그: 장 시간 무관하게 즉시 엔진 기동 (개발·테스트용)
     if "--now" in sys.argv:
         logger.info("--now 플래그: 즉시 엔진 기동")
@@ -77,7 +87,8 @@ def main() -> None:
     scheduler.run_forever()
 
     # run_forever 반환 = 정상 종료 신호 수신
-    # non-daemon 스레드가 남아있어도 강제 종료 (PID 파일은 이미 삭제됨)
+    if chat_bot is not None:
+        chat_bot.stop()
     if os.path.exists(_PID_FILE):
         os.remove(_PID_FILE)
     os._exit(0)
