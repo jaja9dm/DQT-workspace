@@ -1081,6 +1081,7 @@ class PositionMonitorEngine:
             current_price=current_price,
             action="stop_loss",
             reason=f"WS 실시간 트레일링 스톱 (손절선 {trailing_floor:,.0f}원)",
+            avg_price=float(ts.get("entry_price") or 0),
         )
 
     def _liquidate_all(self, positions: list[dict], reason: str) -> list[dict]:
@@ -1095,6 +1096,8 @@ class PositionMonitorEngine:
                 current_price=pos["current_price"],
                 action="stop_loss",
                 reason=reason,
+                avg_price=pos.get("avg_price", 0.0),
+                name=pos.get("name", ""),
             )
             if action:
                 actions.append(action)
