@@ -548,14 +548,16 @@ def _scan_ticker(ticker: str, name: str) -> StockSnapshot:
     snap.at_new_high    = ind.get("at_new_high", False)
     snap.atr_pct        = ind.get("atr_pct", 0.0)
 
-    # 거래대금 가중치: 단타 유동성 가산점 (같은 기술 점수면 거래대금 높은 종목 우선)
-    # 이수페타시스(1.1조)와 나노캠텍(53억)이 동점 되는 문제 해결
-    if trading_value >= 200_000_000_000:    # 2000억↑
-        snap.momentum_score = min(140.0, snap.momentum_score + 25.0)
-    elif trading_value >= 50_000_000_000:   # 500억↑
-        snap.momentum_score = min(140.0, snap.momentum_score + 15.0)
-    elif trading_value >= 10_000_000_000:   # 100억↑
-        snap.momentum_score = min(140.0, snap.momentum_score + 5.0)
+    # 거래대금 가중치: 기관·외인 자금 지속성 반영 — 거래대금이 클수록 세력 집중도 높고 방향성 유지
+    # leader 슬롯 선택 시 소형주 역전 방지를 위해 구간을 세분화하여 대형주 우선
+    if trading_value >= 200_000_000_000:    # 2000억↑ → 시장 주도주급
+        snap.momentum_score = min(150.0, snap.momentum_score + 40.0)
+    elif trading_value >= 100_000_000_000:  # 1000억↑ → 대형 테마 선도
+        snap.momentum_score = min(150.0, snap.momentum_score + 28.0)
+    elif trading_value >= 50_000_000_000:   # 500억↑ → 충분한 유동성
+        snap.momentum_score = min(150.0, snap.momentum_score + 18.0)
+    elif trading_value >= 10_000_000_000:   # 100억↑ → 최소 유동성
+        snap.momentum_score = min(150.0, snap.momentum_score + 5.0)
 
     # 외인+기관 수급 가산 (최대 +10pt) — 세력 매집 종목 우선 선별
     if frgn_net_buy > 0 and inst_net_buy > 0:

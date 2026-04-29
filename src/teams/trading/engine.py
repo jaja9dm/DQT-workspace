@@ -778,6 +778,15 @@ class TradingEngine:
                     f"Gate 4.5 통과: {tk} 갭업 종목 MACD buy_pre 뒤늦은 진입 허용 "
                     f"({now.strftime('%H:%M')})"
                 )
+            # 갭업 5% 이상 종목: 09:20 이전 완전 차단 — 오프닝 노이즈 20분 소거 후 진입
+            # (오늘 058430 패턴: 09:07 +5.8% → 09:25 진입 → 고점 후 손절. 09:20 대기로 방향 확인)
+            if is_c_gap_up and now_hm < 920 and tk not in self._macd_reentry_ok:
+                logger.info(
+                    f"Gate 4.5 차단: {tk} 갭업 종목 09:20 이전 ({now.strftime('%H:%M')}) "
+                    f"— 오프닝 노이즈 소거 대기"
+                )
+                continue
+
             # 09:30 이전: 장 초반 변동성 구간 — 단순 시간 대기 대신 지표 기반 유동 판단
             if now_hm < 930 and tk not in self._macd_reentry_ok:
                 # ① MACD buy_pre 필수: 히스토그램이 음수에서 상승 중이어야 함
