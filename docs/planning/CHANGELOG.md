@@ -4,6 +4,39 @@
 
 ---
 
+## [v2.1.0] - 2026-04-29
+
+### Fixed (실거래 피드백 반영)
+- `src/teams/trading/engine.py`
+  - `breakout` 신호 + RSI < 55 → hard_fail 추가 (BB 돌파인데 모멘텀 미확인 — 포스코스틸리온 유형 차단)
+  - `volume_price_surge` 신호 RSI 예외 완화: OBV 양수 시 95까지 허용 (이수화학 유형 섹터 테마 급등 진입 기회 확보)
+  - OBV 역행+고RSI, StochRSI 극단 차단에 `volume_price_surge` 면제 추가
+- `src/teams/review/engine.py`
+  - Claude API timeout 60초 → 90초 증가
+  - 3회차 실패 시 haiku 모델(`claude-haiku-4-5-20251001`)로 자동 폴백
+
+### Changed
+- `run.sh` — 경로 하드코딩 제거, 스크립트 위치 기준 자동 감지 (어느 머신에서도 동작)
+- 집 노트북 `crontab @reboot` 등록 완료 (회사 노트북 primary / 집 노트북 backup)
+
+---
+
+## [v2.0.0] - 2026-04-28
+
+### Changed (슬롯 시스템 + 대규모 버그 수정)
+- 슬롯 기반 3종목 시스템 전면 도입 — leader/breakout/pullback 역할 분리
+- `src/scheduler/scheduler.py` — 장중 재시작 시 유니버스 자동 재구성
+- `src/infra/sector_rotation.py` — FDR `Dept` 컬럼 인식 추가 (2881종목 정상 로드)
+- `src/utils/notifier.py` — urllib → requests.Session 교체 (텔레그램 타임아웃 해소)
+- `src/utils/telegram_chat.py` — trailing_stop INSERT 컬럼명 수정 (`current_floor` → `trailing_floor`)
+- `src/infra/database.py` — trailing_stop 컬럼 4개 마이그레이션 추가 (`scale_in_count`, `dip_buy_count`, `scalp_exit_price`, `scalp_exit_qty`)
+- `src/teams/domestic_stock/collector.py` — `collect()`에 stop_event 전달, 장 마감 후 즉시 중단
+- `src/teams/position_monitor/engine.py` — `stop()`에서 `ws.stop()` 호출 추가
+- `src/infra/kis_websocket.py` — `stop()` 시 싱글톤 `_instance = None` 초기화
+- `src/teams/risk/engine.py` — 모듈 레벨 `trigger_emergency()` 추가, 글로벌·국내 경보 즉시 연결
+
+---
+
 ## [v1.0.4] - 2026-04-13
 
 ### Added (재부팅 자동 시작)
