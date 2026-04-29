@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DQT-workspace 시스템 기획서 v2.0</title>
+  <title>DQT-workspace 시스템 기획서</title>
   <style>
     :root {
       --bg: #0e0e0c;
@@ -62,838 +62,1088 @@
     #sidebar .logo small {
       font-size: 11px;
       color: var(--text-muted);
+      margin-top: 2px;
+      display: block;
     }
     #sidebar nav a {
       display: block;
-      padding: 6px 20px;
+      padding: 5px 20px;
       font-size: 13px;
       color: var(--text-muted);
       text-decoration: none;
-      transition: color .15s, background .15s;
       border-left: 2px solid transparent;
+      transition: all .15s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
-    #sidebar nav a:hover,
-    #sidebar nav a.active {
-      color: var(--accent);
-      background: rgba(93,202,165,0.06);
+    #sidebar nav a:hover {
+      color: var(--text);
       border-left-color: var(--accent);
+      background: rgba(93,202,165,.06);
     }
-    #sidebar nav .nav-section {
-      padding: 14px 20px 4px;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .1em;
-      text-transform: uppercase;
-      color: var(--text-muted);
-      opacity: .55;
-    }
-    #sidebar nav .nav-sub {
-      padding-left: 32px;
-      font-size: 12px;
-    }
+    #sidebar nav a.h2 { padding-left: 20px; font-weight: 600; color: var(--text); }
+    #sidebar nav a.h3 { padding-left: 32px; font-size: 12px; }
 
-    /* ── 메인 ── */
-    #main {
+    /* ── 메인 콘텐츠 ── */
+    #content {
       flex: 1;
+      max-width: 860px;
       padding: 48px 56px;
-      max-width: 960px;
+      overflow-x: hidden;
     }
 
-    /* ── 섹션 ── */
-    section { margin-bottom: 64px; }
-    section:last-child { margin-bottom: 0; }
-
+    /* ── 헤딩 ── */
     h1 {
-      font-size: 28px;
+      font-size: 26px;
       font-weight: 700;
-      color: var(--accent);
-      margin-bottom: 6px;
-    }
-    h1 small {
-      font-size: 14px;
-      font-weight: 400;
-      color: var(--text-muted);
-      margin-left: 12px;
+      color: var(--text);
+      margin-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 16px;
     }
     h2 {
-      font-size: 20px;
+      font-size: 18px;
       font-weight: 700;
-      color: var(--accent3);
-      margin: 40px 0 16px;
-      padding-bottom: 8px;
+      color: var(--text);
+      margin: 40px 0 12px;
+      padding-top: 8px;
       border-bottom: 1px solid var(--border);
+      padding-bottom: 8px;
     }
     h3 {
-      font-size: 16px;
+      font-size: 15px;
       font-weight: 700;
-      color: var(--accent2);
-      margin: 28px 0 12px;
+      color: var(--accent);
+      margin: 28px 0 10px;
     }
     h4 {
       font-size: 14px;
-      font-weight: 700;
-      color: var(--yellow);
-      margin: 20px 0 8px;
-    }
-    p { margin-bottom: 12px; color: var(--text); }
-
-    /* ── 인트로 메타 ── */
-    .meta-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
-      gap: 12px;
-      margin-bottom: 32px;
-    }
-    .meta-card {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 14px 18px;
-    }
-    .meta-card .label {
-      font-size: 11px;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-      color: var(--text-muted);
-      margin-bottom: 4px;
-    }
-    .meta-card .value {
-      font-size: 15px;
       font-weight: 600;
-      color: var(--accent);
-    }
-
-    /* ── 슬롯 카드 ── */
-    .slot-grid {
-      display: grid;
-      grid-template-columns: repeat(3, 1fr);
-      gap: 16px;
-      margin: 20px 0;
-    }
-    .slot-card {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px;
-    }
-    .slot-card.leader  { border-top: 3px solid var(--yellow); }
-    .slot-card.breakout{ border-top: 3px solid var(--accent); }
-    .slot-card.pullback{ border-top: 3px solid var(--accent2); }
-    .slot-card .slot-icon { font-size: 24px; margin-bottom: 8px; }
-    .slot-card .slot-name {
-      font-size: 16px;
-      font-weight: 700;
-      margin-bottom: 6px;
-    }
-    .slot-card.leader  .slot-name { color: var(--yellow); }
-    .slot-card.breakout .slot-name { color: var(--accent); }
-    .slot-card.pullback .slot-name { color: var(--accent2); }
-    .slot-card .slot-desc {
-      font-size: 13px;
       color: var(--text-muted);
-      line-height: 1.6;
+      margin: 20px 0 8px;
+      text-transform: uppercase;
+      letter-spacing: .05em;
     }
 
-    /* ── 타임라인 ── */
-    .timeline {
-      position: relative;
-      margin: 20px 0;
-      padding-left: 24px;
-    }
-    .timeline::before {
-      content: '';
-      position: absolute;
-      left: 8px;
-      top: 0; bottom: 0;
-      width: 2px;
-      background: var(--border);
-    }
-    .tl-item {
-      position: relative;
-      margin-bottom: 20px;
-    }
-    .tl-item::before {
-      content: '';
-      position: absolute;
-      left: -20px;
-      top: 6px;
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: var(--bg3);
-      border: 2px solid var(--border);
-    }
-    .tl-item.key::before { border-color: var(--accent); background: var(--accent); }
-    .tl-item.warn::before { border-color: var(--yellow); background: var(--yellow); }
-    .tl-item.stop::before { border-color: var(--red); background: var(--red); }
-    .tl-time {
-      font-size: 13px;
-      font-weight: 700;
-      color: var(--accent3);
-      margin-bottom: 2px;
-    }
-    .tl-desc { font-size: 13px; color: var(--text-muted); }
+    /* ── 단락 ── */
+    p { margin-bottom: 12px; }
 
-    /* ── 테이블 ── */
-    table {
-      width: 100%;
-      border-collapse: collapse;
+    /* ── 인용구 ── */
+    blockquote {
+      border-left: 3px solid var(--accent2);
+      padding: 10px 16px;
+      background: rgba(175,169,236,.07);
+      border-radius: 0 6px 6px 0;
+      color: var(--text-muted);
       font-size: 14px;
       margin: 16px 0;
     }
-    th {
+
+    /* ── 리스트 ── */
+    ul, ol {
+      padding-left: 22px;
+      margin-bottom: 12px;
+    }
+    li { margin-bottom: 4px; }
+
+    /* ── 인라인 코드 ── */
+    code {
       background: var(--bg3);
-      color: var(--text-muted);
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: .06em;
-      padding: 10px 14px;
-      text-align: left;
-      border-bottom: 1px solid var(--border);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: "JetBrains Mono", "Fira Code", monospace;
+      font-size: 13px;
+      color: var(--accent);
     }
-    td {
-      padding: 10px 14px;
-      border-bottom: 1px solid rgba(222,220,209,0.06);
-      vertical-align: top;
-    }
-    tr:last-child td { border-bottom: none; }
-    tr:hover td { background: rgba(255,255,255,0.015); }
 
     /* ── 코드 블록 ── */
     pre {
       background: var(--bg3);
       border: 1px solid var(--border);
       border-radius: 8px;
-      padding: 18px 20px;
-      font-size: 13px;
-      font-family: "SF Mono", "Fira Code", monospace;
+      padding: 16px 20px;
       overflow-x: auto;
       margin: 16px 0;
-      line-height: 1.6;
-      color: var(--text);
-    }
-    code {
-      font-family: "SF Mono", "Fira Code", monospace;
-      background: rgba(93,202,165,0.12);
-      color: var(--accent);
-      padding: 1px 6px;
-      border-radius: 4px;
-      font-size: 13px;
     }
     pre code {
       background: none;
+      border: none;
       padding: 0;
-      border-radius: 0;
-      color: inherit;
+      font-size: 13px;
+      color: var(--text);
+      line-height: 1.6;
     }
 
-    /* ── 배지 ── */
-    .badge {
-      display: inline-block;
-      padding: 2px 10px;
-      border-radius: 12px;
-      font-size: 11px;
-      font-weight: 700;
+    /* ── 테이블 ── */
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 16px 0;
+      font-size: 14px;
+    }
+    th {
+      background: var(--bg3);
+      color: var(--text-muted);
+      font-weight: 600;
+      text-align: left;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      font-size: 12px;
+      text-transform: uppercase;
       letter-spacing: .04em;
     }
-    .badge-green  { background: rgba(151,196,89,.18); color: var(--green); }
-    .badge-yellow { background: rgba(239,160,39,.18); color: var(--yellow); }
-    .badge-red    { background: rgba(240,153,123,.18); color: var(--red); }
-    .badge-blue   { background: rgba(133,183,235,.18); color: var(--accent3); }
-    .badge-purple { background: rgba(175,169,236,.18); color: var(--accent2); }
+    td {
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: top;
+    }
+    tr:last-child td { border-bottom: none; }
+    tr:hover td { background: rgba(255,255,255,.02); }
 
-    /* ── 게이트 ── */
-    .gate-list { margin: 12px 0; }
-    .gate-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 12px;
-      padding: 10px 14px;
-      margin-bottom: 8px;
-      background: var(--bg3);
+    /* ── 수평선 ── */
+    hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 32px 0;
+    }
+
+    /* ── 강조 ── */
+    strong { color: var(--text); font-weight: 700; }
+    em { color: var(--text-muted); }
+
+    /* ── 이미지 (SVG) ── */
+    img, svg {
+      max-width: 100%;
       border-radius: 8px;
-      border-left: 3px solid var(--border);
-      font-size: 13px;
-    }
-    .gate-item.block { border-left-color: var(--red); }
-    .gate-item.score { border-left-color: var(--yellow); }
-    .gate-item.final { border-left-color: var(--accent); }
-    .gate-num {
-      font-weight: 700;
-      min-width: 56px;
-      color: var(--text-muted);
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      display: block;
+      margin: 16px auto;
     }
 
-    /* ── 버전 히스토리 ── */
-    .version-list { margin: 12px 0; }
-    .version-item {
-      display: flex;
-      gap: 16px;
-      padding: 8px 0;
-      border-bottom: 1px solid rgba(222,220,209,0.06);
-      font-size: 13px;
+    /* ── 배지 (버전/상태 테이블) ── */
+    td:last-child code {
+      color: var(--yellow);
     }
-    .version-item:last-child { border-bottom: none; }
-    .ver-tag {
-      min-width: 56px;
-      font-weight: 700;
-      color: var(--accent);
-    }
-    .ver-date {
-      min-width: 90px;
-      color: var(--text-muted);
+
+    /* ── 푸터 ── */
+    #footer {
+      margin-top: 64px;
+      padding-top: 20px;
+      border-top: 1px solid var(--border);
       font-size: 12px;
-      padding-top: 1px;
-    }
-
-    /* ── 철학 카드 ── */
-    .phil-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 14px;
-      margin: 16px 0;
-    }
-    .phil-card {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 18px 20px;
-    }
-    .phil-card h4 { margin: 0 0 8px; font-size: 13px; }
-    .phil-card p { font-size: 13px; color: var(--text-muted); margin: 0; }
-
-    /* ── 아키텍처 다이어그램 ── */
-    .arch-box {
-      background: var(--bg3);
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 24px;
-      margin: 16px 0;
-    }
-    .arch-row {
+      color: var(--text-muted);
       display: flex;
-      gap: 12px;
-      margin: 8px 0;
-      align-items: stretch;
+      justify-content: space-between;
     }
-    .arch-node {
-      flex: 1;
-      background: var(--bg2);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 12px 14px;
-      font-size: 13px;
-      text-align: center;
-    }
-    .arch-node .node-name { font-weight: 700; color: var(--accent3); }
-    .arch-node .node-sub  { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-    .arch-node.infra  { border-color: rgba(93,202,165,0.3); }
-    .arch-node.engine { border-color: rgba(133,183,235,0.3); }
-    .arch-node.core   { border-color: rgba(239,160,39,0.3); }
-    .arch-arrow {
-      display: flex;
-      align-items: center;
-      color: var(--border);
-      font-size: 18px;
-      padding: 0 4px;
-    }
-
-    /* ── 리포트 미리보기 ── */
-    .report-preview {
-      background: #1a1a18;
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 20px 24px;
-      font-family: "SF Mono", monospace;
-      font-size: 12.5px;
-      line-height: 1.8;
-      color: var(--text);
-    }
-    .report-preview .rp-head  { color: var(--accent3); font-weight: 700; }
-    .report-preview .rp-green { color: var(--green); }
-    .report-preview .rp-red   { color: var(--red); }
-    .report-preview .rp-yellow{ color: var(--yellow); }
-    .report-preview .rp-muted { color: var(--text-muted); }
 
     /* ── 반응형 ── */
-    @media (max-width: 900px) {
+    @media (max-width: 768px) {
       #sidebar { display: none; }
-      #main { padding: 32px 24px; }
-      .slot-grid { grid-template-columns: 1fr; }
-      .phil-grid { grid-template-columns: 1fr; }
+      #content { padding: 24px 20px; }
     }
   </style>
 </head>
 <body>
 
-<!-- ── 사이드바 ── -->
-<div id="sidebar">
+<aside id="sidebar">
   <div class="logo">
     <span>DQT-workspace</span>
-    <small>Dean Quant Trading v2.0</small>
+    <small>Dean Quant Trading</small>
   </div>
-  <nav>
-    <div class="nav-section">개요</div>
-    <a href="#overview">프로젝트 개요</a>
-    <a href="#philosophy">핵심 철학</a>
-
-    <div class="nav-section">핵심 개념</div>
-    <a href="#slots">3슬롯 시스템</a>
-    <a href="#timeline">타임라인</a>
-
-    <div class="nav-section">아키텍처</div>
-    <a href="#architecture">시스템 구조</a>
-    <a href="#teams">팀 구성</a>
-
-    <div class="nav-section">팀 상세</div>
-    <a href="#team-infra" class="nav-sub">공통 인프라</a>
-    <a href="#team-stock" class="nav-sub">국내 주식팀</a>
-    <a href="#team-market" class="nav-sub">시황팀</a>
-    <a href="#team-risk" class="nav-sub">위기 관리팀</a>
-    <a href="#team-trading" class="nav-sub">매매팀</a>
-    <a href="#team-monitor" class="nav-sub">포지션 감시</a>
-    <a href="#team-report" class="nav-sub">리포트팀</a>
-
-    <div class="nav-section">기타</div>
-    <a href="#techstack">기술 스택</a>
-    <a href="#db">DB 스키마</a>
-    <a href="#risk">리스크 정책</a>
-    <a href="#roadmap">개발 현황</a>
-    <a href="#versions">버전 히스토리</a>
+  <nav id="toc-nav">
+    <a class="h2" href="#버전-히스토리">버전 히스토리</a>
+    <a class="h2" href="#1-프로젝트-개요">1. 프로젝트 개요</a>
+    <a class="h3" href="#목적">목적</a>
+    <a class="h3" href="#핵심-철학">핵심 철학</a>
+    <a class="h2" href="#2-핵심-거래-철학-슬롯-시스템">2. 핵심 거래 철학 — 슬롯 시스템</a>
+    <a class="h3" href="#3슬롯-구조">3슬롯 구조</a>
+    <a class="h3" href="#타임라인">타임라인</a>
+    <a class="h3" href="#슬롯-독립성">슬롯 독립성</a>
+    <a class="h2" href="#3-시스템-아키텍처">3. 시스템 아키텍처</a>
+    <a class="h3" href="#팀-구성-요약">팀 구성 요약</a>
+    <a class="h2" href="#4-팀별-구성-및-역할">4. 팀별 구성 및 역할</a>
+    <a class="h3" href="#공통-인프라-0-1-kis-게이트웨이">공통 인프라 0-1. KIS 게이트웨이</a>
+    <a class="h3" href="#공통-인프라-0-2-주도주-감지-market_leaderspy">공통 인프라 0-2. 주도주 감지 (`market_leaders.py`)</a>
+    <a class="h3" href="#공통-인프라-0-3-섹터-로테이션-캐시-sector_rotationpy">공통 인프라 0-3. 섹터 로테이션 캐시 (`sector_rotation.py`)</a>
+    <a class="h3" href="#공통-인프라-0-4-감성-분석-캐시">공통 인프라 0-4. 감성 분석 캐시</a>
+    <a class="h3" href="#팀-1-1-국내-주식팀">팀 1-1. 국내 주식팀</a>
+    <a class="h3" href="#팀-1-2-국내-시황팀">팀 1-2. 국내 시황팀</a>
+    <a class="h3" href="#팀-1-3-글로벌-시황팀">팀 1-3. 글로벌 시황팀</a>
+    <a class="h3" href="#팀-2-위기-관리팀">팀 2. 위기 관리팀</a>
+    <a class="h3" href="#팀-3-매매팀">팀 3. 매매팀</a>
+    <a class="h3" href="#팀-4-1-포지션-감시">팀 4-1. 포지션 감시</a>
+    <a class="h3" href="#팀-5-로직알고리즘-연구소">팀 5. 로직/알고리즘 연구소</a>
+    <a class="h3" href="#팀-6-리포트팀-일일-복기">팀 6. 리포트팀 (일일 복기)</a>
+    <a class="h2" href="#5-기술-스택">5. 기술 스택</a>
+    <a class="h2" href="#6-db-핵심-테이블">6. DB 핵심 테이블</a>
+    <a class="h2" href="#7-리스크-정책">7. 리스크 정책</a>
+    <a class="h2" href="#8-개발-현황">8. 개발 현황</a>
+    <a class="h2" href="#9-운용-환경">9. 운용 환경</a>
   </nav>
-</div>
+</aside>
 
-<!-- ── 메인 콘텐츠 ── -->
-<div id="main">
-
-  <!-- 헤더 -->
-  <section>
-    <h1>DQT-workspace 시스템 기획서 <small>v2.0.0</small></h1>
-    <p style="color:var(--text-muted); margin-bottom: 24px;">
-      Claude API와 KIS API를 결합한 데일리 퀀트 자동매매 시스템 — 감정 없이 규칙 기반으로 작동
-    </p>
-    <div class="meta-grid">
-      <div class="meta-card">
-        <div class="label">프로젝트</div>
-        <div class="value">DQT-workspace</div>
-      </div>
-      <div class="meta-card">
-        <div class="label">작성자</div>
-        <div class="value">Dean (jaja9dm)</div>
-      </div>
-      <div class="meta-card">
-        <div class="label">버전</div>
-        <div class="value">v2.0.0</div>
-      </div>
-      <div class="meta-card">
-        <div class="label">상태</div>
-        <div class="value" style="color:var(--yellow)">모의투자 운용 중</div>
-      </div>
-      <div class="meta-card">
-        <div class="label">최초 작성</div>
-        <div class="value">2026-04-11</div>
-      </div>
-      <div class="meta-card">
-        <div class="label">최종 갱신</div>
-        <div class="value">2026-04-28</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 개요 -->
-  <section id="overview">
-    <h2>1. 프로젝트 개요</h2>
-    <p>퀀트 투자란 <strong>감이 아닌 숫자와 규칙으로 하는 투자</strong>다. 본 시스템은 Claude API를 두뇌로, KIS API를 실행 엔진으로 사용하여 사람의 감정 개입 없이 매일 자동으로 매수/매도 판단을 내리는 시스템을 구축한다.</p>
-  </section>
-
-  <!-- 핵심 철학 -->
-  <section id="philosophy">
-    <h2>2. 핵심 철학</h2>
-    <div class="phil-grid">
-      <div class="phil-card">
-        <h4>감정 배제</h4>
-        <p>공포에 팔고 탐욕에 사는 것은 인간의 본능이다. 시장이 흔들려도 사전에 정의된 규칙만 실행한다.</p>
-      </div>
-      <div class="phil-card">
-        <h4>규칙 기반</h4>
-        <p>명확한 조건이 충족될 때만 거래한다. 애매한 상황에서는 홀드(hold)가 기본값이다.</p>
-      </div>
-      <div class="phil-card">
-        <h4>3종목 집중 원칙</h4>
-        <p>하루 최대 매수 종목은 3개. 분산이 아닌 집중으로 확신 있는 종목에만 진입. 각 종목은 역할(슬롯)이 다르다.</p>
-      </div>
-      <div class="phil-card">
-        <h4>완전 당일 청산</h4>
-        <p>오버나잇을 하지 않는다. 14:50부터 익절 시작, 15:20까지 전량 강제 청산. 수익이 나더라도 다음 날의 리스크를 안고 가지 않는다.</p>
-      </div>
-      <div class="phil-card">
-        <h4>이성적 손절</h4>
-        <p>손절은 실패가 아니라 자본을 더 나은 기회로 이동시키는 의사결정이다. -5% 손절 시 원금 회복에 5.3%만 필요하지만, -30%까지 버티면 42.9%가 필요하다.</p>
-      </div>
-      <div class="phil-card">
-        <h4>자기학습 피드백</h4>
-        <p>매일 거래 결과를 자동 분석하여 진입 점수 파라미터를 튜닝한다. Claude가 오늘의 패턴을 복기하고 내일의 전략을 제안한다.</p>
-      </div>
-    </div>
-  </section>
-
-  <!-- 3슬롯 시스템 -->
-  <section id="slots">
-    <h2>3. 3슬롯 시스템 (핵심)</h2>
-    <p>매일 아침 9시, 시장이 열리면 3개의 슬롯을 채운다. 각 슬롯은 독립적이며, 역할이 다르다.</p>
-
-    <div class="slot-grid">
-      <div class="slot-card leader">
-        <div class="slot-icon">👑</div>
-        <div class="slot-name">leader</div>
-        <div class="slot-desc">
-          오늘의 주도주.<br>
-          전체 시장 거래대금 1위권 + 수급(외인/기관) + 주도 섹터 대장
-        </div>
-      </div>
-      <div class="slot-card breakout">
-        <div class="slot-icon">🚀</div>
-        <div class="slot-name">breakout</div>
-        <div class="slot-desc">
-          돌파매매.<br>
-          갭업 +3% 이상 or 볼린저밴드 상단 돌파 + OBV 상승
-        </div>
-      </div>
-      <div class="slot-card pullback">
-        <div class="slot-icon">🔄</div>
-        <div class="slot-name">pullback</div>
-        <div class="slot-desc">
-          눌림목매매.<br>
-          오늘 -1%~-5% 하락 중 장중 반등 시작 + OBV 상승 + RSI ≤ 75
-        </div>
-      </div>
-    </div>
-
-    <h3>슬롯 독립성</h3>
-    <p>슬롯 2(breakout)가 이상해도 슬롯 1과 3은 정상 매매한다. 문제가 생긴 슬롯만 교체를 탐색하고, 나머지 슬롯은 영향 없다. 포지션 청산 시 해당 슬롯은 자동으로 <code>empty</code> 상태가 되며, 11:30 이전이라면 새 종목 탐색을 재개한다.</p>
-  </section>
-
-  <!-- 타임라인 -->
-  <section id="timeline">
-    <h2>4. 하루 타임라인</h2>
-    <div class="timeline">
-      <div class="tl-item">
-        <div class="tl-time">09:00</div>
-        <div class="tl-desc">장 개시 — 관찰 모드 시작. 스캔 실행, 주도주·섹터 갱신, Gate 체크</div>
-      </div>
-      <div class="tl-item">
-        <div class="tl-time">09:00 ~ 09:07</div>
-        <div class="tl-desc">관찰 모드 — 슬롯 배정 없이 데이터만 수집. 개장 초 변동성 안정 대기 (3분봉 2개 + 5분봉 1개 완성)</div>
-      </div>
-      <div class="tl-item key">
-        <div class="tl-time">09:07</div>
-        <div class="tl-desc"><strong>슬롯 탐색 시작</strong> — Claude에게 슬롯별 종목 1개씩 요청. 매 5분마다 빈 슬롯만 재탐색</div>
-      </div>
-      <div class="tl-item warn">
-        <div class="tl-time">11:30</div>
-        <div class="tl-desc"><strong>슬롯 탐색 마감</strong> — 신규 슬롯 배정 중단. 이후는 기존 포지션 관리에만 집중</div>
-      </div>
-      <div class="tl-item">
-        <div class="tl-time">14:50 ~ 15:20</div>
-        <div class="tl-desc">수익권 포지션 전량 익절 시작 (수수료 커버 후 순익 구간)</div>
-      </div>
-      <div class="tl-item stop">
-        <div class="tl-time">15:20</div>
-        <div class="tl-desc"><strong>장마감 강제 청산</strong> — 손익 무관 전체 포지션 전량 청산 (오버나잇 없음)</div>
-      </div>
-      <div class="tl-item">
-        <div class="tl-time">15:35</div>
-        <div class="tl-desc">실시간 엔진 정지</div>
-      </div>
-      <div class="tl-item">
-        <div class="tl-time">15:40</div>
-        <div class="tl-desc">일일 복기 리포트 생성 → 텔레그램 발송</div>
-      </div>
-      <div class="tl-item">
-        <div class="tl-time">16:00</div>
-        <div class="tl-desc">연구소 일일 분석, 파라미터 자동 튜닝</div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 아키텍처 -->
-  <section id="architecture">
-    <h2>5. 시스템 아키텍처</h2>
-
-    <div class="arch-box">
-      <div class="arch-row" style="justify-content:center;">
-        <div class="arch-node infra" style="max-width:380px;">
-          <div class="node-name">KIS 게이트웨이 (공통 인프라)</div>
-          <div class="node-sub">토큰 관리 · Rate Limit · 우선순위 큐</div>
-        </div>
-      </div>
-      <div style="text-align:center; color:var(--border); margin: 4px 0;">↓ 모든 KIS API 호출 경유</div>
-
-      <div class="arch-row">
-        <div class="arch-node engine">
-          <div class="node-name">국내 주식팀</div>
-          <div class="node-sub">슬롯 탐색 / 5분</div>
-        </div>
-        <div class="arch-node engine">
-          <div class="node-name">주도주 감지</div>
-          <div class="node-sub">거래대금 TOP30</div>
-        </div>
-        <div class="arch-node engine">
-          <div class="node-name">섹터 로테이션</div>
-          <div class="node-sub">강/약세 섹터 추적</div>
-        </div>
-        <div class="arch-node engine">
-          <div class="node-name">시황팀 (국내/글로벌)</div>
-          <div class="node-sub">30분 / 1시간</div>
-        </div>
-      </div>
-      <div style="text-align:center; color:var(--border); margin: 4px 0;">↓ 공유 DB (SQLite WAL)</div>
-
-      <div class="arch-row" style="justify-content:center;">
-        <div class="arch-node core" style="max-width:280px;">
-          <div class="node-name">위기 관리팀</div>
-          <div class="node-sub">리스크 레벨 1~5 산출 / 15분</div>
-        </div>
-      </div>
-      <div style="text-align:center; color:var(--border); margin: 4px 0;">↓</div>
-
-      <div class="arch-row">
-        <div class="arch-node core">
-          <div class="node-name">매매팀</div>
-          <div class="node-sub">5단계 게이트 → 주문</div>
-        </div>
-        <div class="arch-node core">
-          <div class="node-name">포지션 감시</div>
-          <div class="node-sub">90초 · 슬롯 자동 해제</div>
-        </div>
-        <div class="arch-node core">
-          <div class="node-name">리포트팀</div>
-          <div class="node-sub">복기 · 슬롯 성과 · 텔레그램</div>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 팀 구성 -->
-  <section id="teams">
-    <h2>6. 팀 구성 요약</h2>
-    <table>
-      <thead>
-        <tr><th>팀</th><th>역할</th><th>실행 주기</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><code>KIS 게이트웨이</code></td><td>KIS API 토큰·호출·우선순위 통합 관리</td><td>상시 대기</td></tr>
-        <tr><td><code>주도주 감지</code></td><td>전체 시장 거래대금 TOP30 (KOSPI+KOSDAQ)</td><td>5분 동기</td></tr>
-        <tr><td><code>섹터 로테이션</code></td><td>섹터별 수익률 vs KOSPI → 강/약세 파악</td><td>스캔 동기</td></tr>
-        <tr><td><code>감성 분석 캐시</code></td><td>뉴스 1회 분석 후 DB 공유</td><td>수집 시 즉시</td></tr>
-        <tr><td><strong>국내 주식팀</strong></td><td>슬롯별 종목 선정 — leader/breakout/pullback</td><td>09:07~11:30 / 5분</td></tr>
-        <tr><td><code>장중 MACD팀</code></td><td>Hot List + 보유 포지션 분봉 MACD 감지</td><td>3분</td></tr>
-        <tr><td><code>국내 시황팀</code></td><td>코스피 거시 환경·수급 분석</td><td>30분</td></tr>
-        <tr><td><code>글로벌 시황팀</code></td><td>미국·원유·환율·VIX 모니터링</td><td>1시간 / 24/7</td></tr>
-        <tr><td><code>위기 관리팀</code></td><td>전체 데이터 종합, 리스크 레벨 산출</td><td>15분 + 즉시</td></tr>
-        <tr><td><strong>매매팀</strong></td><td>5단계 게이트 → Claude 최종 판단 → KIS 주문</td><td>45초 폴링</td></tr>
-        <tr><td><strong>포지션 감시</strong></td><td>트레일링 스톱·익절·MACD·장마감 강제청산·슬롯 해제</td><td>90초</td></tr>
-        <tr><td><code>연구소</code></td><td>전략 연구·파라미터 튜닝·백테스트</td><td>16:00 / 일요일</td></tr>
-        <tr><td><strong>리포트팀</strong></td><td>일일 복기 — 슬롯별 성과·패턴 분석·텔레그램</td><td>15:40 배치</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- 팀 상세 -->
-  <section id="team-infra">
-    <h2>7. 팀별 상세</h2>
-
-    <h3>공통 인프라 — 주도주 감지 <code>market_leaders.py</code></h3>
-    <p>"오늘 시장에서 돈이 가장 많이 몰리는 종목"을 실시간으로 파악한다. 우리가 스캔하는 450종목 밖에 있어도 찾아낸다.</p>
-    <p><strong>소스:</strong> KIS 거래대금 순위 API (<code>FHPST01730000</code>)</p>
-    <pre>KOSPI TOP30 + KOSDAQ TOP30
-        ↓ 합산 후 거래대금 내림차순
+<main id="content">
+  <h1 id="dqt-workspace-시스템-기획서">DQT-workspace 시스템 기획서</h1>
+<blockquote>
+<p><strong>Document Summary</strong>
+Claude API와 한국투자증권 KIS API를 결합한 데일리 퀀트 자동매매 시스템의 기획 및 설계 문서.
+감정 없이 규칙 기반으로 작동하는 알고리즘 트레이딩 시스템을 목표로 한다.</p>
+</blockquote>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>프로젝트명</td>
+<td>DQT-workspace (Dean Quant Trading)</td>
+</tr>
+<tr>
+<td>작성자</td>
+<td>Dean (jaja9dm)</td>
+</tr>
+<tr>
+<td>최초 작성일</td>
+<td>2026-04-11</td>
+</tr>
+<tr>
+<td>현재 버전</td>
+<td>v2.1.0</td>
+</tr>
+<tr>
+<td>상태</td>
+<td>모의투자 운용 중 (실거래 피드백 개선 진행)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="버전-히스토리">버전 히스토리</h2>
+<table>
+<thead>
+<tr>
+<th>버전</th>
+<th>날짜</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>v2.1.0</td>
+<td>2026-04-29</td>
+<td>실거래 피드백 반영 — breakout RSI&lt;55 가짜신호 차단, volume_price_surge RSI 95 허용(OBV 양수), 복기 API haiku 폴백, run.sh 머신 독립 실행</td>
+</tr>
+<tr>
+<td>v2.0.0</td>
+<td>2026-04-28</td>
+<td>슬롯 기반 3종목 시스템 전면 도입 — leader/breakout/pullback 역할 분리, 9:07 관찰 모드, 11:30 탐색 마감, 오버나잇 완전 제거</td>
+</tr>
+<tr>
+<td>v1.5.0</td>
+<td>2026-04-27</td>
+<td>거래대금 순위 기반 주도주 감지 (<code>market_leaders.py</code>), 섹터 로테이션 캐시, 자기학습 피드백 루프 통합</td>
+</tr>
+<tr>
+<td>v1.4.0</td>
+<td>2026-04-25</td>
+<td>일일 복기 리포트 완전체 — 잔고·PF·보유시간·연속손절·드로우다운·전환율·놓친기회·내일전략·슬롯 태그</td>
+</tr>
+<tr>
+<td>v1.3.0</td>
+<td>2026-04-23</td>
+<td>상대강도(RS) 지표 추가, 기관 단독 순매수 +3pt 반영, 동일섹터 약포지션 자동 교체</td>
+</tr>
+<tr>
+<td>v1.2.0</td>
+<td>2026-04-20</td>
+<td>파라미터 자동 튜닝 (<code>strategy_params</code>), 진입 신뢰도 점수 Gate 4.2 추가</td>
+</tr>
+<tr>
+<td>v1.1.0</td>
+<td>2026-04-18</td>
+<td>장중 MACD Pre-Cross 3분봉/5분봉 이중 신호, 인트라데이 캔들 저장, WebSocket 자동 재연결</td>
+</tr>
+<tr>
+<td>v1.0.0</td>
+<td>2026-04-13</td>
+<td>첫 실전 모의투자 가동 — 시스템 완성 및 첫 거래일 정상 운용 확인</td>
+</tr>
+<tr>
+<td>v0.2.6</td>
+<td>2026-04-13</td>
+<td>장중 시뮬레이션 추가 — <code>simulate_intraday.py</code> (Brownian Bridge, 실제 OHLCV 기반)</td>
+</tr>
+<tr>
+<td>v0.2.5</td>
+<td>2026-04-13</td>
+<td>시뮬레이션 v2 — 일봉 MACD 필터 + 오프닝 게이트 판단 적용</td>
+</tr>
+<tr>
+<td>v0.2.4</td>
+<td>2026-04-12</td>
+<td>네트워크 복원력 — FDR 3회 재시도 + 체크포인트 기반 중단 재개</td>
+</tr>
+<tr>
+<td>v0.2.3</td>
+<td>2026-04-12</td>
+<td>트레일링 스톱 + 사다리 매수 전략 추가 — 포지션 감시 서브엔진 고도화</td>
+</tr>
+<tr>
+<td>v0.2.2</td>
+<td>2026-04-12</td>
+<td>알림 채널 변경 — 카카오톡/Slack → 텔레그램 Bot API</td>
+</tr>
+<tr>
+<td>v0.2.1</td>
+<td>2026-04-11</td>
+<td>구조적 공백 보완 — KIS 게이트웨이, 감성 분석 캐시, 종목 유니버스, 포지션 감시 서브엔진 추가</td>
+</tr>
+<tr>
+<td>v0.2.0</td>
+<td>2026-04-11</td>
+<td>아키텍처 전면 재설계 — 멀티팀 멀티엔진 구조, 팀별 역할·스케줄·I/O 명세</td>
+</tr>
+<tr>
+<td>v0.1.0</td>
+<td>2026-04-11</td>
+<td>최초 기획 초안 작성</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="1-프로젝트-개요">1. 프로젝트 개요</h2>
+<h3 id="목적">목적</h3>
+<p>퀀트 투자란 <strong>감이 아닌 숫자와 규칙으로 하는 투자</strong>다.
+본 시스템은 Claude API를 두뇌로, KIS API를 실행 엔진으로 사용하여
+사람의 감정 개입 없이 매일 자동으로 매수/매도 판단을 내리는 시스템을 구축한다.</p>
+<h3 id="핵심-철학">핵심 철학</h3>
+<p><strong>감정 배제</strong>
+공포에 팔고 탐욕에 사는 것은 인간의 본능이다. 본 시스템은 시장이 흔들려도 사전에 정의된 규칙만 실행한다.</p>
+<p><strong>규칙 기반</strong>
+명확한 조건이 충족될 때만 거래한다. 애매한 상황에서는 홀드(hold)가 기본값이다.</p>
+<p><strong>이성적 손절 — 기회비용의 최대화</strong>
+손절은 실패가 아니라 <strong>자본을 더 나은 기회로 이동시키는 의사결정</strong>이다.
+손실 -5%에서 손절하면 원금 회복에 5.3%만 필요하지만, -30%까지 버티면 42.9%를 벌어야 원금이다.</p>
+<p><strong>큰 수의 법칙 — 51 대 49의 게임</strong>
+단 한 번의 거래로 승부를 보려 하지 않는다.
+핵심은 <strong>올바른 확률 구조를 충분히 많이 반복하는 것</strong>이다.</p>
+<p><strong>3종목 집중 원칙</strong>
+시장이 좋든 나쁘든 하루 최대 매수 종목은 3개다. 분산이 아닌 집중으로 확신 있는 종목에만 진입한다.
+각 종목은 역할(슬롯)이 다르다 — 주도주, 돌파매매, 눌림목매매.</p>
+<p><strong>완전 당일 청산 원칙</strong>
+오버나잇을 하지 않는다. 모든 포지션은 당일 14:50 이후 수익 확정 또는 15:20까지 강제 청산한다.
+수익이 나더라도 다음 날의 리스크를 안고 가지 않는다.</p>
+<p><strong>자기학습 피드백</strong>
+매일 거래 결과를 자동 분석하여 진입 점수 파라미터를 튜닝한다.
+Claude가 오늘의 패턴을 복기하고, 내일의 전략을 제안한다.</p>
+<hr />
+<h2 id="2-핵심-거래-철학-슬롯-시스템">2. 핵심 거래 철학 — 슬롯 시스템</h2>
+<h3 id="3슬롯-구조">3슬롯 구조</h3>
+<p>매일 아침 9시, 시장이 열리면 3개의 슬롯을 채운다. 각 슬롯은 독립적이다.</p>
+<table>
+<thead>
+<tr>
+<th>슬롯</th>
+<th>역할</th>
+<th>선정 기준</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>👑 <strong>leader</strong></td>
+<td>오늘의 주도주</td>
+<td>전체 시장 거래대금 1위권 + 수급(외인/기관) + 주도 섹터 대장</td>
+</tr>
+<tr>
+<td>🚀 <strong>breakout</strong></td>
+<td>돌파매매</td>
+<td>갭업 +3% 이상 or 볼린저밴드 상단 돌파 + OBV 상승</td>
+</tr>
+<tr>
+<td>🔄 <strong>pullback</strong></td>
+<td>눌림목매매</td>
+<td>오늘 -1%~-5% 하락 중 장중 반등 시작 + OBV 상승 + RSI ≤ 75</td>
+</tr>
+</tbody>
+</table>
+<h3 id="타임라인">타임라인</h3>
+<pre><code>09:00 ─── 장 개시 (관찰 모드 시작)
+           ↓ 개장 초 변동성 안정 대기
+           ↓ 3분봉 2개 + 5분봉 1개 완성 대기
+09:07 ─── 슬롯 탐색 시작 (Claude 분석 → 슬롯 배정)
+           ↓ 5분마다 스캔 반복
+           ↓ 슬롯이 채워지지 않으면 계속 탐색
+11:30 ─── 슬롯 탐색 마감 (신규 슬롯 배정 중단)
+           ↓ 이후는 기존 포지션 관리에만 집중
+14:50 ─── 수익권 포지션 전량 익절 시작
+15:20 ─── 손익 무관 전체 강제 청산
+15:35 ─── 실시간 엔진 정지
+</code></pre>
+<h3 id="슬롯-독립성">슬롯 독립성</h3>
+<p>슬롯 2(breakout)가 이상해도 슬롯 1과 3은 정상 매매한다.
+문제가 생긴 슬롯만 교체를 탐색하고, 나머지 슬롯은 영향 없다.</p>
+<p>포지션 청산 시 해당 슬롯은 자동으로 <code>empty</code> 상태가 되며, 11:30 이전이라면 새 종목 탐색을 재개한다.</p>
+<hr />
+<h2 id="3-시스템-아키텍처">3. 시스템 아키텍처</h2>
+<pre><code>                    ┌──────────────────────────────────┐
+                    │  KIS 게이트웨이 (공통 인프라)      │
+                    │ 토큰 관리 · Rate Limit · 우선순위  │
+                    └────────────────┬─────────────────┘
+                                     │
+┌───────────────────────────────────┼──────────────────────────────────┐
+│              데이터 수집부          │                                   │
+│  ┌───────────────┐ ┌────────────┐  │  ┌─────────────┐                 │
+│  │  국내 주식팀   │ │ 국내 시황팀 │  │  │ 글로벌 시황팀│                 │
+│  │  5분 / 장중   │ │  30분      │  │  │ 1시간 / 24/7│                 │
+│  └──────┬────────┘ └──────┬─────┘  │  └──────┬──────┘                 │
+│         │                │         │         │                        │
+│  ┌──────┴──────────────┐  │         │         │                        │
+│  │ 주도주 감지          │  │         │         │                        │
+│  │ (거래대금 순위 TOP30) │  │         │         │                        │
+│  │ market_leaders.py   │  │         │         │                        │
+│  └──────┬──────────────┘  │         │         │                        │
+│         │                 │         │         │                        │
+│  ┌──────┴──────────────┐  │         │         │                        │
+│  │ 섹터 로테이션 캐시   │  │         │         │                        │
+│  │ sector_rotation.py  │  │         │         │                        │
+│  └──────┬──────────────┘  │         │         │                        │
+│         └─────────────────┴─────────┴─────────┘                       │
+└─────────────────────────────────────────────────────────────────────--─┘
+                           ▼
+          ┌────────────────────────────────┐
+          │         위기 관리팀             │
+          │ 15분 주기 + 이벤트 즉시 트리거   │
+          │ 리스크 레벨 (1~5) · 포지션 한도  │
+          └──────────────┬─────────────────┘
+            ┌────────────┼────────────────┐
+            ▼            ▼                ▼
+     ┌──────────┐ ┌────────────┐ ┌──────────────┐
+     │  매매팀   │◄│   연구소   │ │  리포트팀     │
+     │  5단계   │ │ 장마감·주간│ │  장마감 복기  │
+     │  게이트  │ └────────────┘ └──────┬───────┘
+     └────┬─────┘                       │
+          │                             │ 텔레그램 리포트
+          ▼                             │ (슬롯 태그 포함)
+  ┌───────────────┐                     │
+  │ 포지션 감시    │────체결·손익────────►│
+  │  90초 주기    │                     │
+  └───────┬───────┘                     │
+          │ 손절·익절 → 슬롯 자동 해제    │
+          ▼                             │
+  ┌───────────────┐                     │
+  │ KIS 게이트웨이 │─── 체결 결과 ───────►│
+  └───────────────┘
+</code></pre>
+<h3 id="팀-구성-요약">팀 구성 요약</h3>
+<table>
+<thead>
+<tr>
+<th>팀</th>
+<th>역할</th>
+<th>실행 주기</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>KIS 게이트웨이</strong></td>
+<td>KIS API 토큰·호출·우선순위 통합 관리</td>
+<td>상시 대기</td>
+</tr>
+<tr>
+<td><strong>감성 분석 캐시</strong></td>
+<td>뉴스 1회 수집·분석 후 DB 공유</td>
+<td>수집 시 즉시</td>
+</tr>
+<tr>
+<td><strong>주도주 감지</strong></td>
+<td>전체 시장 거래대금 순위 TOP30 (KOSPI+KOSDAQ)</td>
+<td>5분 (스캔 사이클 동기)</td>
+</tr>
+<tr>
+<td><strong>섹터 로테이션</strong></td>
+<td>섹터별 평균 수익률 vs KOSPI → 강/약세 섹터 파악</td>
+<td>스캔 사이클 동기</td>
+</tr>
+<tr>
+<td>국내 주식팀</td>
+<td>슬롯별 종목 선정 — leader/breakout/pullback</td>
+<td>09:07~11:30 / 5분</td>
+</tr>
+<tr>
+<td>장중 MACD팀</td>
+<td>Hot List + 보유 포지션 분봉 MACD 감지</td>
+<td>3분</td>
+</tr>
+<tr>
+<td>국내 시황팀</td>
+<td>코스피 거시 환경·수급 분석</td>
+<td>30분</td>
+</tr>
+<tr>
+<td>글로벌 시황팀</td>
+<td>미국·원유·환율·VIX 모니터링</td>
+<td>1시간</td>
+</tr>
+<tr>
+<td>위기 관리팀</td>
+<td>전체 데이터 종합, 리스크 레벨 산출</td>
+<td>15분 + 즉시</td>
+</tr>
+<tr>
+<td>매매팀</td>
+<td>5단계 게이트 → Claude 최종 판단 → KIS 주문</td>
+<td>45초 폴링</td>
+</tr>
+<tr>
+<td><strong>포지션 감시</strong></td>
+<td>트레일링 스톱·익절·MACD 조기손절·장마감 강제청산</td>
+<td>90초</td>
+</tr>
+<tr>
+<td>로직/알고리즘 연구소</td>
+<td>전략 연구·개선·백테스트</td>
+<td>16:00 / 일요일 16:30</td>
+</tr>
+<tr>
+<td>리포트팀</td>
+<td>일일 복기 — 슬롯별 성과·패턴 분석·텔레그램 발송</td>
+<td>15:40 배치</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-팀별-구성-및-역할">4. 팀별 구성 및 역할</h2>
+<h3 id="공통-인프라-0-1-kis-게이트웨이">공통 인프라 0-1. KIS 게이트웨이</h3>
+<p><strong>한 줄 목표:</strong> KIS API 토큰과 Rate Limit를 한 곳에서 관리하여 토큰 충돌·만료 장애를 원천 차단한다.</p>
+<table>
+<thead>
+<tr>
+<th>기능</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>토큰 관리</td>
+<td>Access Token 발급·갱신·만료 감지. 만료 30분 전 자동 갱신</td>
+</tr>
+<tr>
+<td>Rate Limit</td>
+<td>초당·분당 한도 큐잉. 우선순위: TRADING &gt; REALTIME &gt; BACKGROUND</td>
+</tr>
+<tr>
+<td>요청 라우팅</td>
+<td>포지션 감시 &gt; 매매팀 &gt; 수집팀 순 우선 처리</td>
+</tr>
+<tr>
+<td>장애 처리</td>
+<td>3회 재시도 → 실패 시 전 팀 알림 + 거래 중지</td>
+</tr>
+<tr>
+<td>모의/실전</td>
+<td><code>KIS_MODE=paper|live</code> 환경변수 1개로 전체 전환</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="공통-인프라-0-2-주도주-감지-market_leaderspy">공통 인프라 0-2. 주도주 감지 (<code>market_leaders.py</code>)</h3>
+<p><strong>한 줄 목표:</strong> "오늘 시장에서 돈이 가장 많이 몰리는 종목"을 실시간으로 파악한다. 우리가 스캔하는 450종목 안에 없어도 찾아낸다.</p>
+<p><strong>데이터 소스:</strong> KIS 거래대금 순위 API (<code>FHPST01730000</code>)</p>
+<p><strong>동작 방식</strong></p>
+<pre><code>KOSPI 거래대금 TOP30 + KOSDAQ 거래대금 TOP30
+        ↓ 합산 후 거래대금 내림차순 정렬
 거래대금 TOP30 확정
-        ↓ 필터: 등락률 > 0 AND (외인 OR 기관 순매수)
-주도주 확정 → 5분 캐시
+        ↓ 필터: 등락률 &gt; 0 AND (외인 OR 기관 순매수)
+주도주 확정 (통과 없으면 TOP5 그대로 사용)
         ↓
-leader 슬롯 선정 우선 활용 + Claude 프롬프트 삽입</pre>
-
-    <h3>공통 인프라 — 섹터 로테이션 <code>sector_rotation.py</code></h3>
-    <p>오늘 어느 섹터에 돈이 몰리는지 실시간으로 추적한다. 강세 섹터(🔥) / 약세 섹터(🧊) 태그를 종목마다 부여해 Claude 판단에 반영한다.</p>
-  </section>
-
-  <section id="team-stock">
-    <h3>국내 주식팀</h3>
-    <p>매일 아침 09:07부터 3개의 슬롯에 종목을 채우고, 슬롯이 해제되면 재탐색한다. Gate 조건 불충족 시 Claude 호출 없이 즉시 스킵하여 API 비용을 최적화한다.</p>
-
-    <h4>Gate 사전 체크</h4>
-    <div class="gate-list">
-      <div class="gate-item block"><span class="gate-num">Gate 1</span>리스크 레벨 ≥ 4 → 전체 스킵</div>
-      <div class="gate-item block"><span class="gate-num">Gate 2</span>글로벌 outlook == negative → 전체 스킵</div>
-      <div class="gate-item block"><span class="gate-num">Gate 3</span>국내 시황 점수 &lt; -0.3 → 전체 스킵</div>
-    </div>
-
-    <h4>Claude 출력 형식</h4>
-    <pre>{
-  "slots": {
-    "leader":   {"ticker": "005930", "signal_type": "sector_momentum", "reason": "반도체 주도섹터 대장·외인+기관 동시매수"},
-    "breakout": {"ticker": "247540", "signal_type": "gap_up_breakout",  "reason": "갭업+3.2%·볼밴상단돌파·OBV↑"},
-    "pullback": {"ticker": "035720", "signal_type": "pullback_rebound", "reason": "눌림-2.1%·장중반등+0.8%·OBV↑"}
+5분 캐시 → Claude 프롬프트에 삽입 + 슬롯 leader 선정 우선 활용
+</code></pre>
+<p><strong>제공 함수</strong>
+- <code>get_leaders(n)</code> — 거래대금+수급 기준 주도주 상위 n개
+- <code>get_leader_tickers()</code> — 주도주 ticker 집합 (O(1) 조회)
+- <code>get_leader_context_str()</code> — Claude 프롬프트 삽입용 문자열</p>
+<hr />
+<h3 id="공통-인프라-0-3-섹터-로테이션-캐시-sector_rotationpy">공통 인프라 0-3. 섹터 로테이션 캐시 (<code>sector_rotation.py</code>)</h3>
+<p><strong>한 줄 목표:</strong> 오늘 어느 섹터에 돈이 몰리는지 실시간으로 추적한다.</p>
+<p><strong>동작 방식</strong></p>
+<pre><code>스캔 사이클마다 전체 종목의 등락률을 섹터별 집계
+        ↓ 섹터별 평균 수익률 vs KOSPI 수익률 비교
+강세 섹터 (vs_kospi &gt; +0.5%) → 🔥 태그
+약세 섹터 (vs_kospi &lt; -0.5%) → 🧊 태그
+        ↓
+sector_strength 테이블에 저장 + Claude 프롬프트에 삽입
+</code></pre>
+<p><strong>활용</strong>
+- leader 슬롯: 강세 섹터 대장주 우선 선정
+- breakout 슬롯: 강세 섹터 내 돌파 종목 우선
+- 동일 섹터 약한 포지션 자동 교체 (position_monitor)</p>
+<hr />
+<h3 id="공통-인프라-0-4-감성-분석-캐시">공통 인프라 0-4. 감성 분석 캐시</h3>
+<p><strong>한 줄 목표:</strong> 같은 뉴스를 여러 팀이 각자 Claude에 보내는 낭비를 제거한다. 수집 즉시 1회만 분석하고 전 팀이 DB에서 읽는다.</p>
+<hr />
+<h3 id="팀-1-1-국내-주식팀">팀 1-1. 국내 주식팀</h3>
+<p><strong>한 줄 목표:</strong> 매일 아침 9:07부터 3개의 슬롯(leader/breakout/pullback)에 종목을 채운다.</p>
+<p><strong>타임라인</strong></p>
+<table>
+<thead>
+<tr>
+<th>시각</th>
+<th>동작</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>09:00</td>
+<td>스캔 시작, 주도주 갱신, Gate 체크</td>
+</tr>
+<tr>
+<td>09:00~09:07</td>
+<td><strong>관찰 모드</strong> — 슬롯 배정 없이 데이터만 수집</td>
+</tr>
+<tr>
+<td>09:07</td>
+<td>슬롯 탐색 시작 — Claude에게 슬롯별 종목 1개씩 요청</td>
+</tr>
+<tr>
+<td>매 5분</td>
+<td>빈 슬롯만 재탐색 (이미 배정된 슬롯은 스킵)</td>
+</tr>
+<tr>
+<td>11:30</td>
+<td>탐색 마감 — 신규 슬롯 배정 중단</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Gate 사전 체크 (API 비용 최적화)</strong></p>
+<table>
+<thead>
+<tr>
+<th>Gate</th>
+<th>조건</th>
+<th>결과</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Gate 1</td>
+<td>리스크 레벨 ≥ 4</td>
+<td>전체 스킵</td>
+</tr>
+<tr>
+<td>Gate 2</td>
+<td>글로벌 outlook == <code>negative</code></td>
+<td>전체 스킵</td>
+</tr>
+<tr>
+<td>Gate 3</td>
+<td>국내 시황 점수 &lt; -0.3</td>
+<td>전체 스킵</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Claude 출력 형식 (슬롯별)</strong></p>
+<pre><code class="language-json">{
+  &quot;slots&quot;: {
+    &quot;leader&quot;:   {&quot;ticker&quot;: &quot;005930&quot;, &quot;signal_type&quot;: &quot;sector_momentum&quot;, &quot;reason&quot;: &quot;반도체 주도섹터 대장·외인+기관 동시매수&quot;},
+    &quot;breakout&quot;: {&quot;ticker&quot;: &quot;247540&quot;, &quot;signal_type&quot;: &quot;gap_up_breakout&quot;,  &quot;reason&quot;: &quot;갭업+3.2%·볼밴상단돌파·OBV↑&quot;},
+    &quot;pullback&quot;: {&quot;ticker&quot;: &quot;035720&quot;, &quot;signal_type&quot;: &quot;pullback_rebound&quot;, &quot;reason&quot;: &quot;눌림-2.1%·장중반등+0.8%·OBV↑&quot;}
   }
-}</pre>
-  </section>
+}
+</code></pre>
+<p><strong>DB 저장</strong>
+- <code>hot_list</code> 테이블: slot 컬럼 포함하여 저장
+- <code>slot_assignments</code> 테이블: 오늘 날짜별 슬롯 상태 관리 (active/empty)</p>
+<p><strong>즉시 트리거</strong>
+- 거래량 5배 이상 급등 → 정규 주기 무시하고 즉시 재스캔
+- 가격 +5% 이상 급등 → 즉시 경보</p>
+<hr />
+<h3 id="팀-1-2-국내-시황팀">팀 1-2. 국내 시황팀</h3>
+<p><strong>한 줄 목표:</strong> "오늘 시장 전체가 사도 되는 날인가"를 판단한다.</p>
+<p><strong>주기:</strong> 장 전 1회 / 장 중 30분 / 장 마감 후 1회</p>
+<p><strong>수집·분석 항목</strong>
+- KOSPI / KOSDAQ 지수 등락률·거래대금
+- 시장 폭: 상승 종목 수 vs 하락 종목 수
+- 외국인·기관·개인 수급 (순매수/순매도)
+- 프로그램 매매 동향
+- 시장 전체 뉴스 감성 분석</p>
+<p><strong>출력 (<code>market_condition</code> 테이블)</strong></p>
+<pre><code class="language-json">{
+  &quot;market_score&quot;: 0.65,
+  &quot;market_direction&quot;: &quot;bullish&quot;,
+  &quot;kospi_change_pct&quot;: 0.8,
+  &quot;foreign_net_buy_bn&quot;: 1200,
+  &quot;summary&quot;: &quot;외국인 강한 순매수, 기관 소폭 매도. 시장 폭 양호.&quot;
+}
+</code></pre>
+<hr />
+<h3 id="팀-1-3-글로벌-시황팀">팀 1-3. 글로벌 시황팀</h3>
+<p><strong>한 줄 목표:</strong> 한국 장에 영향을 줄 해외 변수를 사전에 포착한다.</p>
+<p><strong>주기:</strong> 1시간 / 미국 장 개장·마감 시 즉시</p>
+<p><strong>수집 항목</strong>
+- 미국 3대 지수 (S&amp;P500, NASDAQ, Dow)
+- VIX 공포지수
+- WTI 원유, 금
+- 환율 (USD/KRW 등)
+- 미국 10년물 국채 금리
+- 주요 미국 기술주 (NVDA, AAPL, TSMC)</p>
+<p><strong>즉시 트리거 조건</strong>
+- VIX ≥ 25 → 위기 관리팀 즉시 알림
+- 미국 지수 ±2% 이상 → 위기 관리팀 즉시 알림</p>
+<hr />
+<h3 id="팀-2-위기-관리팀">팀 2. 위기 관리팀</h3>
+<p><strong>한 줄 목표:</strong> "지금 얼마나 위험한가"를 수치로 만들어 매매팀에 전달한다.</p>
+<p><strong>리스크 레벨 정의</strong></p>
+<table>
+<thead>
+<tr>
+<th>레벨</th>
+<th>상태</th>
+<th>포지션 한도</th>
+<th>행동</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 — 안전</td>
+<td>전반 안정</td>
+<td>100%</td>
+<td>정상 매매</td>
+</tr>
+<tr>
+<td>2 — 주의</td>
+<td>일부 불안 요소</td>
+<td>70%</td>
+<td>신중 매매</td>
+</tr>
+<tr>
+<td>3 — 경계</td>
+<td>복수 리스크 신호</td>
+<td>40%</td>
+<td>신규 매수 최소화</td>
+</tr>
+<tr>
+<td>4 — 위험</td>
+<td>복수 위험 신호 동시</td>
+<td>0%</td>
+<td>신규 매수 중단</td>
+</tr>
+<tr>
+<td>5 — 위기</td>
+<td>시장 붕괴 신호</td>
+<td>0%</td>
+<td>전체 청산 + 중지</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="팀-3-매매팀">팀 3. 매매팀</h3>
+<p><strong>한 줄 목표:</strong> 슬롯에 배정된 종목에 대해 5단계 게이트를 통과하면 분할 매수를 실행한다.</p>
+<p><strong>5단계 게이트 (순서대로)</strong></p>
+<pre><code>Gate 1 — 리스크 레벨 ≥ 4 → 즉시 중단
+Gate 2 — 글로벌 outlook negative → 매수 보류
+Gate 3 — 국내 시황 점수 &lt; -0.3 → 매수 보류
+Gate 4 — 종목별 필터 (RSI, 거래량, OBV, ATR, 외인/기관 수급)
+Gate 4.2 — 진입 신뢰도 점수 ≥ 50점 (자기학습 파라미터)
+Gate 5 — Claude 최종 판단 (슬롯 역할·시황·기술 지표 종합)
+</code></pre>
+<p><strong>진입 신뢰도 점수 구성 (Gate 4.2)</strong></p>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>배점</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>외인 + 기관 동시 순매수</td>
+<td>+8pt</td>
+</tr>
+<tr>
+<td>외인 단독 순매수</td>
+<td>+4pt</td>
+</tr>
+<tr>
+<td>기관 단독 순매수</td>
+<td>+3pt</td>
+</tr>
+<tr>
+<td>외인 + 기관 동시 순매도</td>
+<td>-5pt</td>
+</tr>
+<tr>
+<td>OBV 상승 기울기</td>
+<td>+3pt</td>
+</tr>
+<tr>
+<td>주도섹터 소속</td>
+<td>+5pt (sector_hot_bonus)</td>
+</tr>
+<tr>
+<td>약세섹터 소속</td>
+<td>-3pt (sector_cold_penalty)</td>
+</tr>
+<tr>
+<td>시장 주도주</td>
+<td>+4pt</td>
+</tr>
+<tr>
+<td>MACD Pre-Cross 감지</td>
+<td>+5pt</td>
+</tr>
+<tr>
+<td>RSI 과열 (&gt; 72)</td>
+<td>포지션 50% 감축</td>
+</tr>
+<tr>
+<td>RS 하락장 hard fail</td>
+<td>진입 차단</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Hard Fail 조건 (즉시 차단)</strong></p>
+<table>
+<thead>
+<tr>
+<th>조건</th>
+<th>설명</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RSI &gt; 82 (일반 신호)</td>
+<td>극단 과열 차단</td>
+</tr>
+<tr>
+<td>RSI &gt; 95 (갭업/섹터급등 + OBV↑)</td>
+<td>테마 급등 시 완화 허용</td>
+</tr>
+<tr>
+<td>breakout 신호 + RSI &lt; 55</td>
+<td>BB 상단 돌파인데 모멘텀 미확인 (가짜 신호 차단)</td>
+</tr>
+<tr>
+<td>OBV 역행 + RSI &gt; 70</td>
+<td>수급 없는 상승 (갭업/섹터급등 면제)</td>
+</tr>
+<tr>
+<td>StochRSI &gt; 88</td>
+<td>단기 극과매수 (갭업/섹터급등 면제)</td>
+</tr>
+<tr>
+<td>체결강도 &lt; 75</td>
+<td>매도세 압도</td>
+</tr>
+<tr>
+<td>갭업 + BB폭 미확대</td>
+<td>가짜 브레이크아웃</td>
+</tr>
+</tbody>
+</table>
+<p><strong>분할 매수 정책</strong></p>
+<pre><code>1차: 신호 발생 즉시 — 목표 수량의 40%
+2차: 1차 체결 후 추가 확인 시 — 목표 수량의 35%
+3차: 포지션 강화 시 — 목표 수량의 25%
+</code></pre>
+<p><strong>슬롯별 전략 특성</strong></p>
+<table>
+<thead>
+<tr>
+<th>슬롯</th>
+<th>손절 기준</th>
+<th>익절 방식</th>
+<th>특이사항</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>leader</td>
+<td>ATR 기반 동적 손절</td>
+<td>트레일링 스톱 전면 적용</td>
+<td>MACD bearish 시 즉시 1/3 매도</td>
+</tr>
+<tr>
+<td>breakout</td>
+<td>ATR 기반 동적 손절</td>
+<td>트레일링 스톱</td>
+<td>갭업 포지션 특성 상 손절선 넓게</td>
+</tr>
+<tr>
+<td>pullback</td>
+<td>ATR 기반 동적 손절</td>
+<td>트레일링 스톱</td>
+<td>눌림목 반등 확인 후 진입</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="팀-4-1-포지션-감시">팀 4-1. 포지션 감시</h3>
+<p><strong>한 줄 목표:</strong> 매수 후 보유 포지션을 계속 지켜보며 손절·익절·타임컷 조건 도달 시 즉시 주문을 실행하고 슬롯을 자동 해제한다.</p>
+<p><strong>감시 주기:</strong> 90초 (WebSocket 1차 + 거래소 지정가 2차 + 폴링 3차 3중 안전망)</p>
+<p><strong>감시 및 실행 조건</strong></p>
+<pre><code>[트레일링 스톱] — 기본 손절 방식
+  초기 손절선 = 매수가 × (1 - ATR_PCT × 1.5)   ← ATR 기반 동적 산출
+  trigger_pct 수익 달성 시 손절선 상향 시작
+  손절선은 절대 내려가지 않음 (단방향 상승)
+  현재가 ≤ 손절선 → 전량 시장가 매도
 
-  <section id="team-market">
-    <h3>시황팀 (국내 / 글로벌)</h3>
-    <table>
-      <thead><tr><th>팀</th><th>핵심 지표</th><th>주기</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><strong>국내 시황팀</strong></td>
-          <td>KOSPI/KOSDAQ 등락률, 외인·기관 수급, 시장 폭(AD), 뉴스 감성</td>
-          <td>30분</td>
-        </tr>
-        <tr>
-          <td><strong>글로벌 시황팀</strong></td>
-          <td>S&P500·NASDAQ·VIX, WTI, USD/KRW, 미국 10년물 금리, 주요 기술주</td>
-          <td>1시간 / 즉시 트리거</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+[사다리 매수]
+  현재가 ≤ 매수가 × (1 - 20%) 이고 미실행 시 → 추가 매수
 
-  <section id="team-risk">
-    <h3>위기 관리팀</h3>
-    <table>
-      <thead><tr><th>레벨</th><th>상태</th><th>포지션 한도</th><th>행동</th></tr></thead>
-      <tbody>
-        <tr><td><span class="badge badge-green">1 안전</span></td><td>전반 안정</td><td>100%</td><td>정상 매매</td></tr>
-        <tr><td><span class="badge badge-blue">2 주의</span></td><td>일부 불안 요소</td><td>70%</td><td>신중 매매</td></tr>
-        <tr><td><span class="badge badge-yellow">3 경계</span></td><td>복수 리스크 신호</td><td>40%</td><td>신규 매수 최소화</td></tr>
-        <tr><td><span class="badge badge-red">4 위험</span></td><td>복수 위험 신호 동시</td><td>0%</td><td>신규 매수 중단</td></tr>
-        <tr><td><span class="badge badge-red">5 위기</span></td><td>시장 붕괴 신호</td><td>0%</td><td>전체 청산 + 중지</td></tr>
-      </tbody>
-    </table>
-  </section>
+[MACD 분할 익절]
+  MACD bearish + 수익 +5% 이상 → 보유량 1/3 매도
+  MACD sell_prep (5분봉 히스토그램 피크 꺾임) → 손절선 절반으로 타이트
 
-  <section id="team-trading">
-    <h3>매매팀 — 5단계 게이트</h3>
+[동일 섹터 약포지션 교체]
+  같은 섹터의 더 강한 Hot List 종목 존재 + 현재 포지션 수익 &lt; 1.5% → 교체 매도
 
-    <div class="gate-list">
-      <div class="gate-item block"><span class="gate-num">Gate 1</span>리스크 레벨 ≥ 4 → 즉시 중단</div>
-      <div class="gate-item block"><span class="gate-num">Gate 2</span>글로벌 outlook negative → 매수 보류</div>
-      <div class="gate-item block"><span class="gate-num">Gate 3</span>국내 시황 점수 &lt; -0.3 → 매수 보류</div>
-      <div class="gate-item score"><span class="gate-num">Gate 4</span>종목별 필터 — RSI, 거래량, OBV, ATR, 외인/기관 수급, 상대강도(RS)</div>
-      <div class="gate-item score"><span class="gate-num">Gate 4.2</span>진입 신뢰도 점수 ≥ 50점 (자기학습 파라미터)</div>
-      <div class="gate-item final"><span class="gate-num">Gate 5</span>Claude 최종 판단 — 슬롯 역할·시황·기술 지표 종합</div>
-    </div>
+[타임컷]
+  보유 5 영업일 초과 → 전량 청산
 
-    <h4>진입 신뢰도 점수 구성</h4>
-    <table>
-      <thead><tr><th>항목</th><th>배점</th></tr></thead>
-      <tbody>
-        <tr><td>외인 + 기관 동시 순매수</td><td style="color:var(--green)">+8pt</td></tr>
-        <tr><td>외인 단독 순매수</td><td style="color:var(--green)">+4pt</td></tr>
-        <tr><td>기관 단독 순매수</td><td style="color:var(--green)">+3pt</td></tr>
-        <tr><td>외인 + 기관 동시 순매도</td><td style="color:var(--red)">-5pt</td></tr>
-        <tr><td>OBV 상승 기울기</td><td style="color:var(--green)">+3pt</td></tr>
-        <tr><td>주도 섹터 소속</td><td style="color:var(--green)">+5pt</td></tr>
-        <tr><td>약세 섹터 소속</td><td style="color:var(--red)">-3pt</td></tr>
-        <tr><td>시장 주도주 (거래대금 TOP)</td><td style="color:var(--green)">+4pt</td></tr>
-        <tr><td>MACD Pre-Cross 감지</td><td style="color:var(--green)">+5pt</td></tr>
-        <tr><td>RSI 과열 (&gt; 72)</td><td style="color:var(--yellow)">포지션 50% 감축</td></tr>
-        <tr><td>RS 하락장 hard fail</td><td style="color:var(--red)">진입 차단</td></tr>
-      </tbody>
-    </table>
-  </section>
+[장마감 강제청산]
+  14:50~15:20: 수익권이면 전량 익절
+  15:20 이후: 손익 무관 전량 강제 청산
 
-  <section id="team-monitor">
-    <h3>포지션 감시</h3>
-    <p>매수 후 보유 포지션을 계속 지켜보며 손절·익절·타임컷 조건 도달 시 즉시 주문을 실행한다. 청산 완료 시 해당 슬롯을 자동으로 <code>empty</code>로 해제하여 재탐색을 허용한다.</p>
+[긴급 전량 청산]
+  리스크 레벨 5 → 전체 포지션 즉시 청산
+</code></pre>
+<p><strong>슬롯 자동 해제</strong></p>
+<p>포지션 청산 완료 시 → <code>slot_assignments</code> 테이블의 해당 슬롯을 <code>empty</code>로 업데이트 → 11:30 이전이면 국내 주식팀이 다음 사이클에서 해당 슬롯을 재탐색.</p>
+<hr />
+<h3 id="팀-5-로직알고리즘-연구소">팀 5. 로직/알고리즘 연구소</h3>
+<p><strong>주기:</strong> 매일 16:00 + 매주 일요일 16:30 심층 분석</p>
+<p><strong>주요 업무</strong>
+- 당일 신호 vs 실제 결과 비교, 파라미터 자동 튜닝 (<code>strategy_params</code> 테이블)
+- Kelly Criterion 기반 포지션 사이징 최적화
+- 백테스트 (최소 6개월 과거 데이터)
+- 신호 유형별 승률·손익비·기대값 추적</p>
+<hr />
+<h3 id="팀-6-리포트팀-일일-복기">팀 6. 리포트팀 (일일 복기)</h3>
+<p><strong>주기:</strong> 매일 15:40 / 장 마감 후 자동 실행</p>
+<p><strong>한 줄 목표:</strong> 오늘 매매의 패턴을 Claude가 분석하고, 슬롯별 성과와 함께 텔레그램으로 발송한다.</p>
+<p><strong>텔레그램 리포트 구성</strong></p>
+<pre><code>📊 [일일 복기] 2026-04-28
+거래 3건 | 승률 67% (2승/1패) | 🟢 +42,500원
 
-    <h4>3중 안전망</h4>
-    <table>
-      <thead><tr><th>단계</th><th>방식</th><th>반응 속도</th><th>시스템 다운 시</th></tr></thead>
-      <tbody>
-        <tr><td>1차</td><td>KIS WebSocket 실시간 (H0STCNT0)</td><td>tick 즉시</td><td>❌ 동작 안 함</td></tr>
-        <tr><td>2차</td><td>거래소 지정가 사전 주문</td><td>즉시 (거래소)</td><td>✅ 자동 체결</td></tr>
-        <tr><td>3차</td><td>90초 폴링 백업</td><td>최대 90초</td><td>❌ 동작 안 함</td></tr>
-      </tbody>
-    </table>
+💼 포트폴리오 현황
+  총 평가금액: 10,042,500원
+  평가 손익: 🟢 +42,500원 (+0.42%)
 
-    <h4>청산 조건 목록</h4>
-    <table>
-      <thead><tr><th>조건</th><th>동작</th></tr></thead>
-      <tbody>
-        <tr><td>트레일링 스톱 (ATR 기반)</td><td>현재가 ≤ 손절선 → 전량 시장가 매도</td></tr>
-        <tr><td>MACD bearish + 수익 +5%</td><td>보유량 1/3 분할 매도</td></tr>
-        <tr><td>MACD sell_prep (5분봉 피크 꺾임)</td><td>손절선 절반으로 타이트하게 조임</td></tr>
-        <tr><td>동일 섹터 강한 종목 등장</td><td>수익 &lt; 1.5% 포지션 교체 매도</td></tr>
-        <tr><td>타임컷 (5 영업일 초과)</td><td>전량 청산</td></tr>
-        <tr><td>14:50~15:20 수익권</td><td>전량 익절</td></tr>
-        <tr><td>15:20 이후</td><td>손익 무관 전량 강제 청산</td></tr>
-        <tr><td>리스크 레벨 5</td><td>전체 포지션 즉시 청산</td></tr>
-      </tbody>
-    </table>
-  </section>
+📈 KOSPI +0.85% | KOSDAQ +1.20% | 외인 순매수 | 글로벌리스크 3/10
+🏷 상승장·수급 주도
 
-  <section id="team-report">
-    <h3>리포트팀 — 일일 복기</h3>
-    <p>매일 15:40 자동 실행. Claude가 오늘 매매의 패턴을 분석하고 슬롯별 성과와 함께 텔레그램으로 발송한다.</p>
+📐 오늘 성과 지표
+  Profit Factor: 2.40  ✅ 양호
+  평균 보유시간: 38분
+  연속 최대 손절: 0회
+  Hot List 전환율: 12종목 스캔 → 3개 매수 (25%)
 
-    <div class="report-preview">
-      <div class="rp-head">📊 [일일 복기] 2026-04-28</div>
-      거래 3건 | 승률 67% (2승/1패) | <span class="rp-green">🟢 +42,500원</span>
-      <br><br>
-      <div class="rp-head">💼 포트폴리오 현황</div>
-      &nbsp;&nbsp;총 평가금액: 10,042,500원 (주식 3,142,500원 + 예수금 6,900,000원)<br>
-      &nbsp;&nbsp;평가 손익: <span class="rp-green">🟢 +42,500원 (+0.42%)</span>
-      <br><br>
-      📈 KOSPI +0.85% | KOSDAQ +1.20% | 외인 순매수 | 글로벌리스크 3/10<br>
-      🏷 <strong>상승장·수급 주도</strong>
-      <br><br>
-      <div class="rp-head">📐 오늘 성과 지표</div>
-      &nbsp;&nbsp;Profit Factor: 2.40 ✅ 양호<br>
-      &nbsp;&nbsp;평균 보유시간: 38분<br>
-      &nbsp;&nbsp;Hot List 전환율: 12종목 스캔 → 3개 매수 (25%)
-      <br><br>
-      <div class="rp-head">📋 종목별 성과</div>
-      &nbsp;&nbsp;<span class="rp-green">▲ <strong>삼성전자(005930)</strong> 👑주도주  75,000→77,500원  +3.33%  [익절]</span><br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ 신호:섹터모멘텀 | 점수:82 | RSI:58 | 진입:09:15 | 섹터:반도체<br>
-      &nbsp;&nbsp;<span class="rp-green">▲ <strong>에코프로(086520)</strong> 🚀돌파  120,000→123,600원  +3.00%  [익절]</span><br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ 신호:갭업돌파 | 점수:75 | RSI:65 | 진입:09:22 | 섹터:이차전지<br>
-      &nbsp;&nbsp;<span class="rp-red">▼ <strong>카카오(035720)</strong> 🔄눌림목  55,000→53,900원  -2.00%  [손절]</span><br>
-      &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;└ 신호:눌림반등 | 점수:61 | RSI:48 | 진입:10:05
-      <br><br>
-      💬 반도체 섹터 외인 주도 강세를 정확히 포착. 눌림목 OBV 확인 부족.
-    </div>
-  </section>
+📋 종목별 성과
+  ▲ 삼성전자(005930) 👑주도주  75,000→77,500원  +3.33%  [익절]
+      └ 신호:섹터모멘텀 | 점수:82 | RSI:58 | 진입:09:15 | 섹터:반도체
+  ▲ 에코프로(086520) 🚀돌파  120,000→123,600원  +3.00%  [익절]
+      └ 신호:갭업돌파 | 점수:75 | RSI:65 | 진입:09:22 | 섹터:이차전지
+  ▼ 카카오(035720) 🔄눌림목  55,000→53,900원  -2.00%  [손절]
+      └ 신호:눌림반등 | 점수:61 | RSI:48 | 진입:10:05
 
-  <!-- 기술 스택 -->
-  <section id="techstack">
-    <h2>8. 기술 스택</h2>
-    <table>
-      <thead><tr><th>분류</th><th>기술</th><th>용도</th></tr></thead>
-      <tbody>
-        <tr><td>언어</td><td>Python 3.11+</td><td>전체 시스템</td></tr>
-        <tr><td>AI</td><td>Claude API (sonnet-4-6 / haiku-4-5)</td><td>분석 / 판단 엔진</td></tr>
-        <tr><td>국내 실시간</td><td>KIS API (시세·수급·잔고·주문)</td><td>장중 실시간 + 주문 실행</td></tr>
-        <tr><td>국내 과거</td><td>FinanceDataReader, pandas</td><td>일봉 OHLCV, 지표 계산</td></tr>
-        <tr><td>해외</td><td>yfinance (Yahoo Finance)</td><td>미국 지수·VIX·환율·원자재</td></tr>
-        <tr><td>기술 지표</td><td>pandas-ta</td><td>RSI, MACD, 볼린저밴드, ATR, OBV</td></tr>
-        <tr><td>DB</td><td>SQLite (WAL 모드)</td><td>거래 이력 / 팀 간 공유</td></tr>
-        <tr><td>스케줄러</td><td>APScheduler</td><td>자동 실행</td></tr>
-        <tr><td>알림</td><td>텔레그램 Bot API</td><td>실시간 경보 + 일일 복기 리포트</td></tr>
-        <tr><td>WebSocket</td><td>KIS H0STCNT0</td><td>실시간 체결 감지 (1차 손절 트리거)</td></tr>
-        <tr><td>공시</td><td>KIND RSS</td><td>실시간 공시 수신</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- DB 스키마 -->
-  <section id="db">
-    <h2>9. DB 핵심 테이블</h2>
-    <pre>-- 슬롯 배정 현황 (당일 기준)
+💬 [Claude 총평] 반도체 섹터 외인 주도 강세를 정확히 포착. 눌림목 진입 타이밍은 OBV 확인 부족.
+✅ 잘 된 것 / ⚠️ 아쉬운 것 / 🔧 내일 개선 포인트
+📅 내일 주목 종목 제안
+</code></pre>
+<p><strong>Claude 분석 항목</strong>
+- 시황 성격 태그 (상승장·하락장·박스권·섹터 주도 등)
+- 슬롯별 성과 비교
+- 신호유형별 성과 / RSI 구간별 / 진입점수별 / 시간대별
+- 섹터 강/약세별 성과
+- 놓친 기회 (Hot List에 올랐으나 미매수)
+- 자기학습 파라미터 조정 제안</p>
+<hr />
+<h2 id="5-기술-스택">5. 기술 스택</h2>
+<table>
+<thead>
+<tr>
+<th>분류</th>
+<th>기술</th>
+<th>용도</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>언어</td>
+<td>Python 3.11+</td>
+<td>전체 시스템</td>
+</tr>
+<tr>
+<td>AI</td>
+<td>Claude API (claude-sonnet-4-6, claude-haiku-4-5)</td>
+<td>분석 / 판단 엔진</td>
+</tr>
+<tr>
+<td>국내 실시간</td>
+<td>KIS API (시세·수급·잔고·주문)</td>
+<td>장중 실시간 + 주문 실행</td>
+</tr>
+<tr>
+<td>국내 과거</td>
+<td>FinanceDataReader, pandas</td>
+<td>일봉 OHLCV, 지표 계산</td>
+</tr>
+<tr>
+<td>해외</td>
+<td>yfinance (Yahoo Finance)</td>
+<td>미국 지수·VIX·환율·원자재</td>
+</tr>
+<tr>
+<td>공시</td>
+<td>KIND RSS</td>
+<td>실시간 공시 수신</td>
+</tr>
+<tr>
+<td>경제지표</td>
+<td>FRED API</td>
+<td>FOMC·CPI 등 발표 일정</td>
+</tr>
+<tr>
+<td>지표</td>
+<td>pandas-ta</td>
+<td>RSI, MACD, 볼린저밴드, ATR, OBV 등</td>
+</tr>
+<tr>
+<td>DB</td>
+<td>SQLite (WAL 모드)</td>
+<td>거래 이력 / 팀 간 공유</td>
+</tr>
+<tr>
+<td>스케줄러</td>
+<td>APScheduler</td>
+<td>자동 실행</td>
+</tr>
+<tr>
+<td>알림</td>
+<td>텔레그램 Bot API</td>
+<td>실시간 경보 + 일일 복기 리포트</td>
+</tr>
+<tr>
+<td>WebSocket</td>
+<td>KIS H0STCNT0</td>
+<td>실시간 체결 감지 (1차 손절 트리거)</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="6-db-핵심-테이블">6. DB 핵심 테이블</h2>
+<pre><code class="language-sql">-- 슬롯 배정 현황 (당일 기준)
 CREATE TABLE slot_assignments (
   slot        TEXT PRIMARY KEY,  -- 'leader' | 'breakout' | 'pullback'
-  ticker      TEXT,  name TEXT,  signal_type TEXT,  reason TEXT,
+  ticker      TEXT,
+  name        TEXT,
+  signal_type TEXT,
+  reason      TEXT,
   trade_date  DATE NOT NULL,
   status      TEXT DEFAULT 'empty',  -- 'active' | 'empty'
   assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -902,161 +1152,185 @@ CREATE TABLE slot_assignments (
 
 -- Hot List (국내 주식팀 출력)
 CREATE TABLE hot_list (
-  id INTEGER PRIMARY KEY,
-  ticker TEXT, name TEXT, signal_type TEXT,
-  volume_ratio REAL, price_change_pct REAL, rsi REAL,
-  sector TEXT, reason TEXT,
-  momentum_score REAL, obv_slope REAL, day_range_pos REAL,
-  stoch_rsi REAL, bb_width_ratio REAL,
-  trading_value INTEGER, exec_strength REAL,
-  rs_daily REAL, rs_5d REAL,
-  frgn_net_buy INTEGER, inst_net_buy INTEGER, atr_pct REAL,
-  slot TEXT,  -- 'leader' | 'breakout' | 'pullback'
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  id               INTEGER PRIMARY KEY,
+  ticker           TEXT,    name TEXT,    signal_type TEXT,
+  volume_ratio     REAL,    price_change_pct REAL,
+  rsi              REAL,    sector TEXT,  reason TEXT,
+  momentum_score   REAL,    obv_slope REAL,   day_range_pos REAL,
+  stoch_rsi        REAL,    bb_width_ratio REAL,
+  trading_value    INTEGER, exec_strength REAL,
+  rs_daily         REAL,    rs_5d REAL,
+  frgn_net_buy     INTEGER, inst_net_buy INTEGER,
+  atr_pct          REAL,
+  slot             TEXT,    -- 'leader' | 'breakout' | 'pullback'
+  created_at       DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 진입 컨텍스트 (자기학습 피드백)
 CREATE TABLE trade_context (
-  trade_id INTEGER PRIMARY KEY,
-  ticker TEXT, trade_date DATE,
-  signal_type TEXT, rsi REAL, entry_score REAL,
-  momentum_score REAL, rs_daily REAL, rs_5d REAL,
-  sector TEXT, exec_strength REAL, entry_hhmm TEXT
+  trade_id       INTEGER PRIMARY KEY,
+  ticker         TEXT,    trade_date DATE,
+  signal_type    TEXT,    rsi REAL,    entry_score REAL,
+  momentum_score REAL,    rs_daily REAL,  rs_5d REAL,
+  sector         TEXT,    exec_strength REAL,
+  ob_imbalance   REAL,    entry_hhmm TEXT,
+  created_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 자기학습 파라미터
 CREATE TABLE strategy_params (
-  param_name TEXT PRIMARY KEY,
-  current_val REAL, default_val REAL,
-  min_val REAL, max_val REAL,
-  description TEXT, tuned_by TEXT
+  param_name   TEXT PRIMARY KEY,
+  current_val  REAL,    default_val REAL,
+  min_val      REAL,    max_val REAL,
+  description  TEXT,    tuned_by TEXT,
+  updated_at   DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 섹터 강도
 CREATE TABLE sector_strength (
-  sector TEXT PRIMARY KEY,
-  avg_ret_1d REAL, vs_kospi REAL, stock_count INTEGER,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  sector      TEXT PRIMARY KEY,
+  avg_ret_1d  REAL,    vs_kospi REAL,
+  stock_count INTEGER,
+  updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
 -- 종목별 누적 패턴 통계
 CREATE TABLE ticker_stats (
-  ticker TEXT PRIMARY KEY, name TEXT,
-  total_trades INTEGER, win_count INTEGER, loss_count INTEGER,
-  win_rate REAL, avg_pnl_pct REAL,
-  avg_win_pct REAL, avg_loss_pct REAL,
-  avg_hold_minutes REAL, best_entry_hour INTEGER,
-  frgn_buy_win_rate REAL, inst_buy_win_rate REAL,
-  best_signal_type TEXT, notes TEXT
-);</pre>
-  </section>
-
-  <!-- 리스크 정책 -->
-  <section id="risk">
-    <h2>10. 리스크 정책</h2>
-    <table>
-      <thead><tr><th>정책</th><th>내용</th></tr></thead>
-      <tbody>
-        <tr><td>3종목 상한</td><td>하루 최대 매수 3종목 (슬롯 수와 동일)</td></tr>
-        <tr><td>완전 당일 청산</td><td>오버나잇 없음. 14:50 익절 시작, 15:20 강제 청산</td></tr>
-        <tr><td>분할 매수</td><td>단일 진입 금액은 전체 자산의 10% 이하</td></tr>
-        <tr><td>일일 최대 손실</td><td>전체 자산의 3% → 자동 거래 중지</td></tr>
-        <tr><td>ATR 기반 손절</td><td>종목 변동성에 따라 동적 산출 (고정 % 불사용)</td></tr>
-        <tr><td>실전 전환 조건</td><td>모의투자 3개월 + 수익률 플러스 확인</td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- 개발 현황 -->
-  <section id="roadmap">
-    <h2>11. 개발 현황</h2>
-    <table>
-      <thead><tr><th>단계</th><th>내용</th><th>상태</th></tr></thead>
-      <tbody>
-        <tr><td>Phase 0</td><td>프로젝트 구조 세팅, 문서화</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 1</td><td>데이터 수집 모듈 개발</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 2</td><td>Claude API 연동 및 분석 모듈</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 3</td><td>KIS API 모의투자 연동</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 4</td><td>전략 로직 구현</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 5</td><td>스케줄러 + 알림 시스템</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 5.5</td><td>슬롯 기반 3종목 시스템 + 주도주 감지</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 5.6</td><td>자기학습 피드백 루프 + 일일 복기 리포트</td><td><span class="badge badge-green">✅ 완료</span></td></tr>
-        <tr><td>Phase 6</td><td>3개월 모의투자 검증</td><td><span class="badge badge-yellow">🔄 진행 중</span></td></tr>
-        <tr><td>Phase 7</td><td>실전 투자 전환</td><td><span class="badge badge-blue">⬜ 예정</span></td></tr>
-      </tbody>
-    </table>
-  </section>
-
-  <!-- 버전 히스토리 -->
-  <section id="versions">
-    <h2>12. 버전 히스토리</h2>
-    <div class="version-list">
-      <div class="version-item">
-        <span class="ver-tag">v2.0.0</span>
-        <span class="ver-date">2026-04-28</span>
-        <span>슬롯 기반 3종목 시스템 전면 도입 — leader/breakout/pullback 역할 분리, 9:07 관찰 모드, 11:30 탐색 마감, 오버나잇 완전 제거</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v1.5.0</span>
-        <span class="ver-date">2026-04-27</span>
-        <span>거래대금 순위 기반 주도주 감지, 섹터 로테이션 캐시, 자기학습 피드백 루프 통합</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v1.4.0</span>
-        <span class="ver-date">2026-04-25</span>
-        <span>일일 복기 리포트 완전체 — 잔고·PF·보유시간·연속손절·드로우다운·전환율·슬롯 태그</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v1.3.0</span>
-        <span class="ver-date">2026-04-23</span>
-        <span>상대강도(RS) 지표, 기관 단독 +3pt, 동일섹터 약포지션 자동 교체</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v1.2.0</span>
-        <span class="ver-date">2026-04-20</span>
-        <span>파라미터 자동 튜닝, 진입 신뢰도 점수 Gate 4.2</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v1.1.0</span>
-        <span class="ver-date">2026-04-18</span>
-        <span>장중 MACD Pre-Cross 3분봉/5분봉 이중 신호, 인트라데이 캔들 저장</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v1.0.0</span>
-        <span class="ver-date">2026-04-13</span>
-        <span>첫 실전 모의투자 가동 — 시스템 완성 및 첫 거래일 정상 운용 확인</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v0.2.x</span>
-        <span class="ver-date">2026-04-11~13</span>
-        <span>아키텍처 전면 재설계 — 멀티팀 구조, 트레일링 스톱, 텔레그램 알림, 시뮬레이션</span>
-      </div>
-      <div class="version-item">
-        <span class="ver-tag">v0.1.0</span>
-        <span class="ver-date">2026-04-11</span>
-        <span>최초 기획 초안 작성</span>
-      </div>
-    </div>
-  </section>
-
-</div>
+  ticker            TEXT PRIMARY KEY,
+  name              TEXT,
+  total_trades      INTEGER,  win_count INTEGER,  loss_count INTEGER,
+  win_rate          REAL,     avg_pnl_pct REAL,
+  avg_win_pct       REAL,     avg_loss_pct REAL,
+  avg_hold_minutes  REAL,     best_entry_hour INTEGER,
+  frgn_buy_win_rate REAL,     inst_buy_win_rate REAL,
+  best_signal_type  TEXT,     notes TEXT,
+  last_updated      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+</code></pre>
+<hr />
+<h2 id="7-리스크-정책">7. 리스크 정책</h2>
+<ul>
+<li><strong>3종목 상한:</strong> 하루 최대 매수 3종목 (슬롯 수와 동일)</li>
+<li><strong>당일 청산:</strong> 오버나잇 없음. 14:50부터 익절 시작, 15:20 강제 청산</li>
+<li><strong>분할 매수:</strong> 단일 진입 금액은 전체 자산의 10% 이하</li>
+<li><strong>일일 최대 손실:</strong> 전체 자산의 3% → 자동 거래 중지</li>
+<li><strong>ATR 기반 손절:</strong> 종목 변동성에 따라 손절선 동적 산출 (고정 % 불사용)</li>
+<li><strong>실전 전환 조건:</strong> 모의투자 3개월 + 수익률 플러스 확인</li>
+</ul>
+<hr />
+<h2 id="8-개발-현황">8. 개발 현황</h2>
+<table>
+<thead>
+<tr>
+<th>단계</th>
+<th>내용</th>
+<th>상태</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Phase 0</td>
+<td>프로젝트 구조 세팅, 문서화</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 1</td>
+<td>데이터 수집 모듈 개발</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 2</td>
+<td>Claude API 연동 및 분석 모듈</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 3</td>
+<td>KIS API 모의투자 연동</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 4</td>
+<td>전략 로직 구현</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 5</td>
+<td>스케줄러 + 알림 시스템</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 5.5</td>
+<td>슬롯 기반 3종목 시스템 + 주도주 감지</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 5.6</td>
+<td>자기학습 피드백 루프 + 일일 복기 리포트</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
+<td>Phase 6</td>
+<td>3개월 모의투자 검증 (실거래 피드백 루프)</td>
+<td>🔄 진행 중</td>
+</tr>
+<tr>
+<td>Phase 7</td>
+<td>실전 투자 전환</td>
+<td>⬜ 예정</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="9-운용-환경">9. 운용 환경</h2>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>내용</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>모드</td>
+<td><code>KIS_MODE=paper</code> (모의투자)</td>
+</tr>
+<tr>
+<td>실행 방식</td>
+<td><code>crontab @reboot</code> → <code>run.sh</code> → <code>python main.py</code></td>
+</tr>
+<tr>
+<td>실행 노트북</td>
+<td>회사 노트북 (primary) / 집 노트북 (backup)</td>
+</tr>
+<tr>
+<td>실전 전환 방법</td>
+<td><code>.env</code>에서 <code>KIS_MODE=live</code> + 실계좌 앱키로 변경</td>
+</tr>
+</tbody>
+</table>
+  <div id="footer">
+    <span>DQT-workspace 기획서</span>
+    <span>최종 업데이트: 2026-04-29</span>
+  </div>
+</main>
 
 <script>
-  // 스크롤 위치에 따라 사이드바 활성 링크 업데이트
-  const sections = document.querySelectorAll('section[id]');
-  const navLinks = document.querySelectorAll('#sidebar nav a');
-
-  const observer = new IntersectionObserver((entries) => {
-    entries.forEach(entry => {
-      if (entry.isIntersecting) {
-        navLinks.forEach(link => {
-          link.classList.toggle('active', link.getAttribute('href') === '#' + entry.target.id);
-        });
+  // 스크롤 시 현재 섹션 사이드바 하이라이트
+  const links = document.querySelectorAll('#toc-nav a');
+  const headings = Array.from(document.querySelectorAll('h2, h3'));
+  window.addEventListener('scroll', () => {
+    const y = window.scrollY + 80;
+    let current = '';
+    headings.forEach(h => { if (h.offsetTop <= y) current = h.id; });
+    links.forEach(a => {
+      a.style.color = '';
+      a.style.borderLeftColor = '';
+      if (a.getAttribute('href') === '#' + current) {
+        a.style.color = 'var(--accent)';
+        a.style.borderLeftColor = 'var(--accent)';
       }
     });
-  }, { rootMargin: '-20% 0px -70% 0px' });
-
-  sections.forEach(section => observer.observe(section));
+  });
 </script>
 
 </body>
