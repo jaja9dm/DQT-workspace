@@ -1,22 +1,35 @@
 #!/bin/bash
-# DQT 실행 래퍼 — launchd가 직접 호출
+# DQT 실행 래퍼 — 어떤 머신에서도 동작 (경로 자동 감지)
 
-WORKSPACE=/Users/dongmin.jung/Documents/DQT-workspace
-VENV=$WORKSPACE/venv
-PYTHON=/Library/Developer/CommandLineTools/Library/Frameworks/Python3.framework/Versions/3.9/bin/python3.9
-LOG=$WORKSPACE/logs/run.log
+# 이 스크립트가 있는 디렉토리를 WORKSPACE로 사용
+WORKSPACE="$(cd "$(dirname "$0")" && pwd)"
+VENV="$WORKSPACE/venv"
+LOG="$WORKSPACE/logs/run.log"
 
-cd "$WORKSPACE" || exit 78
+mkdir -p "$WORKSPACE/logs"
+cd "$WORKSPACE" || exit 1
 
-# 기동 시 환경 기록 (launchd 디버깅용)
 echo "=== DQT start $(date) ===" >> "$LOG"
-echo "PYTHON=$PYTHON exists=$(test -f $PYTHON && echo yes || echo no)" >> "$LOG"
-echo "VENV=$VENV" >> "$LOG"
+echo "WORKSPACE=$WORKSPACE" >> "$LOG"
 
-# venv site-packages를 명시적으로 PYTHONPATH에 추가
-export PYTHONPATH="$VENV/lib/python3.9/site-packages:$PYTHONPATH"
+# venv 존재 확인
+if [ ! -d "$VENV" ]; then
+    echo "ERROR: venv not found at $VENV" >> "$LOG"
+    exit 1
+fi
+
+# venv의 python 자동 감지 (python3.x 버전 무관)
+PYTHON=$(ls "$VENV/bin/python"* 2>/dev/null | grep -E 'python[0-9]' | head -1)
+[ -z "$PYTHON" ] && PYTHON="$VENV/bin/python3"
+[ -z "$PYTHON" ] && PYTHON="$VENV/bin/python"
+
+echo "PYTHON=$PYTHON" >> "$LOG"
+
+# venv 환경 활성화
+PYTHON_VERSION=$(ls "$VENV/lib/" 2>/dev/null | grep "^python" | head -1)
+export PYTHONPATH="$VENV/lib/$PYTHON_VERSION/site-packages:$PYTHONPATH"
 export VIRTUAL_ENV="$VENV"
 export PATH="$VENV/bin:$PATH"
 
-echo "exec $PYTHON main.py" >> "$LOG"
+echo "exec python main.py" >> "$LOG"
 exec "$PYTHON" main.py "$@"
