@@ -218,6 +218,11 @@ class KISGateway:
             [{"ticker", "name", "price", "change_pct", "trading_value",
               "volume", "frgn_net_buy", "inst_net_buy"}, ...]
         """
+        # 모의투자 서버는 ranking/trading-value 엔드포인트 미지원 (404)
+        from src.config.settings import settings as _s
+        if _s.KIS_MODE == "paper":
+            return []
+
         try:
             resp = self._request(
                 method="GET",
@@ -452,8 +457,8 @@ class KISGateway:
                 req.result = result
             except Exception as e:
                 msg = str(e)
-                if "500" in msg or "장외시간" in msg:
-                    logger.debug(f"KIS API 서버 오류 (500): {e}")
+                if "500" in msg or "장외시간" in msg or "404" in msg:
+                    logger.debug(f"KIS API 오류 (무시): {e}")
                 else:
                     logger.error(f"KIS API 오류: {e}")
                 req.error = e

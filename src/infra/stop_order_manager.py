@@ -35,6 +35,23 @@ _KIS_CANCEL_PATH = "/uapi/domestic-stock/v1/trading/order-rvsecncl"
 # Public API
 # ──────────────────────────────────────────────
 
+def _tick_unit(price: float) -> int:
+    """KIS 호가 단위 반환."""
+    if price < 1_000:    return 1
+    if price < 5_000:    return 5
+    if price < 10_000:   return 10
+    if price < 50_000:   return 50
+    if price < 100_000:  return 100
+    if price < 500_000:  return 500
+    return 1_000
+
+
+def _floor_to_tick(price: float) -> int:
+    """가격을 호가 단위 아래로 내림 (손절가는 보수적으로 내림)."""
+    unit = _tick_unit(price)
+    return int(price // unit) * unit
+
+
 def place_stop_order(ticker: str, quantity: int, stop_price: float) -> bool:
     """
     KIS에 지정가 손절 매도 주문 제출.
@@ -71,7 +88,7 @@ def place_stop_order(ticker: str, quantity: int, stop_price: float) -> bool:
                 "PDNO": ticker,
                 "ORD_DVSN": "00",               # 지정가
                 "ORD_QTY": str(quantity),
-                "ORD_UNPR": str(int(stop_price)),
+                "ORD_UNPR": str(_floor_to_tick(stop_price)),
                 "ALGO_NO": "",
             },
             tr_id=tr_id,

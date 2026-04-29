@@ -52,6 +52,11 @@ _INTERVAL_SEC = 300          # 5분
 _KIS_ORDER_PATH = "/uapi/domestic-stock/v1/trading/order-cash"
 _KIS_PRICE_PATH = "/uapi/domestic-stock/v1/quotations/inquire-price"
 
+# 예수금 캐시 — KIS API 500 실패 시 마지막 성공값 사용
+_cash_cache_value: float = 0.0
+_cash_cache_ts: float = 0.0
+_CASH_CACHE_TTL_SEC = 1800  # 30분
+
 # 분할 매수 비율 — 1차에 60% 집중, 나머지 분할
 _TRANCHE_RATIOS = [0.60, 0.25, 0.15]
 
@@ -2199,7 +2204,9 @@ def _load_sentiment(ticker: str) -> dict:
 
 
 def _fetch_available_cash() -> float:
-    """KIS API에서 주문 가능 예수금 조회."""
+    """KIS API에서 주문 가능 예수금 조회. 실패 시 30분 이내 캐시값 사용."""
+    global _cash_cache_value, _cash_cache_ts
+
     gw = KISGateway()
     acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
     tr_id = "VTTC8908R" if settings.KIS_MODE == "paper" else "TTTC8908R"
@@ -2222,9 +2229,43 @@ def _fetch_available_cash() -> float:
             priority=RequestPriority.DATA_COLLECTION,
         )
         output = resp.get("output", {})
-        return float(output.get("ord_psbl_cash", 0) or 0)
+        cash = float(output.get("ord_psbl_cash", 0) or 0)
+        if cash > 0:
+            _cash_cache_value = cash
+            _cash_cache_ts = time.time()
+        return cash
     except Exception as e:
         logger.warning(f"예수금 조회 실패: {e}")
+        # fallback: inquire-balance → dnca_tot_amt
+        try:
+            _bal_tr_id = "VTTC8434R" if settings.KIS_MODE == "paper" else "TTTC8434R"
+            resp2 = gw.request(
+                method="GET",
+                path="/uapi/domestic-stock/v1/trading/inquire-balance",
+                params={
+                    "CANO": acnt_no, "ACNT_PRDT_CD": acnt_prdt_cd,
+                    "AFHR_FLPR_YN": "N", "OFL_YN": "", "INQR_DVSN": "02",
+                    "UNPR_DVSN": "01", "FUND_STTL_ICLD_YN": "N",
+                    "FNCG_AMT_AUTO_RDPT_YN": "N", "PRCS_DVSN": "00",
+                    "CTX_AREA_FK100": "", "CTX_AREA_NK100": "",
+                },
+                tr_id=_bal_tr_id,
+                priority=RequestPriority.DATA_COLLECTION,
+            )
+            output2 = resp2.get("output2", [{}])
+            cash = float((output2[0] if output2 else {}).get("dnca_tot_amt", 0) or 0)
+            if cash > 0:
+                logger.info(f"예수금 fallback(잔고조회): {cash:,.0f}원")
+                _cash_cache_value = cash
+                _cash_cache_ts = time.time()
+                return cash
+        except Exception as e2:
+            logger.debug(f"예수금 fallback 실패: {e2}")
+        # 최후 수단: 캐시
+        age = time.time() - _cash_cache_ts
+        if _cash_cache_value > 0 and age < _CASH_CACHE_TTL_SEC:
+            logger.info(f"예수금 캐시 사용: {_cash_cache_value:,.0f}원 ({age/60:.0f}분 전 조회)")
+            return _cash_cache_value
         return 0.0
 
 

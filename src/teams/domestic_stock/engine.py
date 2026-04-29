@@ -143,7 +143,9 @@ class DomesticStockEngine:
         # 9. 비어 있는 슬롯만 탐색
         slots_to_fill = _get_empty_slots()
         if not slots_to_fill:
-            logger.info("모든 슬롯이 오늘 이미 배정됨 — 스킵")
+            # 슬롯은 모두 채워졌지만 hot_list는 계속 갱신 (Gate 4 차단 방지)
+            logger.info("모든 슬롯이 오늘 이미 배정됨 — hot_list만 갱신 후 리턴")
+            _refresh_hot_list_from_scan(scan)
             return {s: None for s in _ALL_SLOTS}
 
         # 10. Claude 슬롯 판단
@@ -158,6 +160,8 @@ class DomesticStockEngine:
 
         # 11. DB 저장 (슬롯별)
         saved = _save_slots(slot_result, scan)
+        # 슬롯 배정 여부와 무관하게 hot_list를 스캔 상위 후보로 갱신 (Gate 4 상시 공급)
+        _refresh_hot_list_from_scan(scan)
 
         # 12. 섹터 로테이션 갱신
         try:
@@ -259,6 +263,7 @@ def _evaluate_active_slots(scan: UniverseScan) -> None:
         return
 
     snaps = {s.ticker: s for s in scan.snapshots}
+    is_full_scan = len(scan.snapshots) >= 100  # 실제 수집된 스냅샷 기준 (partial 체크포인트는 건강 평가 스킵)
 
     for row in rows:
         slot       = row["slot"]
@@ -278,6 +283,9 @@ def _evaluate_active_slots(scan: UniverseScan) -> None:
 
         snap = snaps.get(ticker)
         if snap is None:
+            # partial scan이면 유니버스 이탈 판단 보류 — 전체 스캔이 아니면 오판 가능
+            if not is_full_scan:
+                continue
             # 스캔 유니버스에 없는 종목 (상장폐지·서킷브레이커 등) → 즉시 교체 요청
             score = 0.0
             reason = "스캔 유니버스 이탈 — 유동성 상실 의심"
@@ -415,17 +423,70 @@ def _score_slot_health(
 
 
 def _get_empty_slots() -> list[str]:
-    """오늘 slot_assignments에서 아직 비어 있는 슬롯 목록 반환."""
+    """오늘 slot_assignments에서 비어 있거나 교체 요청된 슬롯 목록 반환."""
     today = date.today().isoformat()
     try:
         rows = fetch_all(
-            "SELECT slot FROM slot_assignments WHERE trade_date = ? AND status = 'active'",
+            "SELECT slot FROM slot_assignments WHERE trade_date = ? AND status = 'active' AND replace_requested = 0",
             (today,),
         )
         filled = {r["slot"] for r in rows}
         return [s for s in _ALL_SLOTS if s not in filled]
     except Exception:
         return list(_ALL_SLOTS)
+
+
+def _refresh_hot_list_from_scan(scan: UniverseScan, limit: int = 5) -> None:
+    """slot_assignments 건드리지 않고 스캔 상위 후보를 hot_list에 직접 저장.
+
+    모든 슬롯이 이미 채워진 사이클에서 호출 — Claude 비용 없이 Gate 4 차단 방지.
+    """
+    if not scan.candidates:
+        logger.info("hot_list 갱신 스킵 — 스캔 후보 없음")
+        return
+
+    def _key(s: "StockSnapshot") -> float:
+        return s.momentum_score if s.momentum_score > 0 else (
+            s.is_volume_surge * 30 + s.volume_ratio * 5
+        )
+
+    top = sorted(scan.candidates, key=_key, reverse=True)[:limit]
+    for snap in top:
+        if snap.is_volume_surge and snap.is_price_surge:
+            sig = "volume_price_surge"
+        elif getattr(snap, "is_breakout", False):
+            sig = "breakout"
+        elif snap.is_volume_surge:
+            sig = "volume_surge"
+        elif snap.is_price_surge:
+            sig = "price_surge"
+        else:
+            sig = "unknown"
+
+        execute(
+            """
+            INSERT INTO hot_list
+                (ticker, name, signal_type, volume_ratio,
+                 price_change_pct, rsi, sector, reason,
+                 momentum_score, obv_slope, day_range_pos,
+                 stoch_rsi, bb_width_ratio, trading_value, exec_strength,
+                 rs_daily, rs_5d, frgn_net_buy, inst_net_buy, atr_pct, slot)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                snap.ticker, snap.name, sig, snap.volume_ratio,
+                snap.change_pct, snap.rsi, getattr(snap, "sector", ""),
+                "스캔 상위 후보 (슬롯 만석)",
+                getattr(snap, "momentum_score", 0.0), getattr(snap, "obv_slope", 0.0),
+                getattr(snap, "day_range_pos", 0.5), getattr(snap, "stoch_rsi", 50.0),
+                getattr(snap, "bb_width_ratio", 1.0), getattr(snap, "trading_value", 0),
+                getattr(snap, "exec_strength", 100.0), getattr(snap, "rs_daily", 0.0),
+                getattr(snap, "rs_5d", 0.0), getattr(snap, "frgn_net_buy", 0),
+                getattr(snap, "inst_net_buy", 0), getattr(snap, "atr_pct", 0.0), "",
+            ),
+        )
+    tickers = [s.ticker for s in top]
+    logger.info(f"hot_list 직접 갱신 {len(top)}종목: {tickers}")
 
 
 def _save_slots(
@@ -485,16 +546,21 @@ def _save_slots(
         # slot_assignments UPSERT
         execute(
             """
-            INSERT INTO slot_assignments (slot, ticker, name, signal_type, reason, trade_date, status)
-            VALUES (?, ?, ?, ?, ?, ?, 'active')
+            INSERT INTO slot_assignments (slot, ticker, name, signal_type, reason, trade_date, status,
+                                          replace_requested, replace_reason, health_score, assigned_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', 0, NULL, 0.0, CURRENT_TIMESTAMP)
             ON CONFLICT(slot) DO UPDATE SET
-                ticker      = excluded.ticker,
-                name        = excluded.name,
-                signal_type = excluded.signal_type,
-                reason      = excluded.reason,
-                trade_date  = excluded.trade_date,
-                status      = 'active',
-                updated_at  = CURRENT_TIMESTAMP
+                ticker            = excluded.ticker,
+                name              = excluded.name,
+                signal_type       = excluded.signal_type,
+                reason            = excluded.reason,
+                trade_date        = excluded.trade_date,
+                status            = 'active',
+                replace_requested = 0,
+                replace_reason    = NULL,
+                health_score      = 0.0,
+                assigned_at       = CURRENT_TIMESTAMP,
+                updated_at        = CURRENT_TIMESTAMP
             """,
             (
                 slot,

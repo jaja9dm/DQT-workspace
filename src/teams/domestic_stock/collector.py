@@ -12,6 +12,7 @@ KIS API는 반드시 KISGateway 경유.
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from dataclasses import dataclass, field
@@ -211,6 +212,30 @@ def _fetch_price_from_kis(ticker: str) -> tuple[float, float, int, int, int, int
         return price, change_pct, volume, trading_value, frgn_net_buy, inst_net_buy, day_high, day_low, day_open, exec_strength
     except Exception as e:
         logger.debug(f"KIS 현재가 실패 [{ticker}]: {e}")
+        return _fetch_price_from_naver(ticker)
+
+
+def _fetch_price_from_naver(ticker: str) -> tuple[float, float, int, int, int, int, float, float, float, float]:
+    """KIS 실패 시 네이버 금융 폴링 API로 현재가 fallback."""
+    import urllib.request as _ur
+    try:
+        url = f"https://polling.finance.naver.com/api/realtime/domestic/stock/{ticker}"
+        req = _ur.Request(url, headers={"User-Agent": "Mozilla/5.0", "Referer": "https://finance.naver.com/"})
+        with _ur.urlopen(req, timeout=5) as r:
+            data = json.loads(r.read().decode())
+        d = data["datas"][0]
+        price      = float(d.get("closePriceRaw", 0) or 0)
+        change_pct = float(d.get("fluctuationsRatioRaw", 0) or 0)
+        volume     = int(d.get("accumulatedTradingVolumeRaw", 0) or 0)
+        t_val      = int(d.get("accumulatedTradingValueRaw", 0) or 0)
+        day_open   = float(d.get("openPriceRaw", 0) or 0)
+        day_high   = float(d.get("highPriceRaw", 0) or 0)
+        day_low    = float(d.get("lowPriceRaw", 0) or 0)
+        if price > 0:
+            logger.debug(f"네이버 fallback [{ticker}]: {price:,.0f}원 ({change_pct:+.2f}%)")
+        return price, change_pct, volume, t_val, 0, 0, day_high, day_low, day_open, 100.0
+    except Exception as e2:
+        logger.debug(f"네이버 fallback 실패 [{ticker}]: {e2}")
         return 0.0, 0.0, 0, 0, 0, 0, 0.0, 0.0, 0.0, 100.0
 
 
