@@ -5,9 +5,9 @@
 
 ---
 
-## 최종 업데이트: 2026-04-28 (야간 점검 완료)
+## 최종 업데이트: 2026-04-29 (집 노트북 환경 세팅 + 실전 피드백 반영)
 
-**상태: 완전체 구현 완료 — 버그 점검 및 수정 완료**
+**상태: 완전체 구현 완료 — 실거래 피드백 기반 로직 개선 중**
 
 GitHub: https://github.com/jaja9dm/DQT-workspace (최신 커밋 반영)
 
@@ -139,6 +139,14 @@ GitHub: https://github.com/jaja9dm/DQT-workspace (최신 커밋 반영)
 - **위기 관리팀 즉시 트리거 미연결** — 글로벌·국내 경보 발생 시 `trigger_emergency()` 호출 연결
 - **trades INSERT 에러 로깅** — silent pass → logger.error로 변경 (중복 매수 방지 진단 가능)
 - **KIS 500 오류 메시지** — "장외시간 가능성" 오해 표현 제거
+
+## 2026-04-29 작업 이력
+
+- **집 노트북 환경 세팅 완료** — venv 생성, requirements.txt 설치, crontab @reboot 등록
+- **run.sh 경로 하드코딩 제거** — 스크립트 위치 기준 자동 감지 (어느 머신에서도 동작)
+- **breakout 신호 RSI<55 hard_fail 추가** — BB 상단 돌파인데 모멘텀 없는 가짜 신호 차단 (포스코스틸리온 유형)
+- **volume_price_surge RSI 예외 95까지 완화** — 섹터 테마 급등 시 OBV 양수 조건 유지하며 진입 기회 확보 (이수화학 유형)
+- **복기 Claude API timeout 60→90s + haiku 폴백** — 3회차 실패 시 haiku 모델로 재시도
 
 ## 알려진 이슈
 
