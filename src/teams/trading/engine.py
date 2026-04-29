@@ -1677,7 +1677,9 @@ def _compute_entry_score(
         return hard_fails, 0.0, 0.0
 
     # RSI 극단 과열
-    _rsi_hard_eff = 95.0 if (is_gap_up and obv_slope > 0) else _max_rsi_hard
+    # 갭업 또는 거래량+가격 동반 급등(섹터 테마)에서 OBV 양수면 95까지 허용
+    _is_surge = c.get("signal_type", "") == "volume_price_surge"
+    _rsi_hard_eff = 95.0 if ((is_gap_up or _is_surge) and obv_slope > 0) else _max_rsi_hard
     if rsi > _rsi_hard_eff:
         hard_fails.append(f"RSI {rsi:.0f} > {_rsi_hard_eff:.0f} (극단 과열)")
         return hard_fails, 0.0, 0.0
@@ -1714,13 +1716,19 @@ def _compute_entry_score(
         hard_fails.append(f"등락률 {price_chg:+.2f}% ≤ 0")
         return hard_fails, 0.0, 0.0
 
-    # OBV 역행 + 고RSI (갭업/시장강세 면제)
-    if obv_slope < 0 and rsi > 70 and not (is_gap_up or is_mkt_mom):
+    # breakout 신호 RSI 최소값 — BB 상단 돌파인데 RSI<55면 모멘텀 없는 가짜 신호
+    _is_breakout_sig = c.get("signal_type", "") == "breakout"
+    if _is_breakout_sig and rsi < 55.0 and not (is_gap_up or is_pullback):
+        hard_fails.append(f"breakout RSI {rsi:.0f} < 55 (BB 돌파인데 모멘텀 미확인)")
+        return hard_fails, 0.0, 0.0
+
+    # OBV 역행 + 고RSI (갭업/시장강세/거래량급등 면제)
+    if obv_slope < 0 and rsi > 70 and not (is_gap_up or is_mkt_mom or _is_surge):
         hard_fails.append(f"OBV 역행+고RSI {rsi:.0f} (수급 없는 상승)")
         return hard_fails, 0.0, 0.0
 
-    # StochRSI 극단 과매수 (갭업/오프닝급락 면제)
-    if stoch_rsi > 88.0 and not (is_gap_up or is_op_plunge):
+    # StochRSI 극단 과매수 (갭업/거래량급등/오프닝급락 면제)
+    if stoch_rsi > 88.0 and not (is_gap_up or _is_surge or is_op_plunge):
         hard_fails.append(f"StochRSI {stoch_rsi:.0f} > 88 (단기 극과매수)")
         return hard_fails, 0.0, 0.0
 

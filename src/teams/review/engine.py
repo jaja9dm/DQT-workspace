@@ -1001,21 +1001,25 @@ JSON만 응답:
 }}"""
 
     response = None
+    _models = [settings.CLAUDE_MODEL_MAIN, "claude-haiku-4-5-20251001"]
     for attempt in range(1, 4):
+        _model = _models[0] if attempt <= 2 else _models[1]
         try:
             response = _client.messages.create(
-                model=settings.CLAUDE_MODEL_MAIN,
+                model=_model,
                 max_tokens=1500,
                 temperature=0,
-                timeout=60.0,
+                timeout=90.0,
                 messages=[{"role": "user", "content": prompt}],
             )
+            if attempt > 1:
+                logger.info(f"Claude 복기 분석 성공 (모델={_model}, {attempt}회차)")
             break
         except Exception as e:
             if attempt == 3:
                 logger.error(f"Claude 복기 분석 최종 실패 ({attempt}회): {type(e).__name__}: {e}")
                 return _fallback_review(stats)
-            logger.warning(f"Claude 복기 분석 재시도 {attempt}/3: {type(e).__name__}: {e}")
+            logger.warning(f"Claude 복기 분석 재시도 {attempt}/3 (모델={_model}): {type(e).__name__}: {e}")
             time.sleep(5 * attempt)
     try:
         raw = response.content[0].text.strip()
