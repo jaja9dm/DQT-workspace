@@ -239,6 +239,11 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=5, timezone="Asia/Seoul"
         ), id="trading_journal", name="매매 일지 생성")
 
+        # 자동 종료 — 16:35 (복기 완료 후 프로세스 종료)
+        s.add_job(self._auto_shutdown, CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=35, timezone="Asia/Seoul"
+        ), id="auto_shutdown", name="자동 종료")
+
         # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (17:00)
         s.add_job(self._run_param_tuning, CronTrigger(
             day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
@@ -427,6 +432,11 @@ class DQTScheduler:
             logger.info(f"매매 일지 저장: {path}")
         except Exception as e:
             logger.error(f"매매 일지 생성 오류: {e}", exc_info=True)
+
+    def _auto_shutdown(self) -> None:
+        """16:35 — 장 마감 후 자동 프로세스 종료."""
+        logger.info("자동 종료 시작 (16:35 스케줄)")
+        self.stop()
 
     def _run_param_tuning(self) -> None:
         """17:00 — 자동 파라미터 튜닝 (복기 결과 기반)."""
