@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>매매 일지 — DQT</title>
+<style>
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+.wrap { max-width: 960px; margin: 0 auto; padding: 24px 16px; }
+h1.title { font-size: 1.6rem; font-weight: 800; color: #1a1a2e; margin-bottom: 24px; }
+.day-section { background: #fff; border-radius: 16px; box-shadow: 0 2px 12px rgba(0,0,0,.07); margin-bottom: 32px; overflow: hidden; }
+.day-header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; align-items: center; gap: 12px; }
+.day-header .date { font-size: 1.2rem; font-weight: 700; }
+.day-header .meta { font-size: .8rem; opacity: .6; margin-left: auto; }
+.section-body { padding: 20px 24px; }
+.section-title { font-size: .9rem; font-weight: 700; color: #555; text-transform: uppercase; letter-spacing: .05em; margin: 20px 0 10px; }
+.section-title:first-child { margin-top: 0; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-bottom: 4px; }
+.summary-card { background: #f7f8fa; border-radius: 10px; padding: 12px 14px; }
+.summary-card .label { font-size: .72rem; color: #888; margin-bottom: 4px; }
+.summary-card .value { font-size: 1.05rem; font-weight: 700; }
+.pos { color: #0ea87a; }
+.neg { color: #e74c3c; }
+.neutral { color: #1a1a2e; }
+table { width: 100%; border-collapse: collapse; font-size: .85rem; margin-bottom: 4px; }
+th { background: #f0f2f5; text-align: left; padding: 7px 10px; font-weight: 600; color: #555; font-size: .78rem; }
+td { padding: 7px 10px; border-bottom: 1px solid #f0f2f5; }
+tr:last-child td { border-bottom: none; }
+.ticker-card { border: 1px solid #e8eaf0; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+.ticker-header { padding: 12px 16px; display: flex; align-items: center; gap: 8px; background: #fafbfc; border-bottom: 1px solid #e8eaf0; }
+.ticker-header .win { color: #0ea87a; font-size: 1rem; }
+.ticker-header .lose { color: #e74c3c; font-size: 1rem; }
+.ticker-header .name { font-weight: 700; font-size: .95rem; }
+.ticker-header .code { color: #aaa; font-size: .8rem; }
+.slot-badge { font-size: .72rem; font-weight: 600; padding: 2px 8px; border-radius: 20px; }
+.slot-leader   { background: #fff3cd; color: #856404; }
+.slot-breakout { background: #cce5ff; color: #004085; }
+.slot-pullback { background: #d4edda; color: #155724; }
+.ticker-body { padding: 12px 16px; }
+.meta-row { display: flex; gap: 16px; flex-wrap: wrap; font-size: .8rem; color: #666; margin-bottom: 12px; }
+.meta-row span { display: flex; align-items: center; gap: 4px; }
+.subsection { font-size: .78rem; font-weight: 700; color: #888; margin: 10px 0 6px; text-transform: uppercase; }
+.pnl-summary { display: flex; gap: 12px; margin-top: 10px; font-size: .85rem; }
+.pnl-summary div { flex: 1; background: #f7f8fa; border-radius: 8px; padding: 8px 12px; }
+.pnl-summary .plabel { font-size: .72rem; color: #888; margin-bottom: 2px; }
+.review-box { background: #f7f8fa; border-radius: 10px; padding: 14px 16px; font-size: .85rem; line-height: 1.7; margin-bottom: 10px; color: #444; }
+.review-list { list-style: none; padding: 0; }
+.review-list li { padding: 4px 0 4px 18px; position: relative; font-size: .85rem; line-height: 1.6; }
+.review-list li::before { position: absolute; left: 0; }
+.review-list.good li::before { content: '✅'; }
+.review-list.bad  li::before { content: '⚠️'; }
+.review-list.todo li::before { content: '🔧'; }
+.market-table td:first-child { color: #888; font-size: .8rem; width: 120px; }
+.fee-note { font-size: .75rem; color: #aaa; margin-top: 6px; }
+hr.sep { border: none; border-top: 1px solid #e8eaf0; margin: 16px 0; }
+
+</style>
+</head>
+<body>
+<div class="wrap">
+<h1 class="title">📒 매매 일지 (DQT)</h1>
+<!-- section 2026-04-30 -->
+<section class="day-section" id="2026-04-30">
+  <div class="day-header">
+    <span class="date">📅 2026-04-30</span>
+    <span class="meta">KIS 실전투자</span>
+  </div>
+  <div class="section-body">
+    <div class="section-title">📊 당일 요약</div>
+    <div class="summary-grid">
+      <div class="summary-card"><div class="label">거래 종목</div><div class="value">3종목</div></div>
+      <div class="summary-card"><div class="label">체결</div><div class="value">매수 4건 / 매도 3건</div></div>
+      <div class="summary-card"><div class="label">승률</div><div class="value">67% (2승 1패)</div></div>
+      <div class="summary-card"><div class="label">총 수익 (세전)</div><div class="value pos">+205,200원</div></div>
+      <div class="summary-card"><div class="label">수수료+세금</div><div class="value">-10,581원</div></div>
+      <div class="summary-card"><div class="label">실현 순수익</div><div class="value pos" style="font-size:1.15rem">+194,619원</div></div>
+      <div class="summary-card"><div class="label">예수금 (장마감)</div><div class="value">8,142,000원</div></div>
+    </div>
+    <hr class="sep">
+    <div class="section-title">📋 종목별 매매 상세</div>
+    <div class="ticker-card">
+      <div class="ticker-header">
+        <span class="win">✅</span>
+        <span class="name">대한전선</span>
+        <span class="code">001440</span>
+        <span class="slot-badge slot-leader">👑 주도주</span>
+        <span style="margin-left:auto;font-weight:700" class="pos">+125,221원</span>
+      </div>
+      <div class="ticker-body">
+        <div class="meta-row"><span>섹터: 전선</span><span>신호: breakout</span><span>RSI 68</span><span>모멘텀 119점</span><span>진입점수 78점</span><span>RS +8.3%</span></div>
+        <div class="subsection">매수 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>금액</th></tr></thead><tbody>
+          <tr><td>09:14</td><td>18,450원</td><td>80주</td><td>1,476,000원</td></tr>
+          <tr><td>09:31</td><td>18,720원</td><td>40주</td><td>748,800원</td></tr>
+        </tbody></table>
+        <div class="subsection">매도 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>손익(세전)</th><th>수익률</th></tr></thead><tbody>
+          <tr><td>11:42</td><td>19,850원</td><td>120주</td><td class="pos">+130,200원</td><td class="pos">+5.98%</td></tr>
+        </tbody></table>
+        <div class="pnl-summary">
+          <div><div class="plabel">총 수익 (세전)</div><div class="pos">+130,200원</div></div>
+          <div><div class="plabel">수수료+세금</div><div>-4,979원</div></div>
+          <div><div class="plabel">실현 순수익</div><div class="pos" style="font-weight:700">+125,221원</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="ticker-card">
+      <div class="ticker-header">
+        <span class="win">✅</span>
+        <span class="name">SK이노베이션</span>
+        <span class="code">096770</span>
+        <span class="slot-badge slot-breakout">🚀 돌파매매</span>
+        <span style="margin-left:auto;font-weight:700" class="pos">+95,815원</span>
+      </div>
+      <div class="ticker-body">
+        <div class="meta-row"><span>섹터: 에너지</span><span>신호: volume_price_surge</span><span>RSI 74</span><span>모멘텀 136점</span><span>진입점수 82점</span><span>RS +9.1%</span></div>
+        <div class="subsection">매수 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>금액</th></tr></thead><tbody>
+          <tr><td>09:22</td><td>142,500원</td><td>15주</td><td>2,137,500원</td></tr>
+        </tbody></table>
+        <div class="subsection">매도 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>손익(세전)</th><th>수익률</th></tr></thead><tbody>
+          <tr><td>13:05</td><td>149,200원</td><td>15주</td><td class="pos">+100,500원</td><td class="pos">+4.70%</td></tr>
+        </tbody></table>
+        <div class="pnl-summary">
+          <div><div class="plabel">총 수익 (세전)</div><div class="pos">+100,500원</div></div>
+          <div><div class="plabel">수수료+세금</div><div>-4,685원</div></div>
+          <div><div class="plabel">실현 순수익</div><div class="pos" style="font-weight:700">+95,815원</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="ticker-card">
+      <div class="ticker-header">
+        <span class="lose">❌</span>
+        <span class="name">이수화학</span>
+        <span class="code">005950</span>
+        <span class="slot-badge slot-pullback">🔄 눌림목</span>
+        <span style="margin-left:auto;font-weight:700" class="neg">-26,418원</span>
+      </div>
+      <div class="ticker-body">
+        <div class="meta-row"><span>섹터: 화학</span><span>신호: volume_price_surge</span><span>RSI 71</span><span>모멘텀 128점</span><span>진입점수 63점</span><span>RS +6.2%</span></div>
+        <div class="subsection">매수 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>금액</th></tr></thead><tbody>
+          <tr><td>10:08</td><td>46,100원</td><td>10주</td><td>461,000원</td></tr>
+        </tbody></table>
+        <div class="subsection">매도 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>손익(세전)</th><th>수익률</th></tr></thead><tbody>
+          <tr><td>11:15</td><td>43,550원</td><td>10주</td><td class="neg">-25,500원</td><td class="neg">-5.53%</td></tr>
+        </tbody></table>
+        <div class="pnl-summary">
+          <div><div class="plabel">총 수익 (세전)</div><div class="neg">-25,500원</div></div>
+          <div><div class="plabel">수수료+세금</div><div>-918원</div></div>
+          <div><div class="plabel">실현 순수익</div><div class="neg" style="font-weight:700">-26,418원</div></div>
+        </div>
+      </div>
+    </div>
+    <hr class="sep">
+    <div class="section-title">💸 수수료 명세</div>
+    <table><thead><tr><th>항목</th><th>계산</th><th>금액</th></tr></thead><tbody>
+      <tr><td>매수 수수료</td><td>4,823,300원 × 0.015%</td><td>723원</td></tr>
+      <tr><td>매도 수수료</td><td>5,055,500원 × 0.015%</td><td>758원</td></tr>
+      <tr><td>증권거래세</td><td>5,055,500원 × 0.18%</td><td>9,100원</td></tr>
+      <tr><td><strong>합계</strong></td><td></td><td><strong>10,581원</strong></td></tr>
+    </tbody></table>
+    <div class="fee-note">KIS 실전 온라인 기준: 매수/매도 각 0.015%, 거래세 0.18%</div>
+    <hr class="sep">
+    <div class="section-title">📐 신호 유형별 성과</div>
+    <table><thead><tr><th>신호</th><th>거래</th><th>승률</th><th>평균 손익</th></tr></thead><tbody>
+      <tr><td>breakout</td><td>1건</td><td>100%</td><td class="pos">+5.98%</td></tr>
+      <tr><td>volume_price_surge</td><td>2건</td><td>50%</td><td class="neg">-0.42%</td></tr>
+    </tbody></table>
+    <hr class="sep">
+    <div class="section-title">🔬 복기</div>
+    <div class="review-box">전선·에너지 섹터 외인 주도 강세 흐름을 대한전선·SK이노베이션에서 정확히 포착. 이수화학은 RSI 71 경계선에서 진입했고 섹터 모멘텀이 화학으로 이어지지 않아 손절.</div>
+    <div class="subsection">✅ 잘 된 것</div>
+    <ul class="review-list good">
+      <li>대한전선 분할 매수 후 +6% 구간에서 깔끔하게 익절</li>
+      <li>SK이노베이션 volume_price_surge + 외인 수급 확인 후 진입 — 판단 적중</li>
+    </ul>
+    <div class="subsection">⚠️ 아쉬운 것</div>
+    <ul class="review-list bad">
+      <li>이수화학: 화학 섹터가 전선·에너지 대비 약했음. 섹터 강도 차이 확인 부족</li>
+      <li>SK이노베이션 +7%까지 갔다가 +4.7%에 익절 — 트레일링 스톱 여유 부족</li>
+    </ul>
+    <div class="subsection">🔧 내일 개선 포인트</div>
+    <ul class="review-list todo">
+      <li>volume_price_surge 진입 시 섹터 강도(vs_kospi) 1.0% 이상 종목만 허용하는 필터 검토</li>
+      <li>트레일링 스톱 trigger_pct를 장 분위기에 따라 동적으로 조정</li>
+    </ul>
+  </div>
+</section>
+<!-- /section 2026-04-30 -->
+</div><!-- /sections -->
+</body>
+</html>
