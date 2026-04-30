@@ -783,14 +783,20 @@ class TradingEngine:
                     f"Gate 4.5 통과: {tk} 갭업 종목 MACD buy_pre 뒤늦은 진입 허용 "
                     f"({now.strftime('%H:%M')})"
                 )
-            # 갭업 5% 이상 종목: 09:20 이전 완전 차단 — 오프닝 노이즈 20분 소거 후 진입
-            # (오늘 058430 패턴: 09:07 +5.8% → 09:25 진입 → 고점 후 손절. 09:20 대기로 방향 확인)
-            if is_c_gap_up and now_hm < 920 and tk not in self._macd_reentry_ok:
+            # 갭업 5% 이상 종목: 09:10 이전 완전 차단 — 오프닝 초기 10분 노이즈 소거
+            if is_c_gap_up and now_hm < 910 and tk not in self._macd_reentry_ok:
                 logger.info(
-                    f"Gate 4.5 차단: {tk} 갭업 종목 09:20 이전 ({now.strftime('%H:%M')}) "
+                    f"Gate 4.5 차단: {tk} 갭업 종목 09:10 이전 ({now.strftime('%H:%M')}) "
                     f"— 오프닝 노이즈 소거 대기"
                 )
                 continue
+
+            # 장중 눌림 감지: 오늘 +5% 이상 올랐지만 day_range_pos ≤ 0.65 → 고점에서 눌린 것
+            # 추격 진입이 아닌 눌림 재진입으로 처리
+            _price_chg_c = float(c.get("price_change_pct") or 0.0)
+            _drp_c = float(c.get("day_range_pos") or 0.5)
+            c = dict(c)
+            c["_intraday_pullback"] = _price_chg_c >= 5.0 and _drp_c <= 0.65
 
             # 09:30 이전: 장 초반 변동성 구간 — 단순 시간 대기 대신 지표 기반 유동 판단
             if now_hm < 930 and tk not in self._macd_reentry_ok:
@@ -949,6 +955,12 @@ class TradingEngine:
                     decision=decision,
                     slot=item.get("slot", "leader"),
                 )
+
+        # Gate 5 전원 보류 시 차단 타이머 기록 (3분 지속 → 슬롯 강제 리셋)
+        if not orders:
+            self._check_blocked_rescan()
+        else:
+            self._all_blocked_since = 0.0
 
         # ── 재진입 감시 업데이트 + 신호 실행 ────
         # 1. 당일 수익 실현 종목 → watchlist 추가
@@ -1263,6 +1275,8 @@ JSON만 응답:
             short_ratio   = item.get("_short_ratio") or 0.0
             is_squeeze    = item.get("_squeeze_candidate", False)
             squeeze_tag   = " ⚡쇼트스퀴즈후보" if is_squeeze else ""
+            is_intraday_pb = bool(item.get("_intraday_pullback", False))
+            pb_tag        = " 📉장중눌림(등락+6%제한면제)" if is_intraday_pb else ""
             rs_daily      = float(item.get("rs_daily") or 0.0)
             rs_5d         = float(item.get("rs_5d") or 0.0)
             sector        = item.get("sector") or "기타"
@@ -1329,7 +1343,7 @@ JSON만 응답:
                 f"섹터: {sector}{_sector_tag}{_supply_tag}\n"
                 f"  선정근거: {item.get('reason', '')} | "
                 f"감성: {sentiment.get('avg_score', 0):+.2f}({sentiment.get('direction', 'neutral')})"
-                + _ts_tag
+                + _ts_tag + pb_tag
             )
 
         user_content = (
@@ -1766,10 +1780,11 @@ def _compute_entry_score(
         hard_fails.append(f"BB폭 미확대 {bb_ratio:.2f} < 1.0 (가짜 브레이크아웃)")
         return hard_fails, 0.0, 0.0
 
-    # 고가권 추격 (갭업+OBV양수 또는 오프닝급락 면제)
+    # 고가권 추격 (갭업+OBV양수, 오프닝급락, 장중눌림 면제)
     day_range_pos = float(c.get("day_range_pos") or 0.5)
+    _is_intraday_pb = bool(c.get("_intraday_pullback", False))
     if price_chg >= 3.0 and day_range_pos >= 0.90 and obv_slope <= 0:
-        if not (is_gap_up or is_op_plunge):
+        if not (is_gap_up or is_op_plunge or _is_intraday_pb):
             hard_fails.append(
                 f"고가권 추격 ({price_chg:+.1f}%, 범위위치 {day_range_pos:.2f}, OBV↓)"
             )
