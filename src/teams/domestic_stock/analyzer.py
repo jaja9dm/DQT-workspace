@@ -461,7 +461,7 @@ def analyze(
     try:
         response = _client.messages.create(
             model=settings.CLAUDE_MODEL_FAST,
-            max_tokens=400,
+            max_tokens=800,
             temperature=settings.CLAUDE_TEMPERATURE,
             timeout=30.0,
             system=[

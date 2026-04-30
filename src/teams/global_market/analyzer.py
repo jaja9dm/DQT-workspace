@@ -99,7 +99,7 @@ def analyze(data: GlobalMarketData, morning_summary: bool = False) -> dict:
     try:
         response = _client.messages.create(
             model=settings.CLAUDE_MODEL_FAST,
-            max_tokens=256,
+            max_tokens=512,
             temperature=settings.CLAUDE_TEMPERATURE,
             messages=[
                 {"role": "user", "content": _build_prompt(data, morning_summary=morning_summary)}

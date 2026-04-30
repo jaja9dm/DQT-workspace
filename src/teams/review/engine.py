@@ -1007,7 +1007,7 @@ JSON만 응답:
         try:
             response = _client.messages.create(
                 model=_model,
-                max_tokens=1500,
+                max_tokens=2000,
                 temperature=0,
                 timeout=90.0,
                 messages=[{"role": "user", "content": prompt}],
