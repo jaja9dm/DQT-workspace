@@ -33,7 +33,8 @@ _BUY_FEE_RATE   = 0.00015   # 매수 수수료 0.015%
 _SELL_FEE_RATE  = 0.00015   # 매도 수수료 0.015%
 _TAX_RATE       = 0.0018    # 증권거래세 0.18% (매도 시)
 
-_JOURNAL_DIR = _ROOT / "docs" / "trading_journal"
+_JOURNAL_DIR  = _ROOT / "docs" / "trading_journal"
+_JOURNAL_FILE = _JOURNAL_DIR / "journal.md"
 
 
 def _calc_fee(buy_amt: float, sell_amt: float) -> dict:
@@ -62,11 +63,12 @@ def _fmt_pct(v: float) -> str:
 
 def generate(target_date: str | None = None) -> Path:
     """
-    지정 날짜(기본: 오늘)의 매매 일지를 생성하고 파일 경로를 반환.
+    지정 날짜(기본: 오늘)의 매매 일지를 journal.md에 추가(prepend).
+    이미 해당 날짜 섹션이 있으면 덮어씀.
     """
     today = target_date or date.today().isoformat()
     _JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = _JOURNAL_DIR / f"{today}.md"
+    out_path = _JOURNAL_FILE
 
     # ── 1. 거래 이력 조회 ──────────────────────────────
     trades = fetch_all(
@@ -201,8 +203,8 @@ def generate(target_date: str | None = None) -> Path:
     def row(*cells):
         lines.append("| " + " | ".join(str(c) for c in cells) + " |")
 
-    # 헤더
-    lines.append(f"# 매매 일지 — {today}")
+    # 날짜 섹션 헤더 (파일 내 구분자)
+    lines.append(f"## {today}")
     lines.append("")
     lines.append(f"> 생성: {datetime.now().strftime('%Y-%m-%d %H:%M')} | KIS 실전투자")
     lines.append("")
@@ -340,9 +342,33 @@ def generate(target_date: str | None = None) -> Path:
             lines.append(f"- {item}")
         lines.append("")
 
-    # ── 파일 저장 ──
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-    logger.info(f"매매 일지 생성 완료: {out_path}")
+    # ── 파일에 추가 (오늘 섹션이 이미 있으면 교체, 없으면 맨 위에 삽입) ──
+    new_section = "\n".join(lines) + "\n\n---\n"
+
+    if out_path.exists():
+        existing = out_path.read_text(encoding="utf-8")
+        # 파일 첫 줄이 헤더(# 매매 일지)면 유지, 아니면 없는 것
+        marker = f"## {today}"
+        if marker in existing:
+            # 기존 날짜 섹션을 새 내용으로 교체
+            import re as _re
+            pattern = rf"(## {_re.escape(today)}.*?)(?=\n## |\Z)"
+            existing = _re.sub(pattern, new_section.rstrip("\n-").strip(), existing, flags=_re.DOTALL)
+            out_path.write_text(existing, encoding="utf-8")
+        else:
+            # 파일 맨 위에 오늘 섹션 삽입
+            header = "# 매매 일지 (DQT)\n\n"
+            body = existing
+            if existing.startswith("# 매매 일지"):
+                # 기존 헤더 다음에 삽입
+                idx = existing.index("\n\n") + 2 if "\n\n" in existing else len(header)
+                body = existing[idx:]
+            out_path.write_text(header + new_section + body, encoding="utf-8")
+    else:
+        # 파일 최초 생성
+        out_path.write_text("# 매매 일지 (DQT)\n\n" + new_section, encoding="utf-8")
+
+    logger.info(f"매매 일지 업데이트: {out_path}")
     return out_path
 
 

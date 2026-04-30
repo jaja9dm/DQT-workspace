@@ -234,9 +234,9 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         ), id="daily_review_debrief", name="일일 매매 복기")
 
-        # 매매 일지 생성 — docs/trading_journal/YYYY-MM-DD.md (16:45)
+        # 매매 일지 생성 — docs/trading_journal/journal.md (16:05)
         s.add_job(self._run_trading_journal, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=16, minute=5, timezone="Asia/Seoul"
         ), id="trading_journal", name="매매 일지 생성")
 
         # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (17:00)
@@ -417,7 +417,7 @@ class DQTScheduler:
             logger.error(f"리포트 실행 오류: {e}", exc_info=True)
 
     def _run_trading_journal(self) -> None:
-        """16:45 — 매매 일지 생성 (docs/trading_journal/YYYY-MM-DD.md)."""
+        """16:05 — 매매 일지 생성 (docs/trading_journal/journal.md)."""
         if not is_trading_day():
             return
         logger.info("매매 일지 생성 실행")
