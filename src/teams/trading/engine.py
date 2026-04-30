@@ -804,7 +804,7 @@ class TradingEngine:
 
             # ── Breakout: 갭업 09:10 차단 면제, 신고가+거래량 확인 시 즉시 진입 ──
             if is_breakout_slot:
-                _new_high_c = c.get("at_new_high", False)
+                _new_high_c = bool(c.get("at_new_high", 0))  # DB stores as int
                 _vol_ratio_c = float(c.get("volume_ratio") or 0.0)
                 # 신고가 + 거래량 3배 이상이면 MACD 대기 없이 즉시 진입
                 if _new_high_c and _vol_ratio_c >= 3.0:
@@ -1229,7 +1229,8 @@ JSON만 응답:
             raw = _extract_json(raw)
             result = json.loads(raw)
             immediate = bool(result.get("immediate", False))
-            reason    = result.get("reason", "")
+            import html as _html
+            reason    = _html.escape(result.get("reason", ""))
 
             if immediate:
                 msg = f"✅ <b>[오프닝 게이트]</b> 즉시 매수 허용\n{reason}"
@@ -1632,10 +1633,11 @@ JSON만 응답:
             )
 
             from src.utils.notifier import notify
+            import html as _html
             notify(
                 f"🟢 <b>[{tranche}차 매수 체결]</b> {name}({ticker})\n"
                 f"💰 {quantity}주 @ {current_price:,.0f}원\n"
-                f"📝 {decision.get('reason', '')}"
+                f"📝 {_html.escape(decision.get('reason', ''))}"
             )
 
             # 1차 매수 시 트레일링 스톱 초기화 + 거래소 사전 손절 주문 제출
@@ -2233,7 +2235,8 @@ def _load_hot_list() -> list[dict]:
                COALESCE(h.frgn_net_buy, 0) AS frgn_net_buy,
                COALESCE(h.inst_net_buy, 0) AS inst_net_buy,
                COALESCE(h.atr_pct, 0.0) AS atr_pct,
-               COALESCE(h.slot, '') AS slot
+               COALESCE(h.at_new_high, 0) AS at_new_high,
+               COALESCE(sa.slot, NULLIF(h.slot, ''), '') AS slot
         FROM hot_list h
         INNER JOIN (
             SELECT ticker, MAX(created_at) AS latest
@@ -2241,6 +2244,10 @@ def _load_hot_list() -> list[dict]:
             WHERE created_at >= datetime('now', '-15 minutes')
             GROUP BY ticker
         ) latest_only ON h.ticker = latest_only.ticker AND h.created_at = latest_only.latest
+        LEFT JOIN slot_assignments sa
+            ON sa.ticker = h.ticker
+            AND sa.trade_date = DATE('now', 'localtime')
+            AND sa.status = 'active'
         ORDER BY COALESCE(h.momentum_score, 0.0) DESC, h.volume_ratio DESC
         LIMIT 10
         """

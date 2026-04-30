@@ -594,20 +594,27 @@ def _fallback_slots(
         and s not in market_leaders
     ]
 
-    # ── breakout 슬롯 후보 ────────────────────────
+    # ── breakout 슬롯 후보 — 신고가 돌파 + 거래량 3배↑ ──────────
+    _ml_set = {s.ticker for s in market_leaders + sector_leaders}
     breakout_cands = [
         s for s in candidates
-        if s.is_gap_up and s.obv_slope > 0 and s.rsi <= 90
-        and s not in market_leaders and s not in sector_leaders
+        if s.at_new_high and s.volume_ratio >= 3.0 and s.obv_slope > 0 and s.rsi <= 90
+        and s.ticker not in _ml_set
     ]
+    # 신고가 3배 없으면 신고가 + 2배↑로 완화
+    if not breakout_cands:
+        breakout_cands = [
+            s for s in candidates
+            if s.at_new_high and s.volume_ratio >= 2.0 and s.obv_slope > 0 and s.rsi <= 90
+            and s.ticker not in _ml_set
+        ]
 
-    # ── pullback 슬롯 후보 ────────────────────────
+    # ── pullback 슬롯 후보 — 오늘 급등 후 장중 눌림 ────────────
     pullback_cands = [
         s for s in candidates
-        if not s.is_gap_up
-        and -5.0 <= s.change_pct <= -1.0
-        and getattr(s, "intraday_chg_pct", 0.0) >= 0
-        and s.obv_slope > 0 and s.rsi <= 75
+        if s.change_pct >= 5.0 and s.day_range_pos <= 0.65
+        and s.obv_slope > 0 and s.rsi <= 82
+        and s.ticker not in _ml_set
     ]
 
     used: set[str] = set()
@@ -640,6 +647,18 @@ def _fallback_slots(
                 "leader",
                 "sector_momentum",
                 lambda s, _i: f"주도섹터[{get_sector(s.ticker)}]대장주·모멘텀{s.momentum_score:.0f}점·OBV↑",
+            )
+        # 최종 폴백: 거래대금 상위 + 모멘텀 최고인 후보 (거래 불가 상태 방지)
+        if result["leader"] is None:
+            _top_tv = [
+                s for s in candidates
+                if s.obv_slope > 0 and s.rsi <= 85
+            ]
+            _pick(
+                sorted(_top_tv, key=lambda s: (s.trading_value, s.momentum_score), reverse=True),
+                "leader",
+                "sector_momentum",
+                lambda s, _i: f"거래대금대장주·모멘텀{s.momentum_score:.0f}점·OBV↑(폴백)",
             )
 
     if "breakout" in target_slots:

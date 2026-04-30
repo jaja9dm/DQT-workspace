@@ -193,6 +193,8 @@ def _fetch_investor_flow(market: str) -> InvestorFlow:
             priority=RequestPriority.DATA_COLLECTION,
         )
         output = resp.get("output", {})
+        if isinstance(output, list):
+            output = output[0] if output else {}
 
         def _to_bn(val: str) -> float:
             """단위 변환: KIS는 백만원 단위 → 억원으로 반환"""

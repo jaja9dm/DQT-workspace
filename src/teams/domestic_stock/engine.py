@@ -497,8 +497,8 @@ def _refresh_hot_list_from_scan(scan: UniverseScan, limit: int = 5) -> None:
                  price_change_pct, rsi, sector, reason,
                  momentum_score, obv_slope, day_range_pos,
                  stoch_rsi, bb_width_ratio, trading_value, exec_strength,
-                 rs_daily, rs_5d, frgn_net_buy, inst_net_buy, atr_pct, slot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 rs_daily, rs_5d, frgn_net_buy, inst_net_buy, atr_pct, slot, at_new_high)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 snap.ticker, snap.name, sig, snap.volume_ratio,
@@ -510,6 +510,7 @@ def _refresh_hot_list_from_scan(scan: UniverseScan, limit: int = 5) -> None:
                 getattr(snap, "exec_strength", 100.0), getattr(snap, "rs_daily", 0.0),
                 getattr(snap, "rs_5d", 0.0), getattr(snap, "frgn_net_buy", 0),
                 getattr(snap, "inst_net_buy", 0), getattr(snap, "atr_pct", 0.0), "",
+                int(getattr(snap, "at_new_high", False)),
             ),
         )
     tickers = [s.ticker for s in top]
@@ -547,8 +548,8 @@ def _save_slots(
                  price_change_pct, rsi, sector, reason,
                  momentum_score, obv_slope, day_range_pos,
                  stoch_rsi, bb_width_ratio, trading_value, exec_strength,
-                 rs_daily, rs_5d, frgn_net_buy, inst_net_buy, atr_pct, slot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 rs_daily, rs_5d, frgn_net_buy, inst_net_buy, atr_pct, slot, at_new_high)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 ticker,
@@ -572,6 +573,7 @@ def _save_slots(
                 getattr(snap, "inst_net_buy", 0),
                 getattr(snap, "atr_pct", 0.0),
                 slot,
+                int(getattr(snap, "at_new_high", False)),
             ),
         )
 

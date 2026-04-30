@@ -33,10 +33,49 @@ _all_top: list[dict] = []      # 원시 거래대금 순위 (필터 전)
 _last_refresh: float = 0.0
 
 
+def _refresh_from_hot_list(top_n: int) -> list[dict]:
+    """paper 모드 폴백: hot_list DB에서 거래대금 상위 종목으로 주도주 구성."""
+    try:
+        from src.infra.database import fetch_all
+        rows = fetch_all(
+            """
+            SELECT ticker, name, price_change_pct, trading_value,
+                   frgn_net_buy, inst_net_buy
+            FROM hot_list
+            WHERE DATE(created_at) = DATE('now', 'localtime')
+            ORDER BY trading_value DESC
+            """,
+        )
+        seen: set[str] = set()
+        result: list[dict] = []
+        for r in rows:
+            tk = r["ticker"]
+            if tk in seen:
+                continue
+            seen.add(tk)
+            result.append({
+                "ticker":        tk,
+                "name":          r["name"] or tk,
+                "price":         0.0,
+                "change_pct":    float(r["price_change_pct"] or 0),
+                "trading_value": int(r["trading_value"] or 0),
+                "volume":        0,
+                "frgn_net_buy":  int(r["frgn_net_buy"] or 0),
+                "inst_net_buy":  int(r["inst_net_buy"] or 0),
+            })
+            if len(result) >= top_n:
+                break
+        return result
+    except Exception as e:
+        logger.debug(f"hot_list 폴백 실패: {e}")
+        return []
+
+
 def refresh(top_n: int = 30) -> None:
     """
     KIS 거래대금 순위 API를 호출해 주도주 캐시를 갱신.
     KOSPI + KOSDAQ 합산 후 거래대금 내림차순 정렬.
+    paper 모드: KIS ranking 미지원 → hot_list DB 폴백.
     """
     global _leaders, _all_top, _last_refresh
     try:
@@ -46,6 +85,10 @@ def refresh(top_n: int = 30) -> None:
         kospi  = gw.get_trading_value_ranking("J", top_n, Priority.BACKGROUND)
         kosdaq = gw.get_trading_value_ranking("Q", top_n, Priority.BACKGROUND)
         combined = kospi + kosdaq
+
+        # paper 모드에서 KIS ranking 미지원 → hot_list 폴백
+        if not combined:
+            combined = _refresh_from_hot_list(top_n)
 
         # 거래대금 내림차순 정렬 후 상위 top_n
         combined.sort(key=lambda x: x["trading_value"], reverse=True)
@@ -57,7 +100,9 @@ def refresh(top_n: int = 30) -> None:
             if item["change_pct"] > 0
             and (item["frgn_net_buy"] > 0 or item["inst_net_buy"] > 0)
         ]
-        # 필터 통과 없으면 거래대금 상위 5개라도 반환 (시장 현황 파악용)
+        # 필터 통과 없으면 거래대금 상위 5개라도 반환
+        if not leaders:
+            leaders = [item for item in raw_top if item["change_pct"] > 0][:5]
         if not leaders:
             leaders = raw_top[:5]
 
@@ -66,8 +111,9 @@ def refresh(top_n: int = 30) -> None:
             _leaders   = leaders
             _last_refresh = time.time()
 
+        source = "hot_list폴백" if not (kospi + kosdaq) else "KIS"
         logger.info(
-            f"주도주 갱신 완료 — 거래대금 상위 {len(raw_top)}종목 중 "
+            f"주도주 갱신 완료({source}) — 거래대금 상위 {len(raw_top)}종목 중 "
             f"주도주 {len(leaders)}종목 선별: "
             + ", ".join(f"{l['name']}({l['ticker']})" for l in leaders[:5])
         )

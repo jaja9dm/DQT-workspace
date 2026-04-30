@@ -1513,9 +1513,24 @@ def _count_partial_sells(ticker: str) -> int:
 # ──────────────────────────────────────────────
 
 def _save_snapshots(positions: list[dict]) -> None:
-    """현재 포지션을 position_snapshot 테이블에 저장."""
+    """현재 포지션을 position_snapshot 테이블에 저장.
+    ticker당 최신 1행 유지, 청산된 종목(현재 positions에 없는 ticker)은 삭제.
+    """
     now = datetime.now().isoformat(timespec="seconds")
+    current_tickers = {pos["ticker"] for pos in positions}
+
+    # 청산된 포지션(현재 보유 목록에 없는 ticker) 스냅샷 삭제
+    if current_tickers:
+        placeholders = ",".join("?" * len(current_tickers))
+        execute(
+            f"DELETE FROM position_snapshot WHERE ticker NOT IN ({placeholders})",
+            tuple(current_tickers),
+        )
+    else:
+        execute("DELETE FROM position_snapshot")
+
     for pos in positions:
+        execute("DELETE FROM position_snapshot WHERE ticker = ?", (pos["ticker"],))
         execute(
             """
             INSERT INTO position_snapshot
