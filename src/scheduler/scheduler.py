@@ -53,6 +53,53 @@ from src.utils.notifier import notify
 
 logger = get_logger(__name__)
 
+# ── KRX 공휴일 (주말 제외, 대체공휴일 포함) ───────────────────
+_KRX_HOLIDAYS: frozenset[str] = frozenset({
+    # 2026
+    "2026-01-01",  # 신정
+    "2026-02-16",  # 설날 연휴
+    "2026-02-17",  # 설날
+    "2026-02-18",  # 설날 연휴
+    "2026-03-02",  # 3·1절 대체공휴일 (3/1이 일요일)
+    "2026-05-01",  # 근로자의 날
+    "2026-05-05",  # 어린이날
+    "2026-05-25",  # 부처님오신날
+    "2026-08-17",  # 광복절 대체공휴일 (8/15가 토요일)
+    "2026-09-24",  # 추석 연휴
+    "2026-09-25",  # 추석
+    "2026-10-05",  # 개천절 대체공휴일 (10/3이 토요일)
+    "2026-10-09",  # 한글날
+    "2026-12-25",  # 성탄절
+    # 2025 (과거 데이터·테스트용)
+    "2025-01-01",  # 신정
+    "2025-01-28",  # 설날 연휴
+    "2025-01-29",  # 설날
+    "2025-01-30",  # 설날 연휴
+    "2025-03-03",  # 3·1절 대체공휴일
+    "2025-05-01",  # 근로자의 날
+    "2025-05-05",  # 어린이날
+    "2025-05-06",  # 어린이날 대체공휴일
+    "2025-06-06",  # 현충일
+    "2025-08-15",  # 광복절
+    "2025-10-03",  # 개천절
+    "2025-10-05",  # 추석 연휴
+    "2025-10-06",  # 추석
+    "2025-10-07",  # 추석 연휴
+    "2025-10-08",  # 추석 대체공휴일
+    "2025-10-09",  # 한글날
+    "2025-12-25",  # 성탄절
+})
+
+
+def is_trading_day(dt: datetime | None = None) -> bool:
+    """주말·공휴일이면 False, 거래일이면 True."""
+    import pytz
+    if dt is None:
+        dt = datetime.now(pytz.timezone("Asia/Seoul"))
+    if dt.weekday() >= 5:   # 토(5)·일(6)
+        return False
+    return dt.strftime("%Y-%m-%d") not in _KRX_HOLIDAYS
+
 
 class DQTScheduler:
     """DQT 통합 스케줄러."""
@@ -88,13 +135,11 @@ class DQTScheduler:
         notify("🚀 <b>DQT 시스템 시작</b>\n스케줄러 기동 완료")
 
         # 장중/장전 재시작 감지 — 이미 시황 엔진 시간(08:35~15:35)이면 즉시 기동
-        from datetime import datetime
         import pytz
         _kst = pytz.timezone("Asia/Seoul")
         _now = datetime.now(_kst)
         _hm = _now.hour * 100 + _now.minute
-        _weekday = _now.weekday()  # 0=월 ~ 4=금
-        if _weekday < 5 and 835 <= _hm < 1535:
+        if is_trading_day(_now) and 835 <= _hm < 1535:
             if _hm < 900:
                 # 08:35~08:59: 시황 엔진만 기동
                 logger.info(f"장 전 재시작 감지 ({_now.strftime('%H:%M')}) — 시황 엔진 즉시 기동")
@@ -212,6 +257,9 @@ class DQTScheduler:
 
     def _pre_market_setup(self) -> None:
         """08:50 — 유니버스 재구성 + 감성 캐시 정리."""
+        if not is_trading_day():
+            logger.info("장 전 준비 스킵 — 휴장일")
+            return
         logger.info("장 전 준비 시작")
         try:
             from src.infra.universe import UniverseManager
@@ -235,6 +283,9 @@ class DQTScheduler:
 
     def _start_market_engines(self) -> None:
         """08:35 — 글로벌·국내 시황 엔진 선기동 (오버나이트 요약 포함)."""
+        if not is_trading_day():
+            logger.info("시황 엔진 선기동 스킵 — 휴장일")
+            return
         logger.info("시황 엔진 선기동 시작 (오버나이트 요약 모드)")
         try:
             from src.teams.global_market.engine import GlobalMarketEngine
@@ -252,6 +303,9 @@ class DQTScheduler:
 
     def _start_realtime_engines(self) -> None:
         """09:00 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)."""
+        if not is_trading_day():
+            logger.info("실시간 엔진 기동 스킵 — 휴장일")
+            return
         logger.info("실시간 엔진 기동 시작")
         try:
             from src.teams.domestic_stock.engine import DomesticStockEngine
@@ -289,6 +343,8 @@ class DQTScheduler:
 
     def _market_open_recheck(self) -> None:
         """09:10 — 장 시작 10분 재점검. 오프닝 관망 해제 + Hot List 재스캔."""
+        if not is_trading_day():
+            return
         logger.info("09:10 장 시작 재점검 실행")
         try:
             # 오프닝 게이트 해제 (이제 무조건 매수 허용)
@@ -313,11 +369,13 @@ class DQTScheduler:
             logger.error(f"09:10 재점검 오류: {e}", exc_info=True)
 
     def _stop_realtime_engines(self, notify_market_close: bool = True) -> None:
-        """실시간 엔진 정지 (역순).
+        """실시간 엔진 정지 (역순). 휴장일엔 스킵.
 
         notify_market_close=True  → 15:35 스케줄 정지 (장 마감 알림 발송)
         notify_market_close=False → 시스템 종료 시 호출 (알림 없이 엔진만 정지)
         """
+        if notify_market_close and not is_trading_day():
+            return  # 휴장일엔 15:35 스케줄 발동 자체를 무시
         logger.info("실시간 엔진 정지 시작")
         for engine, name in [
             (self._intraday_macd, "장중 MACD 모니터"),
@@ -344,6 +402,8 @@ class DQTScheduler:
 
     def _run_report(self) -> None:
         """15:40 — 일일 리포트 생성."""
+        if not is_trading_day():
+            return
         logger.info("일일 리포트 실행")
         try:
             from src.teams.report.engine import ReportEngine
@@ -353,6 +413,8 @@ class DQTScheduler:
 
     def _run_param_tuning(self) -> None:
         """17:00 — 자동 파라미터 튜닝 (복기 결과 기반)."""
+        if not is_trading_day():
+            return
         logger.info("자동 파라미터 튜닝 실행")
         try:
             from src.teams.research.param_tuner import run_param_tuning
@@ -362,6 +424,8 @@ class DQTScheduler:
 
     def _run_daily_review(self) -> None:
         """16:30 — 일일 매매 복기 (오늘 매매 분석 + 개선점 도출)."""
+        if not is_trading_day():
+            return
         logger.info("일일 복기 실행")
         try:
             from src.teams.review.engine import run_daily_review
@@ -371,6 +435,8 @@ class DQTScheduler:
 
     def _run_research_daily(self) -> None:
         """16:00 — 연구소 일일 분석."""
+        if not is_trading_day():
+            return
         logger.info("연구소 일일 분석 실행")
         try:
             from src.teams.research.engine import ResearchEngine
