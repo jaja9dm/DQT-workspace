@@ -121,13 +121,14 @@ signal_type에 따라 아래 전략 기준을 적용하세요.
 - RSI 80↑이어도 OBV 양수 + 거래량 폭발이면 허용
 - 11:00~13:00: MACD buy_pre 확인 시만 허용 / 13:00 이후 차단
 
-### 전략 B: pullback_rebound (눌림목 반등)
-- 오늘 -0.5%~-5% 하락 중 시가 대비 반등 + OBV 양수 → buy: true
-- target_pct: 3~4% (빠른 수익 확정, 당일 청산 원칙)
-- stop_pct: 1.5% (타이트 — 반등 실패 시 즉시 컷)
-- RSI 55↑이면 보류 (이미 오른 구간에서 반등 진입은 위험)
-- 기술적 반등 신호 없으면 보류
-- **14:00 이후 진입 금지** — 장 마감 1시간 전 눌림 반등은 세력 마무리 매도와 겹쳐 되돌림 빠름
+### 전략 B: pullback_rebound (장중조정 재진입)
+- 오늘 장 시작부터 강하게 슈팅한 종목의 첫 조정 타이밍 진입
+- 📉장중눌림 태그 있음 = 오늘 +5%↑ 후 day_range_pos ≤ 0.65로 눌린 종목 → 등락 +6% 제한 면제
+- day_range_pos ≤ 0.65 + OBV 양수 + MACD buy_pre 전환 → buy: true
+- target_pct: 3~5% (다음 슈팅분 먹기)
+- stop_pct: 1.5% (조정이 더 깊어지면 즉시 컷)
+- 전일 대비 등락이 양수여도 무방 — 오늘 장중 급등+조정 패턴이 핵심
+- **14:00 이후 진입 금지** — 장 마감 근접 눌림은 세력 마무리 매도와 겹쳐 위험
 
 ### 전략 C: market_momentum (시장 강세 편승)
 - KOSPI 강세 + 외인+기관 동시 순매수 + RSI 45~70 → buy: true
@@ -783,7 +784,38 @@ class TradingEngine:
                     f"Gate 4.5 통과: {tk} 갭업 종목 MACD buy_pre 뒤늦은 진입 허용 "
                     f"({now.strftime('%H:%M')})"
                 )
-            # 갭업 5% 이상 종목: 09:10 이전 완전 차단 — 오프닝 초기 10분 노이즈 소거
+
+            # 슬롯별 진입 타이밍 차등화
+            item_slot = c.get("slot", "")
+            is_leader_slot   = item_slot == "leader"
+            is_breakout_slot = item_slot == "breakout"
+            is_pullback_slot = item_slot == "pullback"
+
+            # 장중 눌림 감지: 오늘 +5% 이상 올랐지만 day_range_pos ≤ 0.65 → 고점에서 눌린 것
+            _price_chg_c = float(c.get("price_change_pct") or 0.0)
+            _drp_c = float(c.get("day_range_pos") or 0.5)
+            c = dict(c)
+            c["_intraday_pullback"] = _price_chg_c >= 5.0 and _drp_c <= 0.65
+
+            # ── Leader: 장 시작 즉시 진입 — MACD 대기·갭업 차단 없음 ──
+            if is_leader_slot:
+                gated_candidates.append(c)
+                continue
+
+            # ── Breakout: 갭업 09:10 차단 면제, 신고가+거래량 확인 시 즉시 진입 ──
+            if is_breakout_slot:
+                _new_high_c = c.get("at_new_high", False)
+                _vol_ratio_c = float(c.get("volume_ratio") or 0.0)
+                # 신고가 + 거래량 3배 이상이면 MACD 대기 없이 즉시 진입
+                if _new_high_c and _vol_ratio_c >= 3.0:
+                    logger.info(
+                        f"Gate 4.5 통과: {tk} breakout 신고가+거래량{_vol_ratio_c:.1f}x 즉시 진입"
+                    )
+                    gated_candidates.append(c)
+                    continue
+                # 조건 불충분 시 일반 MACD 체크로 fall-through
+
+            # ── Pullback / 일반 종목: 갭업 09:10 차단 + 09:30 전 MACD 대기 ──
             if is_c_gap_up and now_hm < 910 and tk not in self._macd_reentry_ok:
                 logger.info(
                     f"Gate 4.5 차단: {tk} 갭업 종목 09:10 이전 ({now.strftime('%H:%M')}) "
@@ -791,33 +823,25 @@ class TradingEngine:
                 )
                 continue
 
-            # 장중 눌림 감지: 오늘 +5% 이상 올랐지만 day_range_pos ≤ 0.65 → 고점에서 눌린 것
-            # 추격 진입이 아닌 눌림 재진입으로 처리
-            _price_chg_c = float(c.get("price_change_pct") or 0.0)
-            _drp_c = float(c.get("day_range_pos") or 0.5)
-            c = dict(c)
-            c["_intraday_pullback"] = _price_chg_c >= 5.0 and _drp_c <= 0.65
-
-            # 09:30 이전: 장 초반 변동성 구간 — 단순 시간 대기 대신 지표 기반 유동 판단
             if now_hm < 930 and tk not in self._macd_reentry_ok:
-                # ① MACD buy_pre 필수: 히스토그램이 음수에서 상승 중이어야 함
                 if macd_now != "buy_pre":
                     logger.info(
                         f"Gate 4.5 차단: {tk} 장초반 MACD 미확인 ({macd_now}) "
-                        f"— buy_pre 신호 대기"
+                        f"— buy_pre 신호 대기 (슬롯: {item_slot or '미배정'})"
                     )
                     continue
-                # ② 진입 품질 체크: 눌림 확인 + 매도 소진 or 바닥 형성
-                quality_ok, quality_reason = _check_opening_dip_quality(tk)
-                if not quality_ok:
+                # pullback 슬롯은 진입 품질 추가 확인
+                if is_pullback_slot:
+                    quality_ok, quality_reason = _check_opening_dip_quality(tk)
+                    if not quality_ok:
+                        logger.info(
+                            f"Gate 4.5 차단: {tk} pullback 진입 품질 미충족 — {quality_reason}"
+                        )
+                        continue
                     logger.info(
-                        f"Gate 4.5 차단: {tk} 장초반 진입 품질 미충족 — {quality_reason}"
+                        f"Gate 4.5 통과: {tk} pullback 진입 품질 확인 ({now.strftime('%H:%M')}) "
+                        f"— {quality_reason}"
                     )
-                    continue
-                logger.info(
-                    f"Gate 4.5 통과: {tk} 장초반 진입 품질 확인 ({now.strftime('%H:%M')}) "
-                    f"— {quality_reason}"
-                )
             gated_candidates.append(c)
         candidates = gated_candidates
 
