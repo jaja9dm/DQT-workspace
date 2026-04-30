@@ -213,6 +213,9 @@ class TradingEngine:
         self._opening_gate_checked: bool = False  # 당일 오프닝 게이트 판단 완료 여부
         self._buy_allowed_from: datetime | None = None  # 매수 허용 시작 시각 (None=즉시)
 
+        # 전체 게이트 차단 감시 — 3분 지속 시 슬롯 강제 리셋
+        self._all_blocked_since: float = 0.0
+
         # 관심종목 거래량 급등 감시 — 45초 폴링
         self._force_run = threading.Event()           # 감시 스레드가 즉시 실행 요청 시 set
         self._watchdog_vol: dict[str, dict] = {}      # {ticker: {"vol": int, "ts": float}}
@@ -653,6 +656,7 @@ class TradingEngine:
         candidates = filtered_candidates
         if not candidates:
             logger.debug("Gate 4.2: 신뢰도 점수 통과 종목 없음")
+            self._check_blocked_rescan()
             return []
 
         # ── Gate 4.3: 호가 잔량 불균형 + 공매도 비율 ──────────
@@ -698,6 +702,7 @@ class TradingEngine:
         candidates = gate43_candidates
         if not candidates:
             logger.debug("Gate 4.3: 호가 잔량 필터 통과 종목 없음")
+            self._check_blocked_rescan()
             return []
 
         # ── Gate 4.5: MACD 방향 필터 + 장초반 진입 품질 체크 ──
@@ -811,7 +816,11 @@ class TradingEngine:
         candidates = gated_candidates
 
         if not candidates:
+            self._check_blocked_rescan()
             return []
+
+        # 게이트 통과 — 차단 타이머 리셋
+        self._all_blocked_since = 0.0
 
         # ── 가용 예수금 조회 ─────────────────────
         available_cash = _fetch_available_cash()
@@ -1200,6 +1209,21 @@ JSON만 응답:
             logger.warning(f"오프닝 게이트 Claude 판단 실패: {e} — 기본값 관망")
             notify("⏳ <b>[오프닝 게이트]</b> Claude 판단 불가 — 9:10까지 관망 (기본값)")
             return False
+
+    # ──────────────────────────────────────────
+    # 전체 게이트 차단 감시 — 3분 지속 시 슬롯 강제 리셋
+    # ──────────────────────────────────────────
+
+    def _check_blocked_rescan(self) -> None:
+        import time
+        now_ts = time.time()
+        if self._all_blocked_since == 0.0:
+            self._all_blocked_since = now_ts
+        elif now_ts - self._all_blocked_since >= 180:
+            logger.warning("[슬롯 강제 리셋] hot_list 3분 연속 게이트 차단 — 슬롯 초기화 후 재스캔")
+            from src.teams.domestic_stock.engine import force_slot_rescan
+            force_slot_rescan()
+            self._all_blocked_since = 0.0
 
     # ──────────────────────────────────────────
     # Claude 매수 판단 (배치 + 프롬프트 캐싱)

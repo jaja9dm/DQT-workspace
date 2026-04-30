@@ -422,6 +422,23 @@ def _score_slot_health(
     return score, worst_reason
 
 
+_last_force_rescan_ts: float = 0.0
+
+
+def force_slot_rescan() -> None:
+    """전체 게이트 차단 3분 지속 시 호출 — 슬롯 초기화해서 다음 스캔 사이클에서 재배정."""
+    global _last_force_rescan_ts
+    import time
+    if time.time() - _last_force_rescan_ts < 300:  # 5분 쿨다운 (무한 루프 방지)
+        logger.debug("슬롯 강제 리셋 쿨다운 중 — 스킵")
+        return
+    from src.infra.database import execute as _exec
+    today = date.today().isoformat()
+    _exec("DELETE FROM slot_assignments WHERE trade_date = ?", (today,))
+    _last_force_rescan_ts = time.time()
+    logger.info("[강제 리셋] 오늘 슬롯 초기화 완료 — 다음 스캔에서 새 종목 재배정")
+
+
 def _get_empty_slots() -> list[str]:
     """오늘 slot_assignments에서 비어 있거나 교체 요청된 슬롯 목록 반환."""
     today = date.today().isoformat()
