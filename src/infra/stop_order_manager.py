@@ -69,9 +69,11 @@ def place_stop_order(ticker: str, quantity: int, stop_price: float) -> bool:
     existing = _get_stop_order(ticker)
     if existing:
         logger.info(f"[Stop Order] {ticker} 기존 주문 취소 후 재제출")
-        if not _cancel_on_kis(existing):
+        cancel_result = _cancel_on_kis(existing)
+        if cancel_result == "error":
             logger.error(f"[Stop Order] {ticker} 기존 주문 취소 실패 — 이중 매도 방지를 위해 신규 제출 중단")
             return False
+        # "ok" 또는 "filled" 모두 이전 주문은 소멸됨 → DB에서 제거 후 재제출
         _delete_stop_order(ticker)
 
     gw = KISGateway()
@@ -114,26 +116,29 @@ def place_stop_order(ticker: str, quantity: int, stop_price: float) -> bool:
         return False
 
 
-def cancel_stop_order(ticker: str) -> bool:
+def cancel_stop_order(ticker: str) -> str:
     """
     기존 손절 주문 취소.
     포지션 감시팀이 직접 매도하기 직전에 호출해 이중 매도 방지.
 
     Returns:
-        True  → 취소 성공 또는 기존 주문 없음
-        False → 취소 실패 (주문은 아직 살아있을 수 있음)
+        "ok"      → 취소 성공 또는 기존 주문 없음
+        "filled"  → 손절 주문이 이미 KIS에서 자동 체결됨 → 포지션 이미 없음
+        "error"   → 취소 실패 (주문 살아있을 수 있음)
     """
     existing = _get_stop_order(ticker)
     if not existing:
-        return True  # 취소할 주문 없음 — 정상
+        return "ok"  # 취소할 주문 없음 — 정상
 
-    ok = _cancel_on_kis(existing)
-    if ok:
+    result = _cancel_on_kis(existing)
+    if result in ("ok", "filled"):
         _delete_stop_order(ticker)
-        logger.info(f"[Stop Order] {ticker} 손절 주문 취소 완료")
+        if result == "ok":
+            logger.info(f"[Stop Order] {ticker} 손절 주문 취소 완료")
+        # "filled" 로그는 _cancel_on_kis 내부에서 이미 기록
     else:
         logger.warning(f"[Stop Order] {ticker} 손절 주문 취소 실패 — 수동 확인 필요")
-    return ok
+    return result
 
 
 def update_stop_order(ticker: str, quantity: int, new_stop_price: float) -> bool:
@@ -156,8 +161,15 @@ def update_stop_order(ticker: str, quantity: int, new_stop_price: float) -> bool
 # KIS API 헬퍼
 # ──────────────────────────────────────────────
 
-def _cancel_on_kis(order: dict) -> bool:
-    """KIS 취소 API 호출. 성공 여부 반환."""
+def _cancel_on_kis(order: dict) -> str:
+    """
+    KIS 취소 API 호출.
+
+    Returns:
+        "ok"       → 취소 성공
+        "filled"   → 이미 체결됨 ("정정/취소할 수량이 없습니다")
+        "error"    → 그 외 오류
+    """
     gw = KISGateway()
     tr_id = "VTTC0803U" if settings.KIS_MODE == "paper" else "TTTC0803U"
     acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
@@ -181,13 +193,21 @@ def _cancel_on_kis(order: dict) -> bool:
             tr_id=tr_id,
             priority=RequestPriority.TRADING,
         )
-        return True
+        return "ok"
     except Exception as e:
+        err_str = str(e)
+        # "정정/취소할 수량이 없습니다" = 손절 주문이 이미 KIS에서 자동 체결됨
+        if "정정/취소할 수량" in err_str or "취소할 수량" in err_str:
+            logger.info(
+                f"[Stop Order] {order['ticker']} 주문번호 {order['order_no']}: "
+                f"이미 체결됨 (자동 손절 확정)"
+            )
+            return "filled"
         logger.error(
             f"[Stop Order] KIS 취소 실패 [{order['ticker']}] "
             f"주문번호 {order['order_no']}: {e}"
         )
-        return False
+        return "error"
 
 
 # ──────────────────────────────────────────────
@@ -200,6 +220,15 @@ def _get_stop_order(ticker: str) -> dict | None:
         return dict(row) if row else None
     except Exception:
         return None
+
+
+def get_stop_order_price(ticker: str) -> float | None:
+    """
+    등록된 손절 주문의 지정가 반환.
+    stop 주문이 자동 체결됐을 때 체결 추정가로 사용.
+    """
+    row = _get_stop_order(ticker)
+    return float(row["stop_price"]) if row else None
 
 
 def _save_stop_order(

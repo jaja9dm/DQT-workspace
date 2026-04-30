@@ -182,14 +182,21 @@ class PositionMonitorEngine:
         stop_loss_pct = get_stop_loss_pct()
 
         # 2. KIS 잔고 조회 (실패 시 DB 스냅샷 폴백)
-        positions = _fetch_positions()
+        # None = API 오류, [] = 정상이지만 보유 없음
+        kis_positions_raw = _fetch_positions()
+        kis_api_ok = kis_positions_raw is not None
+        positions = kis_positions_raw if kis_api_ok else []
         if not positions:
-            positions = _fetch_positions_from_snapshot()
-            if positions:
+            snapshot_positions = _fetch_positions_from_snapshot()
+            if snapshot_positions:
+                positions = snapshot_positions
                 logger.warning(
                     f"KIS 잔고 API 실패 → DB 스냅샷 폴백 ({len(positions)}종목) — 가격 stale 가능"
                 )
         if not positions:
+            # KIS API 정상 응답인데 잔고 0 → trailing_stop에 남은 좀비 레코드 정리
+            if kis_api_ok:
+                _reconcile_zombie_trailing_stops(self)
             self._sync_ws_subscriptions([])
             return []
 
@@ -1122,8 +1129,35 @@ class PositionMonitorEngine:
             return None
 
         # 이중 매도 방지: 거래소에 걸어둔 지정가 손절 주문 먼저 취소
-        from src.infra.stop_order_manager import cancel_stop_order
-        cancel_stop_order(ticker)
+        from src.infra.stop_order_manager import cancel_stop_order, get_stop_order_price
+        cancel_result = cancel_stop_order(ticker)
+
+        # stop 주문이 이미 KIS에서 자동 체결된 경우 — 포지션은 이미 없음
+        if cancel_result == "filled":
+            stop_price = get_stop_order_price(ticker) or current_price
+            logger.warning(
+                f"[Stop Order 자동체결] {ticker} | 손절가 {stop_price:,.0f}원으로 "
+                f"KIS 자동 체결 확인 — 매도 기록 후 포지션 청산 처리"
+            )
+            _record_trade(
+                ticker=ticker,
+                action="stop_loss",
+                quantity=quantity,
+                exec_price=stop_price,
+                signal_source="stop_order_auto",
+                reason="KIS 사전 손절 주문 자동 체결",
+                avg_price=avg_price,
+                name=name,
+            )
+            self._cleanup_after_sell(ticker)
+            return {
+                "ticker": ticker,
+                "action": "stop_loss",
+                "quantity": quantity,
+                "exec_price": stop_price,
+                "order_no": "",
+                "reason": "KIS 사전 손절 주문 자동 체결",
+            }
 
         gw = KISGateway()
         tr_id = "VTTC0801U" if settings.KIS_MODE == "paper" else "TTTC0801U"
@@ -1164,27 +1198,7 @@ class PositionMonitorEngine:
                 f"@ {exec_price:,.0f}원 | 주문번호 {order_no}"
             )
 
-            # 매도 완료 → WebSocket 구독 해제 + 트리거 플래그 정리
-            try:
-                from src.infra.kis_websocket import KISWebSocket
-                ws = KISWebSocket()
-                ws.unsubscribe(ticker)
-                ws.clear_selling(ticker)
-            except Exception:
-                pass
-            self._ws_subscribed.discard(ticker)
-            self._ws_triggered.discard(ticker)
-            self._qty_cache.pop(ticker, None)
-
-            # 슬롯 해제 — 포지션 청산 시 해당 슬롯을 재탐색 가능 상태로
-            try:
-                from src.teams.domestic_stock.engine import release_slot, get_slot_for_ticker
-                _slot = get_slot_for_ticker(ticker)
-                if _slot:
-                    release_slot(_slot)
-            except Exception:
-                pass
-
+            self._cleanup_after_sell(ticker)
             return {
                 "ticker": ticker,
                 "action": action,
@@ -1195,6 +1209,34 @@ class PositionMonitorEngine:
             }
 
         except Exception as e:
+            err_str = str(e)
+            # "잔고내역이 없습니다" = KIS 자동 손절이 이미 체결돼 포지션이 없는 상태
+            if "잔고내역이 없습니다" in err_str or "잔고내역" in err_str:
+                from src.infra.stop_order_manager import get_stop_order_price
+                stop_price = get_stop_order_price(ticker) or current_price
+                logger.warning(
+                    f"[포지션 이미 청산] {ticker} | KIS 잔고 없음 → "
+                    f"손절가 {stop_price:,.0f}원으로 매도 기록 후 청산 처리"
+                )
+                _record_trade(
+                    ticker=ticker,
+                    action="stop_loss",
+                    quantity=quantity,
+                    exec_price=stop_price,
+                    signal_source="stop_order_auto",
+                    reason="KIS 잔고없음 — 사전 손절 주문 자동 체결 추정",
+                    avg_price=avg_price,
+                    name=name,
+                )
+                self._cleanup_after_sell(ticker)
+                return {
+                    "ticker": ticker,
+                    "action": "stop_loss",
+                    "quantity": quantity,
+                    "exec_price": stop_price,
+                    "order_no": "",
+                    "reason": "KIS 잔고없음 — 사전 손절 주문 자동 체결 추정",
+                }
             logger.error(f"매도 주문 실패 [{ticker}]: {e}")
             # 실패 시 selling 플래그 해제 (재시도 가능하게)
             try:
@@ -1203,6 +1245,31 @@ class PositionMonitorEngine:
             except Exception:
                 pass
             return None
+
+    def _cleanup_after_sell(self, ticker: str) -> None:
+        """매도 완료(또는 이미 청산 확인) 후 내부 상태 정리."""
+        # trailing_stop 삭제 (이미 삭제됐어도 무해)
+        _delete_trailing_stop(ticker)
+
+        try:
+            from src.infra.kis_websocket import KISWebSocket
+            ws = KISWebSocket()
+            ws.unsubscribe(ticker)
+            ws.clear_selling(ticker)
+        except Exception:
+            pass
+        self._ws_subscribed.discard(ticker)
+        self._ws_triggered.discard(ticker)
+        self._qty_cache.pop(ticker, None)
+
+        # 슬롯 해제 — 포지션 청산 시 해당 슬롯을 재탐색 가능 상태로
+        try:
+            from src.teams.domestic_stock.engine import release_slot, get_slot_for_ticker
+            _slot = get_slot_for_ticker(ticker)
+            if _slot:
+                release_slot(_slot)
+        except Exception:
+            pass
 
 
     def _place_buy(
@@ -1322,10 +1389,14 @@ def _fetch_available_cash() -> float:
         return float("inf")  # 조회 실패 시 차단하지 않음
 
 
-def _fetch_positions() -> list[dict]:
+def _fetch_positions() -> list[dict] | None:
     """
     KIS API에서 보유 포지션 목록 조회.
     보유 수량 0인 종목 제외.
+
+    Returns:
+        list[dict] → 정상 조회 (빈 리스트 포함)
+        None       → API 오류 (KIS 서버 500 등)
     """
     gw = KISGateway()
     acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
@@ -1385,7 +1456,7 @@ def _fetch_positions() -> list[dict]:
 
     except Exception as e:
         logger.warning(f"KIS 잔고 조회 실패: {e}")
-        return []
+        return None  # API 오류 — 정상 0건과 구별
 
 
 def _fetch_positions_from_snapshot() -> list[dict]:
@@ -1986,6 +2057,79 @@ def _update_ticker_stats(ticker: str, name: str, pnl_pct: float) -> None:
                 best_hour,
             ),
         )
+
+
+def _reconcile_zombie_trailing_stops(engine_instance) -> None:
+    """
+    KIS API 정상 응답인데 잔고가 0일 때 호출.
+    trailing_stop에 남아있는 레코드 = KIS가 자동 손절을 체결했지만
+    시스템이 통보받지 못한 좀비 포지션.
+    매도 이력을 기록하고 trailing_stop을 정리한다.
+    """
+    try:
+        zombie_rows = fetch_all("SELECT * FROM trailing_stop")
+        if not zombie_rows:
+            return
+        from src.infra.stop_order_manager import get_stop_order_price
+        for row in zombie_rows:
+            row = dict(row)
+            ticker = row["ticker"]
+            entry_price = float(row.get("entry_price") or 0)
+            stop_price = (
+                get_stop_order_price(ticker)
+                or float(row.get("trailing_floor") or entry_price)
+            )
+            # 수량·종목명: position_snapshot → trades(최근 buy) 순으로 조회
+            snap = fetch_one(
+                "SELECT quantity, name FROM position_snapshot WHERE ticker=?", (ticker,)
+            )
+            buy_rec = fetch_one(
+                "SELECT quantity, name FROM trades WHERE ticker=? AND action='buy' "
+                "AND date=DATE('now','localtime') ORDER BY id DESC LIMIT 1",
+                (ticker,),
+            )
+            qty = int((snap["quantity"] if snap else None) or (buy_rec["quantity"] if buy_rec else 0))
+            name = (snap["name"] if snap else None) or (buy_rec["name"] if buy_rec else ticker)
+            logger.warning(
+                f"[좀비 포지션 정리] {ticker} | KIS 잔고 0인데 trailing_stop 존재 "
+                f"→ 손절가 {stop_price:,.0f}원으로 자동 체결 처리"
+            )
+            # 같은 날 sell 기록이 있으면 중복 기록 방지
+            existing_sell = fetch_one(
+                "SELECT 1 FROM trades WHERE ticker=? "
+                "AND action IN ('sell','stop_loss','stop_order_auto') "
+                "AND date=DATE('now','localtime')",
+                (ticker,),
+            )
+            if not existing_sell and qty > 0:
+                _record_trade(
+                    ticker=ticker,
+                    action="stop_loss",
+                    quantity=qty,
+                    exec_price=stop_price,
+                    signal_source="stop_order_auto",
+                    reason="KIS 잔고 0 확인 — 사전 손절 주문 자동 체결 (복구 처리)",
+                    avg_price=entry_price,
+                    name=name,
+                )
+            _delete_trailing_stop(ticker)
+            try:
+                engine_instance._ws_subscribed.discard(ticker)
+                engine_instance._ws_triggered.discard(ticker)
+                engine_instance._qty_cache.pop(ticker, None)
+                from src.infra.kis_websocket import KISWebSocket
+                KISWebSocket().unsubscribe(ticker)
+            except Exception:
+                pass
+            try:
+                from src.teams.domestic_stock.engine import release_slot, get_slot_for_ticker
+                _slot = get_slot_for_ticker(ticker)
+                if _slot:
+                    release_slot(_slot)
+            except Exception:
+                pass
+    except Exception as e:
+        logger.warning(f"좀비 trailing_stop 정리 실패: {e}")
 
 
 def _compute_best_entry_hour(ticker: str) -> int | None:
