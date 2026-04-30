@@ -151,11 +151,21 @@ class DomesticStockEngine:
         # 10. Claude 슬롯 판단
         key_events  = _get_global_key_events()
         kospi_chg   = _get_kospi_chg_pct()
+
+        # 이미 다른 슬롯에 배정된 종목 조회 (중복 배정 방지)
+        today = date.today().isoformat()
+        _assigned_rows = fetch_all(
+            "SELECT ticker FROM slot_assignments WHERE trade_date=? AND status='active'",
+            (today,),
+        )
+        _exclude = {r["ticker"] for r in _assigned_rows}
+
         slot_result = analyze(
             scan, market_score, global_risk_score,
             global_key_events=key_events,
             kospi_chg_pct=kospi_chg,
             slots_to_fill=slots_to_fill,
+            exclude_tickers=_exclude if _exclude else None,
         )
 
         # 11. DB 저장 (슬롯별)
@@ -514,12 +524,17 @@ def _save_slots(
     snaps = {s.ticker: s for s in scan.snapshots}
     today = date.today().isoformat()
     saved = []
+    _saved_tickers: set[str] = set()  # 이번 배치 내 중복 방지
 
     for slot, item in slot_result.items():
         if not item:
             continue
 
         ticker = item.get("ticker", "")
+        if ticker in _saved_tickers:
+            logger.warning(f"슬롯 중복 배정 차단: {ticker} → {slot} (이미 다른 슬롯에 배정됨)")
+            continue
+        _saved_tickers.add(ticker)
         snap = snaps.get(ticker)
         if not snap:
             continue

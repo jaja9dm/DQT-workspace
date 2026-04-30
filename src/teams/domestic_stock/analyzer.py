@@ -350,7 +350,8 @@ def analyze(
     global_risk_score: int = 5,
     global_key_events: list[str] | None = None,
     kospi_chg_pct: float = 0.0,
-    slots_to_fill: list[str] | None = None,  # None=전체, ["breakout"]=해당 슬롯만
+    slots_to_fill: list[str] | None = None,
+    exclude_tickers: set[str] | None = None,  # 이미 다른 슬롯에 배정된 종목 제외
 ) -> dict[str, dict | None]:
     """
     후보 종목을 Claude에 보내 슬롯별 종목 선정.
@@ -374,6 +375,13 @@ def analyze(
     if not candidates:
         logger.info("후보 종목 없음 — 슬롯 비어있음")
         return _empty_result
+
+    # 이미 다른 슬롯에 배정된 종목 제외 (중복 배정 방지)
+    if exclude_tickers:
+        candidates = [c for c in candidates if c.ticker not in exclude_tickers]
+        if not candidates:
+            logger.info("exclude 후 후보 없음 — 슬롯 비어있음")
+            return _empty_result
 
     # ── 글로벌 반도체 약세 경보 ──────────────────────────────
     # TSM·NVDA 등 글로벌 반도체가 -2% 이상 하락한 날은
