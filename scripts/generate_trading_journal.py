@@ -422,6 +422,9 @@ tr:last-child td { border-bottom: none; }
 .market-table td:first-child { color: #888; font-size: .8rem; width: 120px; }
 .fee-note { font-size: .75rem; color: #aaa; margin-top: 6px; }
 hr.sep { border: none; border-top: 1px solid #e8eaf0; margin: 16px 0; }
+.date-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.date-nav a { padding: 5px 14px; border-radius: 20px; background: #1a1a2e; color: #fff; font-size: .82rem; font-weight: 600; text-decoration: none; opacity: .85; transition: opacity .15s; }
+.date-nav a:hover { opacity: 1; }
 """
 
 _SLOT_CLASS = {"leader": "slot-leader", "breakout": "slot-breakout", "pullback": "slot-pullback"}
@@ -621,29 +624,42 @@ def _build_html_section(
     return "\n".join(H)
 
 
+def _build_nav(content: str) -> str:
+    """파일 내 모든 날짜 섹션을 스캔해서 네비게이션 HTML 반환."""
+    dates = re.findall(r"<!-- section (\d{4}-\d{2}-\d{2}) -->", content)
+    if not dates:
+        return ""
+    items = "\n".join(f'    <a href="#{d}">{d}</a>' for d in dates)
+    return f'<!-- nav -->\n<nav class="date-nav">\n{items}\n</nav>\n<!-- /nav -->'
+
+
 def _update_html_file(today: str, section_html: str) -> None:
-    """journal.html에 날짜 섹션 삽입/교체."""
-    marker_open  = f"<!-- section {today} -->"
-    marker_close = f"<!-- /section {today} -->"
+    """journal.html에 날짜 섹션 삽입/교체 후 네비게이션 자동 재생성."""
+    marker_open = f"<!-- section {today} -->"
 
     if _JOURNAL_HTML.exists():
         existing = _JOURNAL_HTML.read_text(encoding="utf-8")
         if marker_open in existing:
             pattern = rf"<!-- section {re.escape(today)} -->.*?<!-- /section {re.escape(today)} -->"
-            existing = re.sub(pattern, section_html, existing, flags=re.DOTALL)
-            _JOURNAL_HTML.write_text(existing, encoding="utf-8")
+            updated = re.sub(pattern, section_html, existing, flags=re.DOTALL)
         else:
-            # 기존 첫 섹션 앞에 삽입
             insert_at = existing.find("<!-- section ")
-            if insert_at == -1:
-                insert_at = existing.find("</div><!-- sections -->")
             if insert_at != -1:
                 updated = existing[:insert_at] + section_html + "\n\n" + existing[insert_at:]
             else:
-                updated = existing.replace("</div><!-- /sections -->",
-                                           section_html + "\n</div><!-- /sections -->")
-            _JOURNAL_HTML.write_text(updated, encoding="utf-8")
+                updated = existing.replace("</div><!-- /wrap -->",
+                                           section_html + "\n</div><!-- /wrap -->")
+
+        # 네비게이션 재생성
+        nav_html = _build_nav(updated)
+        if "<!-- nav -->" in updated:
+            updated = re.sub(r"<!-- nav -->.*?<!-- /nav -->", nav_html, updated, flags=re.DOTALL)
+        else:
+            updated = updated.replace('<div class="wrap">', f'<div class="wrap">\n{nav_html}')
+
+        _JOURNAL_HTML.write_text(updated, encoding="utf-8")
     else:
+        nav_html = _build_nav(section_html)
         html = f"""<!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -657,8 +673,9 @@ def _update_html_file(today: str, section_html: str) -> None:
 <body>
 <div class="wrap">
 <h1 class="title">📒 매매 일지 (DQT)</h1>
+{nav_html}
 {section_html}
-</div><!-- /sections -->
+</div><!-- /wrap -->
 </body>
 </html>
 """

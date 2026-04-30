@@ -55,12 +55,127 @@ tr:last-child td { border-bottom: none; }
 .market-table td:first-child { color: #888; font-size: .8rem; width: 120px; }
 .fee-note { font-size: .75rem; color: #aaa; margin-top: 6px; }
 hr.sep { border: none; border-top: 1px solid #e8eaf0; margin: 16px 0; }
+.date-nav { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+.date-nav a { padding: 5px 14px; border-radius: 20px; background: #1a1a2e; color: #fff; font-size: .82rem; font-weight: 600; text-decoration: none; opacity: .85; transition: opacity .15s; }
+.date-nav a:hover { opacity: 1; }
 
 </style>
 </head>
 <body>
 <div class="wrap">
 <h1 class="title">📒 매매 일지 (DQT)</h1>
+<!-- nav -->
+<nav class="date-nav">
+    <a href="#2026-04-29">2026-04-29</a>
+    <a href="#2026-04-30">2026-04-30</a>
+</nav>
+<!-- /nav -->
+<!-- section 2026-04-29 -->
+<section class="day-section" id="2026-04-29">
+  <div class="day-header">
+    <span class="date">📅 2026-04-29</span>
+    <span class="meta">KIS 실전투자</span>
+  </div>
+  <div class="section-body">
+    <div class="section-title">📊 당일 요약</div>
+    <div class="summary-grid">
+      <div class="summary-card"><div class="label">거래 종목</div><div class="value">2종목</div></div>
+      <div class="summary-card"><div class="label">체결</div><div class="value">매수 3건 / 매도 2건</div></div>
+      <div class="summary-card"><div class="label">승률</div><div class="value">0% (0승 2패)</div></div>
+      <div class="summary-card"><div class="label">총 수익 (세전)</div><div class="value neg">-111,000원</div></div>
+      <div class="summary-card"><div class="label">수수료+세금</div><div class="value">-4,084원</div></div>
+      <div class="summary-card"><div class="label">실현 순수익</div><div class="value neg" style="font-size:1.15rem">-115,084원</div></div>
+      <div class="summary-card"><div class="label">예수금 (장마감)</div><div class="value">7,967,253원</div></div>
+    </div>
+    <hr class="sep">
+    <div class="section-title">📋 종목별 매매 상세</div>
+    <div class="ticker-card">
+      <div class="ticker-header">
+        <span class="lose">❌</span>
+        <span class="name">포스코스틸리온</span>
+        <span class="code">058430</span>
+        <span class="slot-badge slot-breakout">🚀 돌파매매</span>
+        <span style="margin-left:auto;font-weight:700" class="neg">-47,917원</span>
+      </div>
+      <div class="ticker-body">
+        <div class="meta-row"><span>섹터: nan</span><span>신호: breakout</span><span>RSI 50</span><span>모멘텀 62점</span><span>진입점수 54점</span><span>RS +0.3%</span></div>
+        <div class="subsection">매수 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>금액</th></tr></thead><tbody>
+          <tr><td>10:25</td><td>9,560원</td><td>100주</td><td>956,000원</td></tr>
+        </tbody></table>
+        <div class="subsection">매도 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>손익(세전)</th><th>수익률</th></tr></thead><tbody>
+          <tr><td>13:54</td><td>9,100원</td><td>100주</td><td class="neg">-46,000원</td><td class="neg">-4.81%</td></tr>
+        </tbody></table>
+        <div class="pnl-summary">
+          <div><div class="plabel">총 수익 (세전)</div><div class="neg">-46,000원</div></div>
+          <div><div class="plabel">수수료+세금</div><div>-1,917원</div></div>
+          <div><div class="plabel">실현 순수익</div><div class="neg" style="font-weight:700">-47,917원</div></div>
+        </div>
+      </div>
+    </div>
+    <div class="ticker-card">
+      <div class="ticker-header">
+        <span class="lose">❌</span>
+        <span class="name">대원전선</span>
+        <span class="code">006340</span>
+        <span class="slot-badge slot-leader">👑 주도주</span>
+        <span style="margin-left:auto;font-weight:700" class="neg">-67,165원</span>
+      </div>
+      <div class="ticker-body">
+        <div class="meta-row"><span>섹터: 전선</span><span>신호: volume_price_surge</span><span>RSI 89</span><span>모멘텀 140점</span><span>진입점수 71점</span><span>RS +29.2%</span></div>
+        <div class="subsection">매수 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>금액</th></tr></thead><tbody>
+          <tr><td>09:18</td><td>43,200원</td><td>20주</td><td>864,000원</td></tr>
+          <tr><td>10:40</td><td>42,100원</td><td>5주</td><td>210,500원</td></tr>
+        </tbody></table>
+        <div class="subsection">매도 내역</div>
+        <table><thead><tr><th>시각</th><th>단가</th><th>수량</th><th>손익(세전)</th><th>수익률</th></tr></thead><tbody>
+          <tr><td>15:18</td><td>41,100원</td><td>25주</td><td class="neg">-65,000원</td><td class="neg">-3.07%</td></tr>
+        </tbody></table>
+        <div class="pnl-summary">
+          <div><div class="plabel">총 수익 (세전)</div><div class="neg">-65,000원</div></div>
+          <div><div class="plabel">수수료+세금</div><div>-2,165원</div></div>
+          <div><div class="plabel">실현 순수익</div><div class="neg" style="font-weight:700">-67,165원</div></div>
+        </div>
+      </div>
+    </div>
+    <hr class="sep">
+    <div class="section-title">💸 수수료 명세</div>
+    <table><thead><tr><th>항목</th><th>계산</th><th>금액</th></tr></thead><tbody>
+      <tr><td>매수 수수료</td><td>2,030,500원 × 0.015%</td><td>305원</td></tr>
+      <tr><td>매도 수수료</td><td>1,937,500원 × 0.015%</td><td>291원</td></tr>
+      <tr><td>증권거래세</td><td>1,937,500원 × 0.18%</td><td>3,488원</td></tr>
+      <tr><td><strong>합계</strong></td><td></td><td><strong>4,084원</strong></td></tr>
+    </tbody></table>
+    <div class="fee-note">KIS 실전 온라인 기준: 매수/매도 각 0.015%, 거래세 0.18%</div>
+    <hr class="sep">
+    <div class="section-title">📐 신호 유형별 성과</div>
+    <table><thead><tr><th>신호</th><th>거래</th><th>승률</th><th>평균 손익</th></tr></thead><tbody>
+      <tr><td>breakout</td><td>1건</td><td>0%</td><td class="neg">-4.81%</td></tr>
+      <tr><td>volume_price_surge</td><td>1건</td><td>0%</td><td class="neg">-3.07%</td></tr>
+    </tbody></table>
+    <hr class="sep">
+    <div class="section-title">🔬 복기</div>
+    <div class="review-box">총 2건 매매 | 승률 0% | 실현손익 -118,380원. 두 건 모두 진입 타이밍 문제.</div>
+    <div class="subsection">✅ 잘 된 것</div>
+    <ul class="review-list good">
+      <li>대원전선 손실 확정 후 추가 하락 전 15:18 강제 청산으로 더 큰 손실 방지</li>
+    </ul>
+    <div class="subsection">⚠️ 아쉬운 것</div>
+    <ul class="review-list bad">
+      <li>포스코스틸리온: RSI 50 breakout 가짜 신호</li>
+      <li>대원전선: 당일 +30% 급등 이후 고점 진입</li>
+    </ul>
+    <div class="subsection">🔧 내일 개선 포인트</div>
+    <ul class="review-list todo">
+      <li>breakout 신호는 RSI 55 이상 확인 후 진입</li>
+      <li>volume_price_surge 당일 등락률 20% 초과 종목 차단 검토</li>
+    </ul>
+  </div>
+</section>
+<!-- /section 2026-04-29 -->
+
 <!-- section 2026-04-30 -->
 <section class="day-section" id="2026-04-30">
   <div class="day-header">
@@ -173,7 +288,7 @@ hr.sep { border: none; border-top: 1px solid #e8eaf0; margin: 16px 0; }
     </tbody></table>
     <hr class="sep">
     <div class="section-title">🔬 복기</div>
-    <div class="review-box">전선·에너지 섹터 외인 주도 강세 흐름을 대한전선·SK이노베이션에서 정확히 포착. 이수화학은 RSI 71 경계선에서 진입했고 섹터 모멘텀이 화학으로 이어지지 않아 손절.</div>
+    <div class="review-box">전선·에너지 섹터 외인 주도 강세 흐름을 대한전선·SK이노베이션에서 정확히 포착.</div>
     <div class="subsection">✅ 잘 된 것</div>
     <ul class="review-list good">
       <li>대한전선 분할 매수 후 +6% 구간에서 깔끔하게 익절</li>
@@ -181,17 +296,17 @@ hr.sep { border: none; border-top: 1px solid #e8eaf0; margin: 16px 0; }
     </ul>
     <div class="subsection">⚠️ 아쉬운 것</div>
     <ul class="review-list bad">
-      <li>이수화학: 화학 섹터가 전선·에너지 대비 약했음. 섹터 강도 차이 확인 부족</li>
-      <li>SK이노베이션 +7%까지 갔다가 +4.7%에 익절 — 트레일링 스톱 여유 부족</li>
+      <li>이수화학: 화학 섹터가 전선·에너지 대비 약했음</li>
+      <li>SK이노베이션 +7%까지 갔다가 +4.7%에 익절</li>
     </ul>
     <div class="subsection">🔧 내일 개선 포인트</div>
     <ul class="review-list todo">
-      <li>volume_price_surge 진입 시 섹터 강도(vs_kospi) 1.0% 이상 종목만 허용하는 필터 검토</li>
-      <li>트레일링 스톱 trigger_pct를 장 분위기에 따라 동적으로 조정</li>
+      <li>volume_price_surge 진입 시 섹터 강도 1.0% 이상 종목만 허용</li>
+      <li>트레일링 스톱 trigger_pct 장 분위기에 따라 동적 조정</li>
     </ul>
   </div>
 </section>
 <!-- /section 2026-04-30 -->
-</div><!-- /sections -->
+</div><!-- /wrap -->
 </body>
 </html>
