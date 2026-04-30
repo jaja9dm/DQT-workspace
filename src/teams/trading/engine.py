@@ -861,6 +861,30 @@ class TradingEngine:
         # 리스크 레벨에 따라 실제 사용 가능 예수금 제한
         usable_cash = available_cash * position_limit_pct / 100
 
+        # ── Gate 4.6: 예수금 대비 주가 사전 필터 ────────────────────────
+        # 슬롯 예산(usable_cash × max_single_pct%)보다 비싼 종목은 슬롯 자금만으로
+        # 1주도 살 수 없음 → Claude 호출 전에 차단하여 API 낭비 + 텔레그램 오경보 방지.
+        # 조회한 현재가는 _cached_price 로 candidate dict에 저장 →
+        # 주문 루프에서 재활용하여 KIS API 중복 호출 제거.
+        slot_budget = usable_cash * max_single_pct / 100
+        price_filtered: list[dict] = []
+        for _c in candidates:
+            _tk = _c["ticker"]
+            _px = _fetch_current_price(_tk)
+            _c = dict(_c)
+            _c["_cached_price"] = _px  # 주문 루프에서 재사용
+            if _px <= 0 or _px <= slot_budget:
+                price_filtered.append(_c)
+            else:
+                logger.info(
+                    f"Gate 4.6 차단: {_tk} 주가 {_px:,.0f}원 > 슬롯예산 {slot_budget:,.0f}원 "
+                    f"(가용예수금 {available_cash:,.0f}원)"
+                )
+        candidates = price_filtered
+        if not candidates:
+            logger.debug("Gate 4.6: 예수금 대비 주가 필터 통과 종목 없음")
+            return []
+
         # ── Gate 5: Claude 최종 판단 (배치) ──────
         # 12:00 이후는 run_once() 진입 자체가 차단되므로 여기까지 오면 항상 오전
         # momentum_score 기준 정렬된 상위 3종목만 (집중 투자)
@@ -892,8 +916,8 @@ class TradingEngine:
                 )
                 continue
 
-            # 1주당 금액 조회
-            current_price = _fetch_current_price(ticker)
+            # 1주당 금액 — Gate 4.6에서 캐시한 값 재사용 (중복 API 콜 방지)
+            current_price = float(item.get("_cached_price") or 0) or _fetch_current_price(ticker)
             if current_price <= 0:
                 continue
 
