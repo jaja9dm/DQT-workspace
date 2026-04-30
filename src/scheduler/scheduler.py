@@ -229,25 +229,25 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Seoul"
         ), id="research_daily", name="연구소 일일 분석")
 
-        # 일일 복기 — 오늘 매매 분석 + 개선점 도출 + Telegram 리포트
-        s.add_job(self._run_daily_review, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
-        ), id="daily_review_debrief", name="일일 매매 복기")
-
         # 매매 일지 생성 — docs/trading_journal/journal.md (16:05)
         s.add_job(self._run_trading_journal, CronTrigger(
             day_of_week="mon-fri", hour=16, minute=5, timezone="Asia/Seoul"
         ), id="trading_journal", name="매매 일지 생성")
 
-        # 자동 종료 — 16:35 (복기 완료 후 프로세스 종료)
+        # 일일 복기 — 오늘 매매 분석 + 개선점 도출 + Telegram 리포트 (16:15)
+        s.add_job(self._run_daily_review, CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=15, timezone="Asia/Seoul"
+        ), id="daily_review_debrief", name="일일 매매 복기")
+
+        # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (16:25)
+        s.add_job(self._run_param_tuning, CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=25, timezone="Asia/Seoul"
+        ), id="param_tuning", name="자동 파라미터 튜닝")
+
+        # 자동 종료 — 모든 배치 완료 후 프로세스 종료 (16:35)
         s.add_job(self._auto_shutdown, CronTrigger(
             day_of_week="mon-fri", hour=16, minute=35, timezone="Asia/Seoul"
         ), id="auto_shutdown", name="자동 종료")
-
-        # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (17:00)
-        s.add_job(self._run_param_tuning, CronTrigger(
-            day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
-        ), id="param_tuning", name="자동 파라미터 튜닝")
 
         # 연구소 심층 백테스트 (일요일 주 1회)
         s.add_job(self._run_research_deep, CronTrigger(
