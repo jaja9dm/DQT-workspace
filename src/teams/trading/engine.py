@@ -2287,7 +2287,7 @@ def _load_hot_list() -> list[dict]:
             AND sa.trade_date = DATE('now', 'localtime')
             AND sa.status = 'active'
         ORDER BY COALESCE(h.momentum_score, 0.0) DESC, h.volume_ratio DESC
-        LIMIT 10
+        LIMIT 30
         """
     )
     return [dict(r) for r in rows]

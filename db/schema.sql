@@ -390,3 +390,4 @@ CREATE INDEX IF NOT EXISTS idx_universe_date      ON universe(active_date, ticke
 CREATE INDEX IF NOT EXISTS idx_trade_context_date ON trade_context(trade_date, ticker);
 CREATE INDEX IF NOT EXISTS idx_slot_trade_date    ON slot_assignments(trade_date);
 CREATE INDEX IF NOT EXISTS idx_hot_list_ticker    ON hot_list(ticker);
+CREATE INDEX IF NOT EXISTS idx_macd_signal_ticker ON intraday_macd_signal(ticker, created_at DESC);
