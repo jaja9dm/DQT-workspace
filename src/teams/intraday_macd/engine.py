@@ -564,6 +564,87 @@ def get_macd_details(ticker: str, max_age_minutes: int = 6) -> dict:
     }
 
 
+def preload_macd_cache(tickers: list[str], max_age_minutes: int = 20) -> dict[str, list[dict]]:
+    """
+    포지션 루프 전 MACD 신호를 한 번에 프리로드 (N번 쿼리 → 1번).
+
+    Returns:
+        {ticker: [row_newest, ..., row_oldest]}  (최신순, LIMIT 6)
+    """
+    if not tickers:
+        return {}
+    placeholders = ",".join("?" * len(tickers))
+    rows = fetch_all(
+        f"""
+        SELECT ticker, signal, hist_3m, hist_5m,
+               COALESCE(sig_3m, 'hold') AS sig_3m,
+               COALESCE(sig_5m, 'hold') AS sig_5m,
+               created_at
+        FROM intraday_macd_signal
+        WHERE ticker IN ({placeholders})
+          AND created_at >= datetime('now', ?)
+        ORDER BY ticker, created_at DESC
+        """,
+        (*tickers, f"-{max_age_minutes} minutes"),
+    )
+    cache: dict[str, list[dict]] = {}
+    for r in rows:
+        t = r["ticker"]
+        if t not in cache:
+            cache[t] = []
+        if len(cache[t]) < 6:
+            cache[t].append(dict(r))
+    return cache
+
+
+def macd_details_from_cache(cache: dict[str, list[dict]], ticker: str, max_age_minutes: int = 6) -> dict:
+    """캐시에서 get_macd_details와 동일한 결과 반환."""
+    _EMPTY = {
+        "signal": "hold", "sig_3m": "hold", "sig_5m": "hold",
+        "hist_3m": None, "hist_5m": None,
+        "both_buy_pre": False, "from_negative": False, "hist_5m_peak_decline": False,
+    }
+    from datetime import datetime, timedelta
+    cutoff = datetime.utcnow() - timedelta(minutes=max_age_minutes)
+    rows = [
+        r for r in cache.get(ticker, [])
+        if datetime.fromisoformat(r["created_at"]) >= cutoff
+    ][:2]
+    if not rows:
+        return _EMPTY
+    curr, prev = rows[0], (rows[1] if len(rows) >= 2 else rows[0])
+    hist_3m_curr = float(curr["hist_3m"] or 0)
+    hist_3m_prev = float(prev["hist_3m"] or 0)
+    hist_5m_curr = float(curr["hist_5m"] or 0)
+    hist_5m_prev = float(prev["hist_5m"] or 0)
+    sig_3m = str(curr["sig_3m"] or "hold")
+    sig_5m = str(curr["sig_5m"] or "hold")
+    return {
+        "signal": curr["signal"],
+        "sig_3m": sig_3m,
+        "sig_5m": sig_5m,
+        "hist_3m": curr["hist_3m"],
+        "hist_5m": curr["hist_5m"],
+        "both_buy_pre": sig_3m == "buy_pre" and sig_5m == "buy_pre",
+        "from_negative": (
+            hist_3m_prev < 0.0 and hist_3m_curr > hist_3m_prev and
+            hist_5m_prev < 0.0 and hist_5m_curr > hist_5m_prev
+        ),
+        "hist_5m_peak_decline": hist_5m_prev > 0.0 and hist_5m_curr < hist_5m_prev,
+    }
+
+
+def consec_sell_from_cache(cache: dict[str, list[dict]], ticker: str) -> int:
+    """캐시에서 get_consecutive_sell_pre와 동일한 결과 반환."""
+    count = 0
+    for r in cache.get(ticker, []):
+        if r["signal"] == "sell_pre":
+            count += 1
+        else:
+            break
+    return count
+
+
 def get_macd_from_negative(ticker: str, max_age_minutes: int = 8) -> bool:
     """
     5분봉 MACD 히스토그램이 음수 구간에서 회복 중인지 확인.

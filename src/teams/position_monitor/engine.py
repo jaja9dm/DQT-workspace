@@ -397,12 +397,17 @@ class PositionMonitorEngine:
                     positions = [p for p in positions if p["ticker"] != ticker]
 
         # 7. 개별 종목 감시 (WebSocket이 이미 트리거한 종목은 스킵)
+        # MACD 신호를 포지션 전체 ticker에 대해 한 번에 프리로드 (N쿼리 → 1쿼리)
+        from src.teams.intraday_macd.engine import preload_macd_cache
+        all_tickers = [p["ticker"] for p in positions]
+        macd_cache = preload_macd_cache(all_tickers, max_age_minutes=20)
+
         actions = []
         for pos in positions:
             if pos["ticker"] in self._ws_triggered:
                 logger.debug(f"[WS 트리거됨] {pos['ticker']} — 폴링 스킵")
                 continue
-            action = self._evaluate_position(pos, stop_loss_pct, level)
+            action = self._evaluate_position(pos, stop_loss_pct, level, macd_cache=macd_cache)
             if action:
                 actions.append(action)
 
@@ -413,7 +418,7 @@ class PositionMonitorEngine:
     # ──────────────────────────────────────────
 
     def _evaluate_position(
-        self, pos: dict, stop_loss_pct: float, risk_level: int
+        self, pos: dict, stop_loss_pct: float, risk_level: int, macd_cache: dict | None = None
     ) -> dict | None:
         """
         단일 포지션에 대해 스마트 포지션 관리 실행.
@@ -442,8 +447,11 @@ class PositionMonitorEngine:
         partial_sold = pos.get("partial_sold", 0)
 
         # ── 0. MACD 신호 수집 (히스토그램 포함) ──
-        from src.teams.intraday_macd.engine import get_macd_details
-        macd_details  = get_macd_details(ticker, max_age_minutes=6)
+        from src.teams.intraday_macd.engine import macd_details_from_cache, get_macd_details
+        if macd_cache is not None:
+            macd_details = macd_details_from_cache(macd_cache, ticker, max_age_minutes=6)
+        else:
+            macd_details = get_macd_details(ticker, max_age_minutes=6)
         macd_sig      = macd_details["signal"]
         hist_3m_now   = macd_details["hist_3m"] or 0.0
         macd_bullish  = macd_sig in _MACD_BULLISH
@@ -641,8 +649,11 @@ class PositionMonitorEngine:
                 exh_signals = []
 
                 # MACD 히스토그램 방향 + 연속 sell_pre 누적 (핵심 모멘텀 소진 판단)
-                from src.teams.intraday_macd.engine import get_consecutive_sell_pre
-                consec_sell = get_consecutive_sell_pre(ticker, max_age_minutes=20)
+                from src.teams.intraday_macd.engine import consec_sell_from_cache, get_consecutive_sell_pre
+                if macd_cache is not None:
+                    consec_sell = consec_sell_from_cache(macd_cache, ticker)
+                else:
+                    consec_sell = get_consecutive_sell_pre(ticker, max_age_minutes=20)
 
                 if macd_bearish:
                     # sell_pre: 3분봉+5분봉 모두 히스토그램 하강 (AND 조건) → 비중 축소
