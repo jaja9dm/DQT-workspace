@@ -5,6 +5,7 @@ analyzer.py — 글로벌 시황팀 Claude 분석 모듈
 한국 시장 전망을 생성한다.
 
 모델: claude-sonnet-4-6 (temperature=0)
+시스템 프롬프트(정적 규칙·응답형식)를 cache_control=ephemeral로 캐시.
 """
 
 from __future__ import annotations
@@ -21,18 +22,41 @@ logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+_SYSTEM_PROMPT = """당신은 글로벌 매크로 전문 퀀트 애널리스트입니다.
+제공된 실시간 글로벌 시장 데이터를 분석하여 한국 주식시장에 대한 리스크 평가를 수행하세요.
 
-def _build_prompt(data: GlobalMarketData, morning_summary: bool = False) -> str:
+## 분석 요청
+1. **글로벌 리스크 점수** (0~10, 0=완전 안전, 10=극도 위험)
+2. **한국 시장 전망** (positive / neutral / negative)
+   - 스캘핑·단타 관점: 변동성이 있어도 추세가 있으면 positive로 판단
+   - negative는 전쟁·금융위기·서킷브레이커급 실질적 위기 상황에만 사용
+3. **VIX 기반 리스크** (18↓=낮음, 18~25=주의, 25~30=경계, 30↑=위험)
+4. **주요 리스크 요인** (최대 3가지)
+5. **한 줄 요약**
+
+## 응답 형식 (반드시 JSON만 출력)
+{
+  "global_risk_score": <0~10 정수>,
+  "korea_market_outlook": "<positive|neutral|negative>",
+  "vix_risk": "<low|caution|warning|danger>",
+  "key_risks": ["<리스크1>", "<리스크2>"],
+  "risk_summary": "<한 줄 요약 (50자 이내)>"
+}"""
+
+
+def _build_user_content(data: GlobalMarketData, morning_summary: bool = False) -> str:
     tech_lines = "\n".join(
         f"  - {name}: {chg:+.2f}%" for name, chg in data.us_tech.items()
     )
     events_text = "\n".join(f"  - {e}" for e in data.upcoming_events) or "  - 없음"
-
-    return f"""당신은 글로벌 매크로 전문 퀀트 애널리스트입니다.
-아래 실시간 글로벌 시장 데이터를 분석하여 한국 주식시장에 대한 리스크 평가를 수행하세요.
-
-## 현재 글로벌 시장 데이터
+    mode = (
+        "오버나이트 요약 모드: 전날 15:30 이후 오늘 장 전까지의 글로벌 변동을 종합하여 오늘 한국 장에 미칠 영향을 평가하세요."
+        if morning_summary else
+        "현재 시점 글로벌 시장 상태를 평가하세요."
+    )
+    return f"""## 현재 글로벌 시장 데이터
 - 수집 시각: {data.timestamp}
+- 분석 모드: {mode}
 
 ### 미국 증시
 - S&P 500: {data.sp500_price:,.2f} ({data.sp500_change:+.2f}%)
@@ -58,26 +82,7 @@ def _build_prompt(data: GlobalMarketData, morning_summary: bool = False) -> str:
 {tech_lines}
 
 ### 예정된 경제지표 발표 (2일 이내)
-{events_text}
-
-## 분석 요청
-{"오버나이트 요약 모드: 전날 15:30 이후 오늘 장 전까지의 글로벌 변동을 종합하여 오늘 한국 장에 미칠 영향을 평가하세요." if morning_summary else "현재 시점 글로벌 시장 상태를 평가하세요."}
-1. **글로벌 리스크 점수** (0~10, 0=완전 안전, 10=극도 위험)
-2. **한국 시장 전망** (positive / neutral / negative)
-   - 스캘핑·단타 관점: 변동성이 있어도 추세가 있으면 positive로 판단
-   - negative는 전쟁·금융위기·서킷브레이커급 실질적 위기 상황에만 사용
-3. **VIX 기반 리스크** (18↓=낮음, 18~25=주의, 25~30=경계, 30↑=위험)
-4. **주요 리스크 요인** (최대 3가지)
-5. **한 줄 요약**
-
-## 응답 형식 (반드시 JSON만 출력)
-{{
-  "global_risk_score": <0~10 정수>,
-  "korea_market_outlook": "<positive|neutral|negative>",
-  "vix_risk": "<low|caution|warning|danger>",
-  "key_risks": ["<리스크1>", "<리스크2>"],
-  "risk_summary": "<한 줄 요약 (50자 이내)>"
-}}"""
+{events_text}"""
 
 
 def analyze(data: GlobalMarketData, morning_summary: bool = False) -> dict:
@@ -101,19 +106,30 @@ def analyze(data: GlobalMarketData, morning_summary: bool = False) -> dict:
             model=settings.CLAUDE_MODEL_FAST,
             max_tokens=512,
             temperature=settings.CLAUDE_TEMPERATURE,
+            system=[
+                {
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[
-                {"role": "user", "content": _build_prompt(data, morning_summary=morning_summary)}
+                {"role": "user", "content": _build_user_content(data, morning_summary)}
             ],
         )
         raw = response.content[0].text.strip()
 
-        # JSON 블록 추출
         if "```" in raw:
             raw = raw.split("```")[1]
             if raw.startswith("json"):
                 raw = raw[4:]
 
         result = json.loads(raw)
+
+        cache_read = getattr(response.usage, "cache_read_input_tokens", 0) or 0
+        if cache_read:
+            logger.debug(f"글로벌 시황 캐시 히트: {cache_read}토큰 절감")
+
         logger.info(
             f"Claude 분석 완료 — 리스크 점수: {result.get('global_risk_score')} "
             f"| 전망: {result.get('korea_market_outlook')}"
@@ -122,7 +138,6 @@ def analyze(data: GlobalMarketData, morning_summary: bool = False) -> dict:
 
     except json.JSONDecodeError as e:
         logger.error(f"Claude 응답 JSON 파싱 실패: {e}")
-        # 파싱 실패 시 VIX 기반 기본값 반환
         return _fallback_from_vix(data.vix)
     except Exception as e:
         logger.error(f"Claude API 오류: {e}")

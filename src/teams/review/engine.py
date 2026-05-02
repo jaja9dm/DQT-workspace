@@ -39,6 +39,37 @@ logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+_REVIEW_SYSTEM_PROMPT = """당신은 국내 주식 단타 퀀트 트레이딩 시스템의 성과 분석 AI입니다.
+오늘 매매 전체를 분석하고, 시장 상황과 연결하여 무엇이 잘 됐는지·무엇을 고쳐야 하는지 판단하세요.
+시스템은 당일 매수·매도 단타 전략(스캘핑 포함)입니다. 오버나잇은 하지 않습니다.
+
+## 시스템 전략 참고
+- 매수 조건: Hot List + MACD 강세 + 거래량급증, 분할 매수 (60/25/15%)
+- 신호유형: gap_up_breakout(갭업돌파) / momentum(모멘텀) / pullback_rebound(눌림반등) / opening_plunge_rebound(급락반등)
+- 진입점수 50~100: 50미만 차단, 72이상 풀사이즈, 50~72 75%사이즈
+- 손절: 트레일링 스톱(-3%), MACD 역행 시 조기 손절 (stop_loss)
+- 익절: take_profit(목표가), time_cut(14:50 수익청산), force_close(15:20 강제)
+
+## 분석 요청 (반드시 구체적으로, 종목명 + 진입 시그널 + 수치 포함)
+1. **pattern_hits**: 오늘 잘 작동한 진입/청산 패턴 (종목명·신호유형·수익률 포함, 최대 4개)
+2. **pattern_fails**: 손실이 났거나 아쉬웠던 부분 (종목명·이유 포함, 최대 4개)
+3. **improvements**: 내일 당장 바꿀 수 있는 개선점 (파라미터 수치 제안 포함, 최대 4개)
+4. **market_regime**: 오늘 시장 성격을 태그로 요약 (예: "강세_외인주도", "혼조_개인장", "약세_매도압력" 등 20자 이내)
+5. **strategy_fit**: 오늘 시장 상황에 현재 전략이 얼마나 잘 맞았는지 평가 (30자 이내)
+6. **tomorrow_watch**: 내일 오전 전략 방향 + 주의사항 (글로벌 선물·미청산 포지션·시장 흐름 고려, 2문장 이내)
+7. **summary**: 오늘 총평 (시황 + 승률 + 실현손익 + 특이사항 포함, 2~3문장)
+
+JSON만 응답:
+{
+  "pattern_hits":   ["...", ...],
+  "pattern_fails":  ["...", ...],
+  "improvements":   ["...", ...],
+  "market_regime":  "...",
+  "strategy_fit":   "...",
+  "tomorrow_watch": "...",
+  "summary":        "..."
+}"""
+
 _KIS_BALANCE_PATH = "/uapi/domestic-stock/v1/trading/inquire-balance"
 _KIS_CASH_PATH    = "/uapi/domestic-stock/v1/trading/inquire-psbl-order"
 
@@ -942,9 +973,7 @@ def _ask_claude_review(
 {chr(10).join(similar_lines)}
 → 위 과거 데이터 기반으로 오늘 전략의 적합성을 평가하세요."""
 
-    prompt = f"""당신은 국내 주식 단타 퀀트 트레이딩 시스템의 성과 분석 AI입니다.
-오늘({today}) 매매 전체를 분석하고, 시장 상황과 연결하여 무엇이 잘 됐는지·무엇을 고쳐야 하는지 판단하세요.
-시스템은 당일 매수·매도 단타 전략(스캘핑 포함)입니다. 오버나잇은 하지 않습니다.
+    prompt = f"""## 분석 날짜: {today}
 
 ## 오늘 시장 상황
 - KOSPI: {market_ctx['kospi_chg']:+.2f}% | KOSDAQ: {market_ctx['kosdaq_chg']:+.2f}%
@@ -980,25 +1009,7 @@ def _ask_claude_review(
 - 분할매수 실행: {extra.get('tranche', {}).get('tickers_with_tranche', 0)}종목 (2차 {extra.get('tranche', {}).get('tranche2_count', 0)}건, 3차 {extra.get('tranche', {}).get('tranche3_count', 0)}건)
 - 장중 최대 드로우다운: {extra.get('max_drawdown_pct', 0):.2f}%
 
-## 분석 요청 (반드시 구체적으로, 종목명 + 진입 시그널 + 수치 포함)
-1. **pattern_hits**: 오늘 잘 작동한 진입/청산 패턴 (종목명·신호유형·수익률 포함, 최대 4개)
-2. **pattern_fails**: 손실이 났거나 아쉬웠던 부분 (종목명·이유 포함, 최대 4개)
-3. **improvements**: 내일 당장 바꿀 수 있는 개선점 (파라미터 수치 제안 포함, 최대 4개)
-4. **market_regime**: 오늘 시장 성격을 태그로 요약 (예: "강세_외인주도", "혼조_개인장", "약세_매도압력" 등 20자 이내)
-5. **strategy_fit**: 오늘 시장 상황에 현재 전략이 얼마나 잘 맞았는지 평가 (30자 이내)
-6. **tomorrow_watch**: 내일 오전 전략 방향 + 주의사항 (글로벌 선물·미청산 포지션·시장 흐름 고려, 2문장 이내)
-7. **summary**: 오늘 총평 (시황 + 승률 + 실현손익 + 특이사항 포함, 2~3문장)
-
-JSON만 응답:
-{{
-  "pattern_hits":   ["...", ...],
-  "pattern_fails":  ["...", ...],
-  "improvements":   ["...", ...],
-  "market_regime":  "...",
-  "strategy_fit":   "...",
-  "tomorrow_watch": "...",
-  "summary":        "..."
-}}"""
+위 데이터를 바탕으로 시스템 프롬프트의 분석 요청 항목에 따라 JSON으로 응답하세요."""
 
     response = None
     _models = [settings.CLAUDE_MODEL_MAIN, "claude-haiku-4-5-20251001"]
@@ -1010,6 +1021,13 @@ JSON만 응답:
                 max_tokens=2000,
                 temperature=0,
                 timeout=90.0,
+                system=[
+                    {
+                        "type": "text",
+                        "text": _REVIEW_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=[{"role": "user", "content": prompt}],
             )
             if attempt > 1:

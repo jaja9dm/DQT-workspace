@@ -38,6 +38,33 @@ logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
+_TUNER_SYSTEM_PROMPT = """당신은 국내 주식 퀀트 트레이딩 시스템의 전략 파라미터 최적화 AI입니다.
+최근 복기 결과를 분석해 수치 파라미터 조정 방안을 제안하세요.
+
+## 조정 규칙
+- 수치 파라미터만 조정 가능 (로직/코드 구조 변경은 is_code_change: true로 플래그)
+- 1회 조정 폭: 현재값 대비 ±20% 이내
+- 복기가 1일뿐이면 보수적으로 조정, 3일 이상 같은 패턴이면 적극 조정
+- 성과가 좋은 파라미터는 건드리지 말 것
+- 조정 불필요하면 adjustments 배열을 비워서 반환
+
+## 응답 형식 (JSON만)
+{
+  "adjustments": [
+    {
+      "param": "<param_name>",
+      "new_val": <숫자>,
+      "reason": "<조정 근거 30자 이내>",
+      "is_code_change": false
+    },
+    ...
+  ],
+  "code_changes_needed": [
+    "<코드 변경이 필요한 항목 설명 — 사람이 검토 필요>",
+    ...
+  ]
+}"""
+
 # 1회 조정 시 기본값 대비 최대 변동 비율 (20%)
 _MAX_ADJUST_RATIO = 0.20
 
@@ -318,38 +345,13 @@ def _ask_claude_adjustments(
             f"(기본 {p['default_val']}, 범위 {p['min_val']}~{p['max_val']}) — {p['description']}"
         )
 
-    prompt = f"""당신은 국내 주식 퀀트 트레이딩 시스템의 전략 파라미터 최적화 AI입니다.
-최근 복기 결과를 분석해 수치 파라미터 조정 방안을 제안하세요.
-
-## 최근 복기 ({len(reviews)}일)
+    prompt = f"""## 최근 복기 ({len(reviews)}일)
 {"".join(review_lines)}
 
 ## 현재 파라미터
 {chr(10).join(param_lines)}
 
-## 조정 규칙
-- 수치 파라미터만 조정 가능 (로직/코드 구조 변경은 is_code_change: true로 플래그)
-- 1회 조정 폭: 현재값 대비 ±20% 이내
-- 복기가 1일뿐이면 보수적으로 조정, 3일 이상 같은 패턴이면 적극 조정
-- 성과가 좋은 파라미터는 건드리지 말 것
-- 조정 불필요하면 adjustments 배열을 비워서 반환
-
-## 응답 형식 (JSON만)
-{{
-  "adjustments": [
-    {{
-      "param": "<param_name>",
-      "new_val": <숫자>,
-      "reason": "<조정 근거 30자 이내>",
-      "is_code_change": false
-    }},
-    ...
-  ],
-  "code_changes_needed": [
-    "<코드 변경이 필요한 항목 설명 — 사람이 검토 필요>",
-    ...
-  ]
-}}"""
+위 데이터를 바탕으로 시스템 프롬프트의 규칙에 따라 JSON으로 응답하세요."""
 
     response = None
     for attempt in range(1, 4):
@@ -359,6 +361,13 @@ def _ask_claude_adjustments(
                 max_tokens=1024,
                 temperature=0,
                 timeout=60.0,
+                system=[
+                    {
+                        "type": "text",
+                        "text": _TUNER_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=[{"role": "user", "content": prompt}],
             )
             break

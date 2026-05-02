@@ -61,6 +61,30 @@ _CASH_CACHE_TTL_SEC = 1800  # 30분
 _TRANCHE_RATIOS = [0.60, 0.25, 0.15]
 
 # ─────────────────────────────────────────────────────────────────────
+# 오프닝 게이트 정적 시스템 프롬프트 — 캐시 대상
+# ─────────────────────────────────────────────────────────────────────
+_OPENING_GATE_SYSTEM_PROMPT = """당신은 국내 주식 퀀트 트레이더입니다.
+장 시작 직후 즉시 매수를 진행할지, 아니면 9시 10분까지 관망할지 판단하세요.
+
+## 즉시 매수 기준 (참고)
+- 리스크 레벨 ≤ 3
+- 글로벌 리스크 점수 ≤ 5
+- 국내 시황 점수 ≥ 0.0 (neutral 이상이면 충분)
+- 한국 시장 전망 neutral 또는 positive
+
+## 즉시 매수 기준 (엄격하게 판단)
+아래 조건을 모두 충족해야 즉시 매수(true):
+- 리스크 레벨 ≤ 2
+- 글로벌 리스크 점수 ≤ 4
+- 국내 시황 점수 ≥ +0.2 (명확한 강세)
+- 한국 시장 전망 positive
+
+그 외에는 모두 관망(false)으로 선택하세요.
+
+JSON만 응답:
+{"immediate": <true|false>, "reason": "<근거 30자 이내>"}"""
+
+# ─────────────────────────────────────────────────────────────────────
 # 매수 판단 정적 시스템 프롬프트 — 캐시 대상 (1024 토큰 이상)
 #
 # 매 5분 주기마다 동일하게 전송되는 판단 기준 · 룰 · 출력 형식.
@@ -1214,32 +1238,14 @@ class TradingEngine:
         global_risk  = global_ctx.get("global_risk_score", 5)
         outlook      = global_ctx.get("korea_market_outlook", "neutral")
 
-        prompt = f"""당신은 국내 주식 퀀트 트레이더입니다.
-오전 9시 장 시작 직후입니다. 지금 즉시 매수를 진행할지, 아니면 9시 10분까지 관망할지 판단하세요.
-
-## 현재 시황
-- 리스크 레벨: {risk_level}/5 (5가 최대 위험)
-- 글로벌 리스크 점수: {global_risk}/10
-- 한국 시장 전망: {outlook}
-- 국내 시황 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)
-
-## 즉시 매수 기준 (아래 조건 대부분 충족 시 권고)
-- 리스크 레벨 ≤ 3
-- 글로벌 리스크 점수 ≤ 5
-- 국내 시황 점수 ≥ 0.0 (neutral 이상이면 충분)
-- 한국 시장 전망 neutral 또는 positive
-
-## 즉시 매수 기준 (엄격하게 판단)
-아래 조건을 모두 충족해야 즉시 매수(true):
-- 리스크 레벨 ≤ 2
-- 글로벌 리스크 점수 ≤ 4
-- 국내 시황 점수 ≥ +0.2 (명확한 강세)
-- 한국 시장 전망 positive
-
-그 외에는 모두 관망(false)으로 선택하세요.
-
-JSON만 응답:
-{{"immediate": <true|false>, "reason": "<근거 30자 이내>"}}"""
+        prompt = (
+            f"오전 9시 장 시작 직후입니다. 현재 시황을 보고 즉시 매수 여부를 판단하세요.\n\n"
+            f"## 현재 시황\n"
+            f"- 리스크 레벨: {risk_level}/5 (5가 최대 위험)\n"
+            f"- 글로벌 리스크 점수: {global_risk}/10\n"
+            f"- 한국 시장 전망: {outlook}\n"
+            f"- 국내 시황 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)"
+        )
 
         try:
             response = _client.messages.create(
@@ -1247,6 +1253,13 @@ JSON만 응답:
                 max_tokens=200,
                 temperature=0,
                 timeout=30.0,
+                system=[
+                    {
+                        "type": "text",
+                        "text": _OPENING_GATE_SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text.strip()
