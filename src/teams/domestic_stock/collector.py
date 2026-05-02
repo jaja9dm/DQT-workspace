@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
@@ -624,6 +625,23 @@ def _scan_ticker_safe(ticker: str, name: str, max_attempts: int = 3) -> StockSna
 
 # ── 통합 수집 (체크포인트 + 재시도) ──────────────────────────
 
+def _scan_and_checkpoint(ticker: str, name: str, cycle: str) -> StockSnapshot:
+    """단일 종목 스캔 + 체크포인트 DB 기록 (병렬 워커용)."""
+    from src.infra.database import execute as db_exec
+    snap = _scan_ticker_safe(ticker, name)
+    status = "error" if snap.error else "done"
+    try:
+        db_exec(
+            """INSERT OR REPLACE INTO fetch_checkpoint
+               (cycle_id, scan_type, item_key, status, error_msg, fetched_at)
+               VALUES (?, 'domestic_stock', ?, ?, ?, CURRENT_TIMESTAMP)""",
+            (cycle, ticker, status, snap.error[:200] if snap.error else None),
+        )
+    except Exception as e:
+        logger.debug(f"체크포인트 저장 실패 [{ticker}]: {e}")
+    return snap
+
+
 def collect(max_workers: int = 10, stop_event=None) -> UniverseScan:
     """
     유니버스 전체 스캔.
@@ -633,7 +651,8 @@ def collect(max_workers: int = 10, stop_event=None) -> UniverseScan:
       - 이미 완료된 종목은 DB fetch_checkpoint에서 확인해 건너뜀
       - 각 종목 완료 후 즉시 DB에 기록 → 재시작 시 이어받기 가능
 
-    KIS API 레이트 리밋(10 req/s) 안에서 순차 처리.
+    ThreadPoolExecutor(max_workers)로 병렬 스캔.
+    KIS API 레이트 리밋은 KISGateway 우선순위 큐가 처리.
 
     Returns:
         UniverseScan 인스턴스
@@ -677,26 +696,22 @@ def collect(max_workers: int = 10, stop_event=None) -> UniverseScan:
         )
     logger.info(f"종목 스캔 시작 — {len(remaining)}종목")
 
-    for ticker in remaining:
-        if stop_event is not None and stop_event.is_set():
-            logger.info(f"스캔 중단 — 엔진 정지 신호 수신 ({len(scan.snapshots)}종목 처리 완료)")
-            break
-        snap = _scan_ticker_safe(ticker, name_map.get(ticker, ""))
-        scan.snapshots.append(snap)
-
-        # 체크포인트 기록 (종목 완료마다 즉시 저장)
-        status = "error" if snap.error else "done"
-        try:
-            db_exec(
-                """
-                INSERT OR REPLACE INTO fetch_checkpoint
-                    (cycle_id, scan_type, item_key, status, error_msg, fetched_at)
-                VALUES (?, 'domestic_stock', ?, ?, ?, CURRENT_TIMESTAMP)
-                """,
-                (cycle, ticker, status, snap.error[:200] if snap.error else None),
-            )
-        except Exception as e:
-            logger.debug(f"체크포인트 저장 실패 [{ticker}]: {e}")
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(_scan_and_checkpoint, t, name_map.get(t, ""), cycle): t
+            for t in remaining
+        }
+        for future in as_completed(futures):
+            if stop_event is not None and stop_event.is_set():
+                logger.info(f"스캔 중단 — 엔진 정지 신호 수신 ({len(scan.snapshots)}종목 처리 완료)")
+                executor.shutdown(wait=False, cancel_futures=True)
+                break
+            try:
+                snap = future.result()
+                scan.snapshots.append(snap)
+            except Exception as e:
+                ticker_k = futures[future]
+                logger.warning(f"병렬 스캔 오류 [{ticker_k}]: {e}")
 
     # 후보 필터 1: 신호 기반 후보 분류
     # ① 모멘텀 후보: 거래량급증+가격급등+BB돌파 중 2개↑, 또는 거래량 5배↑ 단독
