@@ -483,7 +483,7 @@ class TradingEngine:
             return []
 
         # ── Gate 3: 국내 시황 ────────────────────
-        market_ctx = _load_market_context()
+        market_ctx, kospi_live = _load_market_full_context()
         market_score = market_ctx.get("market_score", 0.0)
         if market_score <= _MARKET_SCORE_GATE:
             logger.info(f"Gate 3 차단: 국내 시황 점수 {market_score:.2f} — 진입 보류")
@@ -492,7 +492,6 @@ class TradingEngine:
         # ── Gate 3.5: 장중 실시간 지수 방향 ──────
         # DB에 저장된 최신 시황 데이터에서 KOSPI/KOSDAQ 당일 등락률 확인.
         # 시장이 실제로 하락 중이면 시황 점수와 무관하게 신규 진입 차단.
-        kospi_live = _load_live_index_change()
         if kospi_live is not None and kospi_live < -0.5:
             logger.info(
                 f"Gate 3.5 차단: 장중 KOSPI {kospi_live:+.2f}% — "
@@ -1231,7 +1230,7 @@ class TradingEngine:
         from src.utils.notifier import notify
 
         global_ctx  = _load_global_context()
-        market_ctx  = _load_market_context()
+        market_ctx, _ = _load_market_full_context()
         risk        = get_current_risk()
         risk_level  = risk.get("risk_level", 3)
         market_score = market_ctx.get("market_score", 0.0)
@@ -1530,7 +1529,7 @@ class TradingEngine:
                     break
 
                 # 장중 KOSPI 방향 재확인
-                kospi_now = _load_live_index_change()
+                _, kospi_now = _load_market_full_context()
                 if kospi_now is not None and kospi_now < -0.5:
                     logger.info(
                         f"분할 매수 {tranche_no}차 중단: KOSPI {kospi_now:+.2f}% 하락 중"
@@ -2222,31 +2221,29 @@ def _load_global_context() -> dict:
     return dict(row) if row else {"global_risk_score": 5, "korea_market_outlook": "neutral"}
 
 
-def _load_market_context() -> dict:
-    row = fetch_one(
-        "SELECT market_score, market_direction FROM market_condition ORDER BY created_at DESC LIMIT 1"
-    )
-    return dict(row) if row else {"market_score": 0.0, "market_direction": "neutral"}
-
-
-def _load_live_index_change() -> float | None:
+def _load_market_full_context() -> tuple[dict, float | None]:
     """
-    DB에서 가장 최근 국내 시황 기록의 KOSPI 당일 등락률 반환.
-    market_condition.summary JSON의 'kospi' 필드 사용.
-    데이터 없거나 파싱 실패 시 None 반환 (게이트 통과 처리).
+    market_condition 최신 1행에서 시황 컨텍스트 + 실시간 KOSPI 등락률을
+    단일 쿼리로 반환. (_load_market_context + _load_live_index_change 병합)
+
+    Returns:
+        (market_ctx_dict, kospi_live_pct_or_None)
     """
     import json as _json
     row = fetch_one(
-        "SELECT summary FROM market_condition ORDER BY created_at DESC LIMIT 1"
+        "SELECT market_score, market_direction, summary FROM market_condition ORDER BY created_at DESC LIMIT 1"
     )
-    if not row or not row["summary"]:
-        return None
-    try:
-        summary = _json.loads(row["summary"])
-        val = summary.get("kospi")
-        return float(val) if val is not None else None
-    except Exception:
-        return None
+    if not row:
+        return {"market_score": 0.0, "market_direction": "neutral"}, None
+    market_ctx = {"market_score": row["market_score"], "market_direction": row["market_direction"]}
+    kospi_live: float | None = None
+    if row["summary"]:
+        try:
+            val = _json.loads(row["summary"]).get("kospi")
+            kospi_live = float(val) if val is not None else None
+        except Exception:
+            pass
+    return market_ctx, kospi_live
 
 
 def _load_hot_list() -> list[dict]:
