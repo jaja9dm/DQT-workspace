@@ -768,6 +768,10 @@ h1.title { font-size: 1.6rem; font-weight: 800; color: #1a1a2e; margin-bottom: 2
 .summary-card .label { font-size: .75rem; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
 .summary-card .value { font-size: 1.2rem; font-weight: 800; }
 .pos { color: #0ea87a; } .neg { color: #e74c3c; } .neutral { color: #1a1a2e; }
+.chart-wrap { background: #fff; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.06); padding: 20px 24px 14px; margin-bottom: 28px; }
+.chart-label { font-size: .75rem; color: #888; text-transform: uppercase; letter-spacing: .05em; font-weight: 600; margin-bottom: 14px; }
+.bar { cursor: pointer; opacity: .82; transition: opacity .15s; }
+.bar:hover { opacity: 1; }
 .table-wrap { background: #fff; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.06); overflow: hidden; }
 table { width: 100%; border-collapse: collapse; font-size: .88rem; }
 thead tr { background: #1a1a2e; color: #fff; }
@@ -781,6 +785,86 @@ tbody tr:hover td { background: #f7f8fa; }
 .cumrow td { background: #f0f9f5; }
 .update-note { text-align: right; font-size: .75rem; color: #bbb; margin-top: 14px; }
 """
+
+
+_KO_WEEKDAY = ["월", "화", "수", "목", "금", "토", "일"]
+
+def _weekday(date_str: str) -> str:
+    """'2026-04-17' → '금'"""
+    try:
+        return _KO_WEEKDAY[date.fromisoformat(date_str).weekday()]
+    except Exception:
+        return ""
+
+
+def _build_chart_svg(days: list[dict]) -> str:
+    """일별 순수익 막대 차트 SVG (oldest→newest, 클릭 시 journal.html 앵커 이동)."""
+    if not days:
+        return ""
+
+    chart_days = list(reversed(days))  # oldest → newest (왼쪽 → 오른쪽)
+    n = len(chart_days)
+
+    W, H = 900, 200
+    PAD_L, PAD_R, PAD_T, PAD_B = 8, 8, 16, 38
+    cw = W - PAD_L - PAD_R
+    ch = H - PAD_T - PAD_B
+
+    vals   = [d["net_pnl"] for d in chart_days]
+    v_max  = max(max(vals), 0)
+    v_min  = min(min(vals), 0)
+    v_span = (v_max - v_min) or 1
+
+    zero_y  = PAD_T + ch * v_max / v_span
+    col_w   = cw / n
+    bar_w   = max(col_w * 0.58, 4)
+
+    lines: list[str] = []
+    lines.append(f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" '
+                 f'style="width:100%;display:block;overflow:visible">')
+
+    # 영선 (zero baseline)
+    lines.append(f'  <line x1="{PAD_L}" y1="{zero_y:.1f}" '
+                 f'x2="{W - PAD_R}" y2="{zero_y:.1f}" '
+                 f'stroke="#d0d5df" stroke-width="1.5"/>')
+
+    for i, d in enumerate(chart_days):
+        v   = d["net_pnl"]
+        cx  = PAD_L + col_w * i + col_w / 2
+        bx  = cx - bar_w / 2
+        bh  = max(abs(v) / v_span * ch, 2)
+        by  = zero_y - bh if v >= 0 else zero_y
+        clr = "#0ea87a" if v >= 0 else "#e74c3c"
+
+        date     = d["date"]
+        sign     = "+" if v >= 0 else ""
+        r_sign   = "+" if d["ret_pct"] >= 0 else ""
+        tooltip  = f"{date}  {sign}{v:,.0f}원 ({r_sign}{d['ret_pct']:.2f}%)"
+        mm_dd    = date[5:]  # MM-DD
+        wd       = _weekday(date)
+
+        # 클릭 가능한 막대 (journal.html 앵커)
+        lines.append(f'  <a href="journal.html#{date}">')
+        lines.append(f'    <title>{tooltip}</title>')
+        lines.append(f'    <rect class="bar" x="{bx:.1f}" y="{by:.1f}" '
+                     f'width="{bar_w:.1f}" height="{bh:.1f}" fill="{clr}" rx="3"/>')
+        lines.append(f'  </a>')
+
+        # 날짜 레이블 (MM-DD + 요일)
+        lines.append(f'  <text x="{cx:.1f}" y="{H - 16}" text-anchor="middle" '
+                     f'font-size="11" fill="#bbb" font-family="sans-serif">{mm_dd}</text>')
+        lines.append(f'  <text x="{cx:.1f}" y="{H - 4}" text-anchor="middle" '
+                     f'font-size="10" fill="#ccc" font-family="sans-serif">{wd}</text>')
+
+        # 수익 레이블 (막대 끝에 작게)
+        lbl_y = (by - 4) if v >= 0 else (by + bh + 12)
+        short = f"{sign}{v:,.0f}"
+        lines.append(f'  <text x="{cx:.1f}" y="{lbl_y:.1f}" text-anchor="middle" '
+                     f'font-size="10" fill="{clr}" font-weight="600" '
+                     f'font-family="sans-serif">{short}</text>')
+
+    lines.append('</svg>')
+    return "\n".join(lines)
 
 
 def _load_all_performance_days() -> list[dict]:
@@ -846,10 +930,11 @@ def _build_performance_md(days: list[dict]) -> str:
 
     total_days  = len(days)
     total_net   = sum(d["net_pnl"]  for d in days)
-    total_gross = sum(d["gross_pnl"] for d in days)
     avg_net     = total_net / total_days
+    avg_ret_pct = sum(d["ret_pct"] for d in days) / total_days
     win_days    = sum(1 for d in days if d["net_pnl"] > 0)
     day_wr      = win_days / total_days * 100
+    latest_cash = days[0]["cash"] if days and days[0]["cash"] else 0
 
     def _s(v: float) -> str:
         return "+" if v >= 0 else ""
@@ -860,9 +945,12 @@ def _build_performance_md(days: list[dict]) -> str:
         f"> **총 매매일**: {total_days}일  |  "
         f"**총 순수익**: {_s(total_net)}{total_net:,.0f}원  |  "
         f"**일평균 수익**: {_s(avg_net)}{avg_net:,.0f}원  |  "
-        f"**일승률**: {day_wr:.0f}% ({win_days}승 {total_days-win_days}패)",
+        f"**평균 수익률**: {_s(avg_ret_pct)}{avg_ret_pct:.2f}%  |  "
+        f"**일승률**: {day_wr:.0f}% ({win_days}승 {total_days-win_days}패)  |  "
+        + (f"**계좌 잔고**: {latest_cash:,.0f}원" if latest_cash else "**계좌 잔고**: -"),
         "",
-        f"_업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')}_",
+        f"_업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')} | "
+        f"수수료: 매수 0.015% + 매도 0.015% + 거래세 0.18% (왕복 ~0.21%)_",
         "",
         "| 날짜 | 매수금 | 매도금 | 수수료+세금 | 총수익(세전) | 순수익 | 수익률 | 종목 | 예수금 |",
         "|------|--------|--------|------------|------------|--------|--------|------|--------|",
@@ -873,7 +961,7 @@ def _build_performance_md(days: list[dict]) -> str:
         t_str  = ", ".join(tnames[:3]) + (f" 외 {len(tnames)-3}종목" if len(tnames) > 3 else "")
         cash_s = f"{d['cash']:,.0f}원" if d["cash"] else "-"
         L.append(
-            f"| {d['date']} "
+            f"| {d['date']} ({_weekday(d['date'])}) "
             f"| {d['buy_amt']:,.0f}원 "
             f"| {d['sell_amt']:,.0f}원 "
             f"| -{d['fees_total']:,.0f}원 "
@@ -899,14 +987,17 @@ def _build_performance_html(days: list[dict]) -> str:
 
     if not days:
         total_days = win_days = 0
-        total_net = avg_net = 0.0
+        total_net = avg_net = avg_ret_pct = 0.0
         day_wr = 0.0
+        latest_cash = 0
     else:
         total_days  = len(days)
         total_net   = sum(d["net_pnl"]  for d in days)
         avg_net     = total_net / total_days
+        avg_ret_pct = sum(d["ret_pct"] for d in days) / total_days
         win_days    = sum(1 for d in days if d["net_pnl"] > 0)
         day_wr      = win_days / total_days * 100
+        latest_cash = days[0]["cash"] if days[0]["cash"] else 0
 
     H: list[str] = []
     a = H.append
@@ -927,9 +1018,20 @@ def _build_performance_html(days: list[dict]) -> str:
     a(f'  <div class="summary-card"><div class="label">총 매매일</div><div class="value">{total_days}일</div></div>')
     a(f'  <div class="summary-card"><div class="label">총 순수익</div><div class="value {_cls(total_net)}">{_fw2(total_net)}</div></div>')
     a(f'  <div class="summary-card"><div class="label">일평균 수익</div><div class="value {_cls(avg_net)}">{_fw2(avg_net)}</div></div>')
+    a(f'  <div class="summary-card"><div class="label">평균 수익률</div><div class="value {_cls(avg_ret_pct)}">{_fp2(avg_ret_pct)}</div></div>')
     a(f'  <div class="summary-card"><div class="label">일승률</div>'
       f'<div class="value">{day_wr:.0f}% <small style="font-size:.75rem;color:#888">({win_days}승 {total_days-win_days}패)</small></div></div>')
+    if latest_cash:
+        a(f'  <div class="summary-card"><div class="label">계좌 잔고 (최신)</div><div class="value neutral">{latest_cash:,.0f}원</div></div>')
     a('</div>')
+
+    # 일별 수익 차트
+    if days:
+        chart_svg = _build_chart_svg(days)
+        a('<div class="chart-wrap">')
+        a('  <div class="chart-label">📊 일별 순수익 (막대 클릭 → 매매 일지)</div>')
+        a(chart_svg)
+        a('</div>')
 
     # 테이블
     a('<div class="table-wrap">')
@@ -947,7 +1049,7 @@ def _build_performance_html(days: list[dict]) -> str:
         t_str  = ", ".join(tnames[:3]) + (f" +{len(tnames)-3}" if len(tnames) > 3 else "")
         cash_s = f"{d['cash']:,.0f}원" if d["cash"] else "-"
         a('  <tr>')
-        a(f'    <td class="date-cell">{d["date"]}</td>')
+        a(f'    <td class="date-cell">{d["date"]} <span style="color:#aaa;font-weight:400;font-size:.8rem">({_weekday(d["date"])})</span></td>')
         a(f'    <td class="num">{d["buy_amt"]:,.0f}원</td>')
         a(f'    <td class="num">{d["sell_amt"]:,.0f}원</td>')
         a(f'    <td class="num neg">-{d["fees_total"]:,.0f}원</td>')
@@ -1010,7 +1112,7 @@ if __name__ == "__main__":
 
         demo_days: list[dict] = []
         cash = 10_000_000  # 초기 예수금 1000만원
-        for date_str in reversed(_SAMPLE_DATES):  # 오래된 날짜부터 누적
+        for date_str in _SAMPLE_DATES:  # 오래된 날짜부터 누적 (oldest→newest)
             n_tickers = random.randint(1, 3)
             picks = random.sample(_SAMPLE_NAMES, n_tickers)
             ticker_names = [name for name, _ in picks]
