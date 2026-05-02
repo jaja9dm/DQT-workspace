@@ -37,6 +37,8 @@ _TAX_RATE      = 0.0018
 _JOURNAL_DIR  = _ROOT / "docs" / "trading_journal"
 _JOURNAL_FILE = _JOURNAL_DIR / "journal.md"
 _JOURNAL_HTML = _JOURNAL_DIR / "journal.html"
+_PERF_FILE    = _JOURNAL_DIR / "performance.md"
+_PERF_HTML    = _JOURNAL_DIR / "performance.html"
 
 _SLOT_EMOJI = {
     "leader":   "👑",
@@ -368,6 +370,9 @@ def generate(target_date: str | None = None) -> Path | None:
     # ── 텔레그램 발송 ─────────────────────────────────
     _send_telegram(today, ticker_map, gross_pnl, net_pnl, fees, win_cnt, loss_cnt,
                    win_rate, total_buy_amt, cash_info, pattern_hits, pattern_fails, improvements)
+
+    # ── 성과 요약 파일 갱신 ───────────────────────────
+    _update_performance_files()
 
     return _JOURNAL_FILE
 
@@ -748,13 +753,303 @@ def _send_telegram(
         logger.error(f"매매 일지 텔레그램 발송 실패: {e}")
 
 
+# ──────────────────────────────────────────────────────────────────────
+# 성과 요약 (performance.md / performance.html)
+# 매매한 날마다 누적. 전체를 DB에서 재집계해 파일을 통째로 재작성.
+# ──────────────────────────────────────────────────────────────────────
+
+_PERF_CSS = """
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: 'Pretendard', 'Apple SD Gothic Neo', sans-serif; background: #f0f2f5; color: #1a1a2e; }
+.wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+h1.title { font-size: 1.6rem; font-weight: 800; color: #1a1a2e; margin-bottom: 24px; }
+.summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 28px; }
+.summary-card { background: #fff; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.06); padding: 16px 20px; }
+.summary-card .label { font-size: .75rem; color: #888; margin-bottom: 6px; text-transform: uppercase; letter-spacing: .05em; }
+.summary-card .value { font-size: 1.2rem; font-weight: 800; }
+.pos { color: #0ea87a; } .neg { color: #e74c3c; } .neutral { color: #1a1a2e; }
+.table-wrap { background: #fff; border-radius: 14px; box-shadow: 0 2px 10px rgba(0,0,0,.06); overflow: hidden; }
+table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+thead tr { background: #1a1a2e; color: #fff; }
+th { padding: 12px 14px; text-align: left; font-weight: 600; font-size: .8rem; white-space: nowrap; }
+td { padding: 11px 14px; border-bottom: 1px solid #f0f2f5; }
+tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: #f7f8fa; }
+.date-cell { font-weight: 700; color: #1a1a2e; white-space: nowrap; }
+.ticker-cell { color: #555; font-size: .82rem; }
+.num { text-align: right; white-space: nowrap; }
+.cumrow td { background: #f0f9f5; }
+.update-note { text-align: right; font-size: .75rem; color: #bbb; margin-top: 14px; }
+"""
+
+
+def _load_all_performance_days() -> list[dict]:
+    """DB에서 모든 매매일 집계 (최신순). 각 날짜를 한 행으로 요약."""
+    # 날짜별: 매수금, 매도금, 손익 합산, 종목명 목록
+    day_rows = fetch_all(
+        """
+        SELECT
+            date,
+            SUM(CASE WHEN action='buy' THEN COALESCE(exec_price,0)*COALESCE(quantity,0) ELSE 0 END) AS buy_amt,
+            SUM(CASE WHEN action!='buy' THEN COALESCE(exec_price,0)*COALESCE(quantity,0) ELSE 0 END) AS sell_amt,
+            SUM(CASE WHEN action!='buy' AND pnl IS NOT NULL THEN pnl ELSE 0 END) AS gross_pnl,
+            GROUP_CONCAT(DISTINCT COALESCE(name, ticker)) AS names
+        FROM trades
+        WHERE status='filled'
+        GROUP BY date
+        ORDER BY date DESC
+        """
+    )
+
+    result = []
+    for r in day_rows:
+        d       = r["date"]
+        buy_amt  = float(r["buy_amt"]  or 0)
+        sell_amt = float(r["sell_amt"] or 0)
+        gross    = float(r["gross_pnl"] or 0)
+        fees     = _calc_fee(buy_amt, sell_amt)
+        net      = gross - fees["total"]
+        ret_pct  = (net / buy_amt * 100) if buy_amt > 0 else 0.0
+
+        # 예수금: trade_review.market_context 에서
+        cash = 0
+        try:
+            rev = fetch_one(
+                "SELECT market_context FROM trade_review WHERE review_date=?", (d,)
+            )
+            if rev and rev["market_context"]:
+                cash = json.loads(rev["market_context"]).get("portfolio", {}).get("available_cash", 0) or 0
+        except Exception:
+            pass
+
+        names_raw    = r["names"] or ""
+        ticker_names = [n.strip() for n in names_raw.split(",") if n.strip()]
+
+        result.append({
+            "date":         d,
+            "buy_amt":      buy_amt,
+            "sell_amt":     sell_amt,
+            "gross_pnl":    gross,
+            "fees_total":   fees["total"],
+            "net_pnl":      net,
+            "ret_pct":      ret_pct,
+            "ticker_names": ticker_names,
+            "cash":         cash,
+        })
+
+    return result
+
+
+def _build_performance_md(days: list[dict]) -> str:
+    if not days:
+        return "# DQT 성과 요약\n\n_아직 매매 기록이 없습니다._\n"
+
+    total_days  = len(days)
+    total_net   = sum(d["net_pnl"]  for d in days)
+    total_gross = sum(d["gross_pnl"] for d in days)
+    avg_net     = total_net / total_days
+    win_days    = sum(1 for d in days if d["net_pnl"] > 0)
+    day_wr      = win_days / total_days * 100
+
+    def _s(v: float) -> str:
+        return "+" if v >= 0 else ""
+
+    L = [
+        "# DQT 성과 요약",
+        "",
+        f"> **총 매매일**: {total_days}일  |  "
+        f"**총 순수익**: {_s(total_net)}{total_net:,.0f}원  |  "
+        f"**일평균 수익**: {_s(avg_net)}{avg_net:,.0f}원  |  "
+        f"**일승률**: {day_wr:.0f}% ({win_days}승 {total_days-win_days}패)",
+        "",
+        f"_업데이트: {datetime.now().strftime('%Y-%m-%d %H:%M')}_",
+        "",
+        "| 날짜 | 매수금 | 매도금 | 수수료+세금 | 총수익(세전) | 순수익 | 수익률 | 종목 | 예수금 |",
+        "|------|--------|--------|------------|------------|--------|--------|------|--------|",
+    ]
+
+    for d in days:
+        tnames = d["ticker_names"]
+        t_str  = ", ".join(tnames[:3]) + (f" 외 {len(tnames)-3}종목" if len(tnames) > 3 else "")
+        cash_s = f"{d['cash']:,.0f}원" if d["cash"] else "-"
+        L.append(
+            f"| {d['date']} "
+            f"| {d['buy_amt']:,.0f}원 "
+            f"| {d['sell_amt']:,.0f}원 "
+            f"| -{d['fees_total']:,.0f}원 "
+            f"| {_s(d['gross_pnl'])}{d['gross_pnl']:,.0f}원 "
+            f"| {_s(d['net_pnl'])}{d['net_pnl']:,.0f}원 "
+            f"| {_s(d['ret_pct'])}{d['ret_pct']:.2f}% "
+            f"| {t_str or '-'} "
+            f"| {cash_s} |"
+        )
+
+    return "\n".join(L) + "\n"
+
+
+def _build_performance_html(days: list[dict]) -> str:
+    def _cls(v: float) -> str:
+        return "pos" if v > 0 else "neg" if v < 0 else "neutral"
+
+    def _fw2(v: float) -> str:
+        return f"{'+'if v>=0 else ''}{v:,.0f}원"
+
+    def _fp2(v: float) -> str:
+        return f"{'+'if v>=0 else ''}{v:.2f}%"
+
+    if not days:
+        total_days = win_days = 0
+        total_net = avg_net = 0.0
+        day_wr = 0.0
+    else:
+        total_days  = len(days)
+        total_net   = sum(d["net_pnl"]  for d in days)
+        avg_net     = total_net / total_days
+        win_days    = sum(1 for d in days if d["net_pnl"] > 0)
+        day_wr      = win_days / total_days * 100
+
+    H: list[str] = []
+    a = H.append
+
+    a('<!DOCTYPE html>')
+    a('<html lang="ko">')
+    a('<head>')
+    a('<meta charset="UTF-8">')
+    a('<meta name="viewport" content="width=device-width, initial-scale=1.0">')
+    a('<title>성과 요약 — DQT</title>')
+    a(f'<style>\n{_PERF_CSS}\n</style>')
+    a('</head>')
+    a('<body><div class="wrap">')
+    a('<h1 class="title">📈 성과 요약 (DQT)</h1>')
+
+    # 요약 카드
+    a('<div class="summary-grid">')
+    a(f'  <div class="summary-card"><div class="label">총 매매일</div><div class="value">{total_days}일</div></div>')
+    a(f'  <div class="summary-card"><div class="label">총 순수익</div><div class="value {_cls(total_net)}">{_fw2(total_net)}</div></div>')
+    a(f'  <div class="summary-card"><div class="label">일평균 수익</div><div class="value {_cls(avg_net)}">{_fw2(avg_net)}</div></div>')
+    a(f'  <div class="summary-card"><div class="label">일승률</div>'
+      f'<div class="value">{day_wr:.0f}% <small style="font-size:.75rem;color:#888">({win_days}승 {total_days-win_days}패)</small></div></div>')
+    a('</div>')
+
+    # 테이블
+    a('<div class="table-wrap">')
+    a('<table>')
+    a('  <thead><tr>')
+    for col in ["날짜", "매수금", "매도금", "수수료+세금", "총수익(세전)", "순수익", "수익률", "종목", "예수금"]:
+        a(f'    <th>{col}</th>')
+    a('  </tr></thead>')
+    a('  <tbody>')
+
+    cumulative = 0.0
+    for d in days:
+        cumulative += d["net_pnl"]
+        tnames = d["ticker_names"]
+        t_str  = ", ".join(tnames[:3]) + (f" +{len(tnames)-3}" if len(tnames) > 3 else "")
+        cash_s = f"{d['cash']:,.0f}원" if d["cash"] else "-"
+        a('  <tr>')
+        a(f'    <td class="date-cell">{d["date"]}</td>')
+        a(f'    <td class="num">{d["buy_amt"]:,.0f}원</td>')
+        a(f'    <td class="num">{d["sell_amt"]:,.0f}원</td>')
+        a(f'    <td class="num neg">-{d["fees_total"]:,.0f}원</td>')
+        a(f'    <td class="num {_cls(d["gross_pnl"])}">{_fw2(d["gross_pnl"])}</td>')
+        a(f'    <td class="num {_cls(d["net_pnl"])}" style="font-weight:700">{_fw2(d["net_pnl"])}</td>')
+        a(f'    <td class="num {_cls(d["ret_pct"])}">{_fp2(d["ret_pct"])}</td>')
+        a(f'    <td class="ticker-cell">{t_str or "-"}</td>')
+        a(f'    <td class="num">{cash_s}</td>')
+        a('  </tr>')
+
+    a('  </tbody>')
+    a('</table>')
+    a('</div>')
+    a(f'<div class="update-note">업데이트: {datetime.now().strftime("%Y-%m-%d %H:%M")}</div>')
+    a('</div></body></html>')
+
+    return "\n".join(H)
+
+
+def _update_performance_files() -> None:
+    """성과 요약 md/html 전체 재생성 (DB 기반)."""
+    _JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    days = _load_all_performance_days()
+    _PERF_FILE.write_text(_build_performance_md(days), encoding="utf-8")
+    logger.info(f"성과 요약 MD 업데이트: {_PERF_FILE}")
+    _PERF_HTML.write_text(_build_performance_html(days), encoding="utf-8")
+    logger.info(f"성과 요약 HTML 업데이트: {_PERF_HTML}")
+
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="매매 일지 생성")
     parser.add_argument("--date", help="날짜 (YYYY-MM-DD, 기본: 오늘)")
+    parser.add_argument("--demo", action="store_true", help="10일치 임의 데이터로 성과 요약 생성")
     args = parser.parse_args()
-    result = generate(args.date)
-    if result:
-        print(f"생성 완료: {result}")
+
+    if args.demo:
+        # ── 임의 10일 데이터로 performance.md / performance.html 생성 ──
+        import random
+        random.seed(42)
+
+        _SAMPLE_NAMES = [
+            ("삼성전자",   "005930"),
+            ("SK하이닉스", "000660"),
+            ("LG에너지솔루션","373220"),
+            ("현대차",     "005380"),
+            ("카카오",     "035720"),
+            ("네이버",     "035420"),
+            ("셀트리온",   "068270"),
+            ("포스코홀딩스","005490"),
+            ("기아",       "000270"),
+            ("삼성바이오로직스","207940"),
+            ("크래프톤",   "259960"),
+            ("HMM",        "011200"),
+        ]
+        _SAMPLE_DATES = [
+            "2026-04-17","2026-04-18","2026-04-21","2026-04-22","2026-04-23",
+            "2026-04-24","2026-04-25","2026-04-28","2026-04-29","2026-04-30",
+        ]
+
+        demo_days: list[dict] = []
+        cash = 10_000_000  # 초기 예수금 1000만원
+        for date_str in reversed(_SAMPLE_DATES):  # 오래된 날짜부터 누적
+            n_tickers = random.randint(1, 3)
+            picks = random.sample(_SAMPLE_NAMES, n_tickers)
+            ticker_names = [name for name, _ in picks]
+
+            buy_amt  = random.randint(2_000_000, 5_000_000)
+            # 승/패 랜덤 (약 60% 승률)
+            win      = random.random() < 0.60
+            gross_pnl = buy_amt * random.uniform(0.008, 0.035) * (1 if win else -1)
+            sell_amt = buy_amt + gross_pnl
+            fees     = _calc_fee(float(buy_amt), float(sell_amt))
+            net      = gross_pnl - fees["total"]
+            ret_pct  = net / buy_amt * 100
+            cash    += net
+            cash     = max(cash, 5_000_000)
+
+            demo_days.append({
+                "date":         date_str,
+                "buy_amt":      float(buy_amt),
+                "sell_amt":     float(sell_amt),
+                "gross_pnl":    float(gross_pnl),
+                "fees_total":   float(fees["total"]),
+                "net_pnl":      float(net),
+                "ret_pct":      float(ret_pct),
+                "ticker_names": ticker_names,
+                "cash":         int(cash),
+            })
+
+        # 최신순 정렬
+        demo_days.sort(key=lambda x: x["date"], reverse=True)
+
+        _JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+        _PERF_FILE.write_text(_build_performance_md(demo_days), encoding="utf-8")
+        _PERF_HTML.write_text(_build_performance_html(demo_days), encoding="utf-8")
+        print(f"데모 성과 요약 생성 완료:")
+        print(f"  {_PERF_FILE}")
+        print(f"  {_PERF_HTML}")
     else:
-        print("거래 없음 — 생성 스킵")
+        result = generate(args.date)
+        if result:
+            print(f"생성 완료: {result}")
+        else:
+            print("거래 없음 — 생성 스킵")
