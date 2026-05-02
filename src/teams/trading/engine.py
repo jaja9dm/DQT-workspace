@@ -215,6 +215,8 @@ _TIME_BUY_CUTOFF = 1200
 _WATCHDOG_INTERVAL_SEC  = 45    # 관심종목 폴링 주기 (45초)
 _WATCHDOG_EXEC_SURGE    = 145.0 # 체결강도 임계값 — 이 이상이면 FOMO 매수세 급등
 _WATCHDOG_VOL_ACCEL     = 3.0   # 거래량 가속도 임계값 — 현재 페이스가 일평균의 3배↑
+_WATCHDOG_MAX_TICKERS   = 20    # 폴링 대상 상위 종목 수 (momentum_score 기준)
+_WATCHDOG_MIN_CHG_PCT   = 0.5   # 변동률 필터 — 당일 ±0.5% 미만 종목은 폴링 스킵
 
 
 class TradingEngine:
@@ -296,11 +298,13 @@ class TradingEngine:
                 continue
 
             # 현재 매수 대기 중인 hot_list 종목 (당일 미매수 + 최근 10분 이내)
+            # 상위 20종목(momentum_score 기준) + 변동률 ±0.5% 이상만 폴링
             try:
                 pending = [
                     row for row in _load_hot_list()
                     if row["ticker"] not in self._today_tickers
-                ]
+                    and abs(row.get("price_change_pct", 0.0) or 0.0) >= _WATCHDOG_MIN_CHG_PCT
+                ][:_WATCHDOG_MAX_TICKERS]
             except Exception:
                 continue
 
