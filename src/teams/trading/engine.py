@@ -211,6 +211,12 @@ _RISK_LEVEL_GATE = 4          # 이 레벨 이상이면 신규 진입 금지
 # 매수 허용 마감 시각 (HHMM) — 12:00 이후 신규 매수/추가매수/재진입 전면 차단
 _TIME_BUY_CUTOFF = 1200
 
+# [진입-7] 오프닝 진입 금지 시각 (HHMM) — 지표 신뢰도 확보 + 오프닝 노이즈 소거
+# leader/breakout: 09:15 이전 차단 (RSI 15봉, 분봉 지표 안정화)
+# pullback:        09:20 이전 차단 (반전 확인에 더 많은 봉수 필요)
+_OPENING_LOCK_LEADER_HM  = 915
+_OPENING_LOCK_PULLBACK_HM = 920
+
 
 _WATCHDOG_INTERVAL_SEC  = 45    # 관심종목 폴링 주기 (45초)
 _WATCHDOG_EXEC_SURGE    = 145.0 # 체결강도 임계값 — 이 이상이면 FOMO 매수세 급등
@@ -823,6 +829,25 @@ class TradingEngine:
             _drp_c = float(c.get("day_range_pos") or 0.5)
             c = dict(c)
             c["_intraday_pullback"] = _price_chg_c >= 5.0 and _drp_c <= 0.65
+
+            # [진입-7] 오프닝 진입 금지 — 슬롯별 차등
+            # leader/breakout: 09:15 이전 차단 (RSI 15봉 미달 구간)
+            # pullback:        09:20 이전 차단 (반전 확인에 추가 봉수 필요)
+            if (is_leader_slot or is_breakout_slot) and now_hm < _OPENING_LOCK_LEADER_HM:
+                logger.info(
+                    f"Gate 4.5 차단: {tk} 오프닝 15분 진입 금지 "
+                    f"({'leader' if is_leader_slot else 'breakout'}, {now.strftime('%H:%M')}) "
+                    f"— 지표 미신뢰 구간"
+                )
+                continue
+
+            if is_pullback_slot and now_hm < _OPENING_LOCK_PULLBACK_HM:
+                logger.info(
+                    f"Gate 4.5 차단: {tk} 오프닝 20분 진입 금지 "
+                    f"(pullback, {now.strftime('%H:%M')}) "
+                    f"— 지표 미신뢰 구간"
+                )
+                continue
 
             # ── Leader: 장 시작 즉시 진입 — MACD 대기·갭업 차단 없음 ──
             if is_leader_slot:
@@ -2064,13 +2089,27 @@ def _compute_entry_score(
 
     score = min(100.0, score)
 
+    # [진입-6] 시간대별 최소 점수 임계값 — 오프닝 직후일수록 더 엄격
+    # 09:15~10:00: 지표 신뢰도 낮고 노이즈 多 → 60pt 이상 요구
+    # 10:00~11:00: 추세 확립 구간 → 65pt
+    # 11:00~12:00: 충분한 데이터 → 72pt (풀사이즈 기준과 동일)
+    if _hm < 1000:
+        _min_score = 60.0
+    elif _hm < 1100:
+        _min_score = 65.0
+    else:
+        _min_score = 50.0  # 오후는 기존 50pt 유지 (수급 약화 이미 시간 가중치에 반영)
+
     # 사이즈 배율
     if score >= 72.0:
         size_mult = 1.00
-    elif score >= 50.0:
+    elif score >= _min_score:
         size_mult = 0.75
     else:
-        hard_fails.append(f"신뢰도 점수 {score:.0f}/100 < 50 (복합 신호 부족)")
+        hard_fails.append(
+            f"신뢰도 점수 {score:.0f}/100 < {_min_score:.0f} "
+            f"({_hm // 100:02d}:{_hm % 100:02d} 구간 최소 기준)"
+        )
         return hard_fails, score, 0.0
 
     return hard_fails, score, size_mult

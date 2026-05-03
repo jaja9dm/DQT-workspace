@@ -39,9 +39,16 @@ TAKE_PROFIT_2 = 10.0              # +10% → 1/3 익절 or 보류
 
 # 시간 게이트 (분 인덱스, 0=09:00)
 SLOT_ASSIGN_MIN = 7    # 09:07 슬롯 배정
-ENTRY_START_MIN = 10   # 09:10 진입 시작
 BUY_CUTOFF_MIN  = 180  # 12:00 매수 마감
 TIMECUT_MIN     = 380  # 15:20 타임컷
+
+# [진입-7] 오프닝 진입 금지 — 지표 신뢰도 확보 + 오프닝 노이즈 소거
+ENTRY_LOCK_LEADER_MIN   = 15   # leader/breakout: 09:15 이전 차단
+ENTRY_LOCK_PULLBACK_MIN = 20   # pullback:        09:20 이전 차단
+
+# [진입-4] 최소 데이터 요건 — 봉수 미달 시 신뢰값 없음
+RSI_MIN_BARS  = 15   # RSI 신뢰 최소 봉수 (period+1 = 14+1)
+MACD_MIN_BARS = 35   # MACD 신뢰 최소 봉수 (slow+signal = 26+9)
 
 # ══════════════════════════════════════════════════════════════
 # 2. 후보 종목 정보
@@ -136,9 +143,10 @@ def min_idx_to_time(m: int) -> str:
 # 4. 보조 지표 (롤링 윈도우)
 # ══════════════════════════════════════════════════════════════
 
-def calc_rsi(closes: list[float], period: int = 14) -> float:
-    if len(closes) < period + 1:
-        return 50.0
+def calc_rsi(closes: list[float], period: int = 14) -> float | None:
+    """RSI 계산. 데이터 부족(< RSI_MIN_BARS) 시 None 반환."""
+    if len(closes) < RSI_MIN_BARS:
+        return None
     deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
     gains  = [max(d, 0) for d in deltas[-period:]]
     losses = [max(-d, 0) for d in deltas[-period:]]
@@ -160,8 +168,8 @@ def _ema(data: list[float], period: int) -> float:
 
 
 def calc_macd(closes: list[float]) -> tuple[float, float, str]:
-    """MACD 라인, 시그널, 신호 반환."""
-    if len(closes) < 27:
+    """MACD 라인, 시그널, 신호 반환. 데이터 부족(< MACD_MIN_BARS) 시 neutral."""
+    if len(closes) < MACD_MIN_BARS:
         return 0.0, 0.0, "neutral"
 
     macd_series = [
@@ -192,13 +200,116 @@ def calc_vol_ratio(vols: list[int], lookback: int = 20) -> float:
     """현재 분봉 거래량 / 최근 lookback 분 평균."""
     if len(vols) < 2:
         return 1.0
-    # 누적 거래량 → 분봉 거래량 변환
     bar_vols = [max(0, vols[i] - vols[i-1]) for i in range(1, len(vols))]
     if not bar_vols:
         return 1.0
     cur = bar_vols[-1]
     avg = sum(bar_vols[-lookback:]) / len(bar_vols[-lookback:])
     return cur / avg if avg > 0 else 1.0
+
+
+def _bar_vols(vols: list[int]) -> list[int]:
+    """누적 거래량 → 분봉별 거래량 변환."""
+    return [max(0, vols[i] - vols[i-1]) for i in range(1, len(vols))]
+
+
+def calc_atr(bars: list[Bar], period: int = 14) -> float | None:
+    """
+    [진입-1/포지션-1] ATR(Average True Range) 계산.
+    True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+    데이터 부족 시 None 반환.
+    """
+    if len(bars) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(bars)):
+        prev_close = bars[i-1].close
+        tr = max(
+            bars[i].high - bars[i].low,
+            abs(bars[i].high - prev_close),
+            abs(bars[i].low  - prev_close),
+        )
+        trs.append(tr)
+    if len(trs) < period:
+        return None
+    return sum(trs[-period:]) / period
+
+
+def calc_atr_pct(bars: list[Bar], period: int = 14) -> float | None:
+    """ATR을 현재가 대비 % 로 반환."""
+    atr = calc_atr(bars, period)
+    if atr is None or bars[-1].close <= 0:
+        return None
+    return atr / bars[-1].close * 100
+
+
+def check_complex_exit(closes: list[float], vols: list[int],
+                       macd_sig: str, pnl_pct: float) -> tuple[bool, str]:
+    """
+    [청산-1] 복합 청산 신호 — 수익 구간에서 2개 이상 신호 동시 발화 시 청산.
+
+    체크 신호 (시뮬레이션 가능한 3가지):
+      S1: MACD sell_pre 또는 sell
+      S2: RSI > 80 (과매수)
+      S3: 거래량 급감 (최근 3봉 평균 < 직전 3봉 평균 × 0.60)
+
+    Returns (should_exit, reason_str)
+    """
+    if pnl_pct <= 0:
+        return False, ""
+
+    signals = []
+
+    # S1: MACD 약세
+    if macd_sig in ("sell_pre", "sell"):
+        signals.append(f"MACD={macd_sig}")
+
+    # S2: RSI 과매수
+    rsi = calc_rsi(closes)
+    if rsi is not None and rsi > 80:
+        signals.append(f"RSI={rsi:.0f}")
+
+    # S3: 거래량 급감
+    bvols = _bar_vols(vols)
+    if len(bvols) >= 6:
+        recent_avg = sum(bvols[-3:]) / 3
+        prev_avg   = sum(bvols[-6:-3]) / 3
+        if prev_avg > 0 and recent_avg < prev_avg * 0.60:
+            signals.append(f"거래량급감({recent_avg:.0f}<{prev_avg:.0f}×0.60)")
+
+    if len(signals) >= 2:
+        return True, "복합청산: " + " + ".join(signals)
+    return False, ""
+
+
+def check_opening_spike(vols: list[int], open_price: float, cur_price: float,
+                        slot: str) -> tuple[bool, str]:
+    """
+    [진입-2] 오프닝 스파이크 필터.
+    시가 대비 spike_limit% 이상 상승 + 거래량 페이스 둔화 → 스파이크 소진 신호.
+
+    Returns (blocked, reason)  — blocked=True 면 진입 차단.
+    """
+    spike_limit = 3.0 if slot == "pullback" else 5.0
+    spike_pct = (cur_price - open_price) / open_price * 100
+    if spike_pct < spike_limit:
+        return False, ""
+
+    bvols = _bar_vols(vols)
+    if len(bvols) < 6:
+        return False, ""
+
+    recent_avg = sum(bvols[-3:]) / 3
+    prev_avg   = sum(bvols[-6:-3]) / 3
+    if prev_avg <= 0:
+        return False, ""
+
+    if recent_avg < prev_avg * 0.7:
+        return True, (
+            f"스파이크 소진: 시가 대비 +{spike_pct:.1f}% 후 "
+            f"거래량 둔화 ({recent_avg:.0f} < {prev_avg:.0f}×0.70)"
+        )
+    return False, ""
 
 
 # ══════════════════════════════════════════════════════════════
@@ -208,46 +319,65 @@ def calc_vol_ratio(vols: list[int], lookback: int = 20) -> float:
 def check_entry_gates(stock: dict, bars_so_far: list[Bar],
                       m: int, slot: str) -> tuple[bool, str]:
     """
-    v2.3.0 5-gate 진입 체크.
-    Returns (ok, reason)
+    v2.3.0 5-gate 진입 체크 (개선: 진입-2,4,6,7 반영).
+    Returns (ok, reason, score)  — score=0 이면 게이트 차단
     """
     if len(bars_so_far) < 2:
-        return False, "데이터 부족"
+        return False, "데이터 부족", 0
 
     closes = [b.close for b in bars_so_far]
     vols   = [b.volume for b in bars_so_far]
     rsi    = calc_rsi(closes)
     _, _, macd_sig = calc_macd(closes)
+    macd_reliable  = len(closes) >= MACD_MIN_BARS
     gap_pct = (stock.get("open_price", closes[0]) - stock["prev_close"]) / stock["prev_close"] * 100
+
+    # [진입-7] 오프닝 진입 금지 — 슬롯별 차등 (지표 신뢰도 + 오프닝 노이즈)
+    lock_min = ENTRY_LOCK_LEADER_MIN if slot in ("leader", "breakout") else ENTRY_LOCK_PULLBACK_MIN
+    if m < lock_min:
+        return False, f"오프닝 진입 금지: {min_idx_to_time(lock_min)} 이전 [{min_idx_to_time(m)}]", 0
+
+    # [진입-2] 오프닝 스파이크 필터 — 시가 대비 급등 후 거래량 소진 체크
+    open_price = stock.get("open_price", closes[0])
+    spike_blocked, spike_reason = check_opening_spike(vols, open_price, closes[-1], slot)
+    if spike_blocked:
+        return False, spike_reason, 0
+
+    # [진입-4] RSI 데이터 요건 — RSI_MIN_BARS봉 미만은 신뢰 불가
+    if rsi is None:
+        return False, f"RSI 데이터 부족 ({len(closes)}봉 < {RSI_MIN_BARS}봉)", 0
 
     # Gate 1: RSI 하드 실패
     rsi_limit = 90 if gap_pct >= 5 else 85
     if rsi > rsi_limit:
-        return False, f"RSI {rsi:.0f} > {rsi_limit}"
+        return False, f"RSI {rsi:.0f} > {rsi_limit}", 0
 
     # Gate 2: 시간 게이트
-    if m < ENTRY_START_MIN:
-        return False, f"09:10 이전 ({min_idx_to_time(m)})"
     if m >= BUY_CUTOFF_MIN:
-        return False, "12:00 이후 매수 마감"
+        return False, "12:00 이후 매수 마감", 0
     if slot == "pullback" and m >= 300:
-        return False, "pullback 14:00 이후 차단"
+        return False, "pullback 14:00 이후 차단", 0
 
-    # Gate 3: MACD 방향 (leader/breakout은 sell 시 차단)
-    if macd_sig in ("sell", "sell_pre") and slot in ("leader", "breakout"):
-        return False, f"MACD {macd_sig}"
+    # Gate 3: MACD 방향 — 데이터 충분할 때만 적용 (진입-4)
+    if macd_reliable and macd_sig in ("sell", "sell_pre") and slot in ("leader", "breakout"):
+        return False, f"MACD {macd_sig}", 0
 
-    # Gate 4: leader 11:00 이후 MACD 강세 필요
-    if slot == "leader" and m >= 120 and macd_sig not in ("buy_pre", "buy"):
-        return False, f"11:00↑ leader MACD 불충분 ({macd_sig})"
+    # Gate 4: leader 11:00 이후 MACD 강세 필요 — 데이터 충분할 때만 적용
+    if slot == "leader" and m >= 120 and macd_reliable and macd_sig not in ("buy_pre", "buy"):
+        return False, f"11:00↑ leader MACD 불충분 ({macd_sig})", 0
 
-    # Gate 5: 진입 점수
+    # Gate 5: 진입 점수 — [진입-6] 시간대별 임계값 상향
+    if m < 60:     min_score = 60   # 09:15~10:00
+    elif m < 120:  min_score = 65   # 10:00~11:00
+    else:          min_score = 72   # 11:00~12:00
+
     score = _entry_score(closes, vols, stock, rsi, macd_sig, gap_pct)
-    if score < 50:
-        return False, f"진입점수 {score}pt < 50"
+    if score < min_score:
+        return False, f"진입점수 {score}pt < {min_score}pt ({min_idx_to_time(m)} 구간)", 0
 
+    macd_note = macd_sig if macd_reliable else f"{macd_sig}(미신뢰)"
     pct = 100 if score >= 72 else 75
-    return True, f"OK (점수 {score}pt / {pct}% 투입) RSI={rsi:.0f} MACD={macd_sig}"
+    return True, f"OK (점수 {score}pt / {pct}% 투입) RSI={rsi:.0f} MACD={macd_note}", score
 
 
 def _entry_score(closes: list[float], vols: list[int], stock: dict,
@@ -301,6 +431,7 @@ class Position:
     peak_price:  float = 0.0
     tp1_done:    bool  = False
     tp2_done:    bool  = False
+    tp3_locked:  bool  = False   # +12% 스텝 잠금 완료 여부
     realized_pnl: float = 0.0   # TP1/TP2 부분 매도로 이미 실현된 손익
 
     is_closed:   bool  = False
@@ -397,19 +528,28 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
 
             # ── 포지션 없음: 진입 체크 ──────────────────────────
             if pos is None and not slot_filled[slot]:
-                ok, reason = check_entry_gates(stock, bars_so_far, m, slot)
+                ok, reason, entry_score = check_entry_gates(stock, bars_so_far, m, slot)
                 if not ok:
-                    if m % 30 == 0 and m >= ENTRY_START_MIN:
+                    lock_min = ENTRY_LOCK_LEADER_MIN if slot in ("leader", "breakout") else ENTRY_LOCK_PULLBACK_MIN
+                    if m % 30 == 0 and m >= lock_min:
                         events.append(Event(
                             min_idx=m, ticker=ticker, name=stock["name"],
                             slot=slot, event_type="GATE_FAIL",
                             price=cur_price, detail=reason,
                         ))
                 else:
-                    qty = max(1, int(INVEST_PER_SLOT / cur_price))
+                    # [포지션-4] 진입 점수 연동 사이징
+                    if entry_score >= 95:    invest_amt = 4_500_000
+                    elif entry_score >= 85:  invest_amt = 3_750_000
+                    elif entry_score >= 72:  invest_amt = 3_000_000
+                    elif entry_score >= 60:  invest_amt = 2_250_000
+                    else:                    invest_amt = 1_500_000
+
+                    qty = max(1, int(invest_amt / cur_price))
                     invested = qty * cur_price
                     _, _, msig = calc_macd(closes)
-                    rsi = calc_rsi(closes)
+                    rsi_val = calc_rsi(closes)
+                    rsi_disp = f"{rsi_val:.0f}" if rsi_val is not None else "n/a"
                     pos = Position(
                         ticker=ticker, name=stock["name"], slot=slot,
                         entry_price=cur_price, quantity=qty,
@@ -421,7 +561,8 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
                         min_idx=m, ticker=ticker, name=stock["name"],
                         slot=slot, event_type="BUY", price=cur_price,
                         detail=(f"매수 {qty:,}주 × {cur_price:,.0f}원"
-                                f" = {invested:,.0f}원 | RSI={rsi:.0f} MACD={msig}"),
+                                f" = {invested:,.0f}원 (점수{entry_score}pt)"
+                                f" | RSI={rsi_disp} MACD={msig}"),
                     ))
 
             # ── 포지션 있음: 감시 ────────────────────────────────
@@ -433,9 +574,27 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
                 if b.high > pos.peak_price:
                     pos.peak_price = b.high
 
+                # [포지션-1] ATR 기반 동적 floor 계산
+                atr_pct = calc_atr_pct(bars_so_far)
+                atr_floor_base = atr_pct * 1.5 if atr_pct is not None else TRAILING_FLOOR
+
+                # [포지션-2] 2단계 트레일링 구조
+                # +3~8%:  초기 -2.0% 고정 (과도한 수익 실현 방지)
+                # +8~15%: ATR×1.5 (변동성 반영, 추세 따라가기)
+                # +15%↑:  ATR×2.0 (큰 추세 수익 극대화, 더 넓은 간격)
+                if pnl_pct < 8.0:
+                    dyn_floor = max(TRAILING_INITIAL_STOP, atr_floor_base * 0.8)
+                elif pnl_pct < 15.0:
+                    dyn_floor = max(TRAILING_FLOOR, atr_floor_base)
+                else:
+                    dyn_floor = max(TRAILING_FLOOR, atr_pct * 2.0 if atr_pct else TRAILING_FLOOR)
+
                 # 트레일링 스톱 업데이트
                 if pnl_pct >= TRAILING_TRIGGER:
-                    floor = TRAILING_TIGHT_FLOOR if msig in ("sell_pre", "sell") else TRAILING_FLOOR
+                    if msig in ("sell_pre", "sell"):
+                        floor = max(TRAILING_TIGHT_FLOOR, dyn_floor / 2)
+                    else:
+                        floor = dyn_floor
                     new_stop = pos.peak_price * (1 - floor / 100)
                     if new_stop > pos.stop_loss:
                         pos.stop_loss = new_stop
@@ -463,8 +622,31 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
                         pnl=pos.final_pnl,
                     ))
 
+                # [청산-1] 복합 청산 신호 — 수익 구간에서 2개 이상 신호 발화
+                elif not pos.is_closed:
+                    cx_exit, cx_reason = check_complex_exit(closes, vols, msig, pnl_pct)
+                    if cx_exit:
+                        cx_pnl = (cur_price - pos.entry_price) * pos.quantity
+                        pos.realized_pnl += cx_pnl
+                        pos.is_closed    = True
+                        pos.close_price  = cur_price
+                        pos.close_min    = m
+                        pos.close_reason = "COMPLEX_EXIT"
+                        pos.final_pnl    = pos.realized_pnl
+                        closed.append(pos)
+                        del positions[ticker]
+                        events.append(Event(
+                            min_idx=m, ticker=ticker, name=stock["name"],
+                            slot=slot, event_type="COMPLEX_EXIT", price=cur_price,
+                            detail=(f"{cx_reason}"
+                                    f" | +{pnl_pct:.1f}%"
+                                    f" | 청산손익 {cx_pnl:+,.0f}원"
+                                    f" | 누적손익 {pos.final_pnl:+,.0f}원"),
+                            pnl=pos.final_pnl,
+                        ))
+
                 # TP1 (+5%)
-                elif not pos.tp1_done and pnl_pct >= TAKE_PROFIT_1:
+                if not pos.is_closed and not pos.tp1_done and pnl_pct >= TAKE_PROFIT_1:
                     if msig in ("sell_pre", "sell"):
                         sell_qty = pos.quantity // 3
                         if sell_qty > 0:
@@ -481,7 +663,8 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
                                 pnl=partial_pnl,
                             ))
                     else:
-                        lock_stop = pos.entry_price * 1.01
+                        # [포지션-3] 스텝형 수익 잠금: +5% → 진입가+2%로 손절선 상향
+                        lock_stop = pos.entry_price * 1.02
                         if lock_stop > pos.stop_loss:
                             pos.stop_loss = lock_stop
                         pos.tp1_done = True
@@ -489,11 +672,11 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
                             min_idx=m, ticker=ticker, name=stock["name"],
                             slot=slot, event_type="TP1", price=cur_price,
                             detail=(f"+{pnl_pct:.1f}% — MACD {msig} 강세"
-                                    f" 익절 보류 / 손절선→{lock_stop:,.0f}원"),
+                                    f" 익절 보류 / 손절선→진입가+2% {lock_stop:,.0f}원"),
                         ))
 
                 # TP2 (+10%)
-                elif not pos.tp2_done and pos.tp1_done and pnl_pct >= TAKE_PROFIT_2:
+                elif not pos.is_closed and not pos.tp2_done and pos.tp1_done and pnl_pct >= TAKE_PROFIT_2:
                     if msig in ("sell_pre", "sell"):
                         sell_qty = pos.quantity // 2
                         if sell_qty > 0:
@@ -510,12 +693,29 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
                                 pnl=partial_pnl,
                             ))
                     else:
+                        # [포지션-3] 스텝형 수익 잠금: +10% → 진입가+5%로 손절선 상향
+                        lock_stop = pos.entry_price * 1.05
+                        if lock_stop > pos.stop_loss:
+                            pos.stop_loss = lock_stop
                         pos.tp2_done = True
                         events.append(Event(
                             min_idx=m, ticker=ticker, name=stock["name"],
                             slot=slot, event_type="TP2", price=cur_price,
-                            detail=f"+{pnl_pct:.1f}% — MACD {msig} 강세 익절 보류",
+                            detail=(f"+{pnl_pct:.1f}% — MACD {msig} 강세"
+                                    f" 익절 보류 / 손절선→진입가+5% {lock_stop:,.0f}원"),
                         ))
+
+                # TP3: +12% 스텝형 잠금 ([포지션-3]) — 1회만 실행
+                elif not pos.is_closed and pos.tp2_done and not pos.tp3_locked and pnl_pct >= 12.0:
+                    lock_stop = pos.entry_price * 1.09
+                    pos.tp3_locked = True
+                    if lock_stop > pos.stop_loss:
+                        pos.stop_loss = lock_stop
+                    events.append(Event(
+                        min_idx=m, ticker=ticker, name=stock["name"],
+                        slot=slot, event_type="TP3_LOCK", price=cur_price,
+                        detail=(f"+{pnl_pct:.1f}% — 손절선→진입가+9% {lock_stop:,.0f}원 (스텝 잠금)"),
+                    ))
 
         # 15:20 타임컷
         if m == TIMECUT_MIN:
@@ -548,17 +748,20 @@ def run_simulation() -> tuple[list[Event], list[Position], dict[str, list[Bar]]]
 # ══════════════════════════════════════════════════════════════
 
 EVENT_COLORS = {
-    "SLOT":      "#4a9eff",
-    "GATE_FAIL": "#555",
-    "BUY":       "#26a69a",
-    "TP1":       "#66bb6a",
-    "TP2":       "#aed581",
-    "STOP":      "#ef5350",
-    "TIMECUT":   "#ff7043",
+    "SLOT":         "#4a9eff",
+    "GATE_FAIL":    "#555",
+    "BUY":          "#26a69a",
+    "TP1":          "#66bb6a",
+    "TP2":          "#aed581",
+    "TP3_LOCK":     "#c8e6c9",
+    "COMPLEX_EXIT": "#ffa726",
+    "STOP":         "#ef5350",
+    "TIMECUT":      "#ff7043",
 }
 EVENT_ICONS = {
     "SLOT": "📌", "GATE_FAIL": "🚫", "BUY": "🟢",
-    "TP1": "🟡", "TP2": "💛", "STOP": "🔴", "TIMECUT": "⏱",
+    "TP1": "🟡", "TP2": "💛", "TP3_LOCK": "🔒",
+    "COMPLEX_EXIT": "🔶", "STOP": "🔴", "TIMECUT": "⏱",
 }
 SLOT_LABELS = {
     "leader":   "🏆 Leader — 갭업돌파",

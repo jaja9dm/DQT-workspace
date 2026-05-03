@@ -1756,25 +1756,31 @@ def _calc_volume_pressure(ticker: str) -> str:
     return "bullish"       # 거래량 급증 + 가격 상승 = 매수 압력
 
 
-def _get_dynamic_floor_pct(ticker: str, ts: dict, macd_tight: bool) -> float:
+def _get_dynamic_floor_pct(ticker: str, ts: dict, macd_tight: bool,
+                            gain_pct: float = 0.0) -> float:
     """
-    ATR·거래량 압력·MACD 기반 동적 trailing floor 간격 결정.
+    ATR·거래량 압력·MACD·수익률 기반 동적 trailing floor 간격 결정.
 
-    우선순위:
-      1. ATR 기반: 실제 변동성에 비례 (noise에 걸리지 않을 최소 간격)
-      2. MACD bearish: 절반으로 타이트하게
-      3. 거래량 매도 압력: 추가 타이트
-      4. trailing_stop 테이블의 floor_pct를 하한으로 사용
+    [포지션-1] ATR 연동: 실제 변동성에 비례한 최소 간격
+    [포지션-2] 2단계 트레일링:
+      - gain < 8%:  초기 보수적 (ATR × 1.2 — noise 방지)
+      - 8~15%:      ATR × 1.5  (추세 따라가기, 더 넓은 여유)
+      - gain >= 15%: ATR × 2.0 (큰 추세 극대화, 더 여유 있게)
     """
     stored_floor = float(ts.get("floor_pct") or _TRAILING_FLOOR)
     atr_pct = _calc_atr(ticker)
 
     if atr_pct is not None:
-        # ATR 기반: 변동성이 크면 간격 넓히고 (노이즈 방지), 작으면 좁힘
-        # 예: ATR=0.5% → floor=1.5%, ATR=1.5% → floor=2.5%, ATR=3% → floor=4%
-        atr_floor = max(1.5, min(4.0, atr_pct * 1.2))
+        # [포지션-2] 수익 구간별 ATR 배율 조정
+        if gain_pct >= 15.0:
+            atr_mult = 2.0   # 대추세: 넓은 간격으로 끝까지 보유
+        elif gain_pct >= 8.0:
+            atr_mult = 1.5   # 중간 추세: 여유 있게 추적
+        else:
+            atr_mult = 1.2   # 초기 구간: 보수적 (noise 손절 방지)
+        atr_floor = max(1.5, min(5.0, atr_pct * atr_mult))
     else:
-        atr_floor = stored_floor  # ATR 계산 불가 시 진입 시 설정값 사용
+        atr_floor = stored_floor
 
     vol_pressure = _calc_volume_pressure(ticker)
 
@@ -1831,8 +1837,8 @@ def _update_trailing_floor(
     # 동적 트리거: 진입 시 설정값 사용
     trigger = float(ts.get("trigger_pct") or _TRAILING_TRIGGER)
 
-    # 동적 floor: ATR·거래량 압력·MACD 기반 실시간 계산
-    floor_gap = _get_dynamic_floor_pct(ticker, ts, macd_tight=tight)
+    # [포지션-1/2] ATR·거래량 압력·수익률 기반 동적 floor
+    floor_gap = _get_dynamic_floor_pct(ticker, ts, macd_tight=tight, gain_pct=gain_pct)
 
     if gain_pct >= trigger:
         candidate_floor = current_price * (1 - floor_gap / 100)
