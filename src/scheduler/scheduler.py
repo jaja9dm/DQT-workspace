@@ -27,6 +27,9 @@ main.py는 스케줄러만 시작하면 된다.
   - 15:35  실시간 엔진 정지
   - 15:40  리포트팀 실행
   - 16:00  연구소 일일 분석 실행
+  - 16:30  일일 매매 복기
+  - 16:45  매매일지 마크다운 파일 저장 (docs/trading_journal/YYYY-MM-DD.md)
+  - 17:00  자동 파라미터 튜닝
   - 일요일 16:30  연구소 심층 백테스트 (deep=True)
 """
 
@@ -430,6 +433,7 @@ class DQTScheduler:
             from scripts.generate_trading_journal import generate
             path = generate()
             logger.info(f"매매 일지 저장: {path}")
+            notify(f"📒 <b>매매일지 생성 완료</b>\n{path.name}")
         except Exception as e:
             logger.error(f"매매 일지 생성 오류: {e}", exc_info=True)
 
