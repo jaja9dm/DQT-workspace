@@ -635,7 +635,7 @@ CREATE TABLE sector_strength (
 
 | 항목 | 내용 |
 |------|------|
-| 모드 | `KIS_MODE=paper` (모의투자) |
+| 모드 | `KIS_MODE=live` (실전 투자) |
 | 실행 방식 | `crontab @reboot` → `run.sh` → `python main.py` |
 | 실행 노트북 | 회사 노트북 (primary) / 집 노트북 (backup) |
 | 실전 전환 방법 | `.env`에서 `KIS_MODE=live` + 실계좌 앱키로 변경 |
