@@ -149,12 +149,16 @@ def init_db() -> None:
             pass
         # strategy_params 자기학습 파라미터 시드 추가
         _new_params = [
-            ("gate_entry_score_min",     50.0, 50.0, 30.0,  75.0, "Gate 4.2 진입 최소 신뢰도 점수"),
-            ("gate_rs_daily_min",        -2.0, -2.0, -5.0,   0.0, "하락장 RS hard fail 임계값 (%)"),
-            ("gate_market_down_pct",     -1.5, -1.5, -3.0,  -0.5, "하락장 판단 KOSPI 기준 (%)"),
-            ("sector_hot_bonus",          5.0,  5.0,  0.0,  10.0, "강세 섹터 진입점수 가산"),
-            ("sector_cold_penalty",       3.0,  3.0,  0.0,   8.0, "약세 섹터 진입점수 감점"),
-            ("review_win_rate_target",   55.0, 55.0, 40.0,  75.0, "목표 승률 (%) — 미달 시 필터 강화"),
+            ("gate_entry_score_min",      50.0,  50.0, 30.0,  75.0, "Gate 4.2 진입 최소 신뢰도 점수"),
+            ("gate_rs_daily_min",         -2.0,  -2.0, -5.0,   0.0, "하락장 RS hard fail 임계값 (%)"),
+            ("gate_market_down_pct",      -1.5,  -1.5, -3.0,  -0.5, "하락장 판단 KOSPI 기준 (%)"),
+            ("sector_hot_bonus",           5.0,   5.0,  0.0,  10.0, "강세 섹터 진입점수 가산"),
+            ("sector_cold_penalty",        3.0,   3.0,  0.0,   8.0, "약세 섹터 진입점수 감점"),
+            ("review_win_rate_target",    55.0,  55.0, 40.0,  75.0, "목표 승률 (%) — 미달 시 필터 강화"),
+            ("bear_market_down_pct",       0.5,   0.5,  0.2,   2.0, "[리스크-2] 하락장 KOSPI 하락 임계값 (%)"),
+            ("bear_market_decline_ratio",  0.60,  0.60, 0.40,  0.80, "[리스크-2] 하락장 섹터 하락 비율 기준"),
+            ("bear_market_score_penalty",  5.0,   5.0,  0.0,  15.0, "[리스크-2] 하락장 진입 점수 임계값 가산"),
+            ("reentry_max_drop_pct",       1.0,   1.0,  0.5,   3.0, "[청산-2] 재진입 허용 청산가 대비 최대 하락률 (%)"),
         ]
         for row in _new_params:
             try:

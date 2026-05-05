@@ -527,6 +527,19 @@ class TradingEngine:
             )
             return []
 
+        # ── [리스크-2] 하락장 페널티 계산 ────────
+        # KOSPI 당일 하락 + 섹터 하락 비율 60%↑ 동시 충족 시
+        # Gate 4.2 최소 점수 임계값 +N pt (더 엄격한 종목만 진입)
+        _bear_penalty = 0.0
+        if kospi_live is not None and kospi_live < -_gp("bear_market_down_pct", 0.5):
+            _declining_ratio = _get_declining_sector_ratio()
+            if _declining_ratio >= _gp("bear_market_decline_ratio", 0.60):
+                _bear_penalty = _gp("bear_market_score_penalty", 5.0)
+                logger.info(
+                    f"[하락장 감지] KOSPI {kospi_live:+.2f}% + 섹터 하락 비율 "
+                    f"{_declining_ratio:.0%} ≥ 60% — 진입 최소 점수 +{_bear_penalty:.0f}pt"
+                )
+
         # ── Gate 4: Hot List ─────────────────────
         hot_list = _load_hot_list()
         if not hot_list:
@@ -672,6 +685,7 @@ class TradingEngine:
                 ticker_stats=_tk_stats,
                 signal_feedback=_sig_feedback,
                 sector_holdings=_sector_cnt,
+                bear_market_penalty=_bear_penalty,
             )
 
             if hard_fails:
@@ -1245,8 +1259,8 @@ class TradingEngine:
         to_remove: list[str] = []
 
         for ticker, watch in list(self._reentry_watchlist.items()):
-            # 이미 재진입 완료 or 포지션 보유 중이면 제거
-            if watch["reentry_count"] >= 1 or _has_open_position(ticker):
+            # 이미 재진입 2회 완료 or 포지션 보유 중이면 제거
+            if watch["reentry_count"] >= 2 or _has_open_position(ticker):
                 to_remove.append(ticker)
                 continue
 
@@ -1256,7 +1270,21 @@ class TradingEngine:
                 to_remove.append(ticker)
                 continue
 
-            # ① 3분봉+5분봉 모두 음수→양수 전환 + 개별 신호 모두 buy_pre
+            # ① 청산가 -1% 이내 체크 — 너무 멀리 떨어진 경우 재진입 스킵
+            _exit_px = watch.get("exit_price", 0.0)
+            _cur_px_quick = _fetch_current_price(ticker)
+            if _exit_px > 0 and _cur_px_quick > 0:
+                from src.teams.research.param_tuner import get_param as _gp_re
+                _max_drop_pct = _gp_re("reentry_max_drop_pct", 1.0)
+                _drop_from_exit = (_exit_px - _cur_px_quick) / _exit_px * 100
+                if _drop_from_exit > _max_drop_pct:
+                    logger.debug(
+                        f"[재진입 보류] {ticker} — 청산가({_exit_px:,.0f}) 대비 "
+                        f"-{_drop_from_exit:.1f}% (한도 -{_max_drop_pct:.1f}%)"
+                    )
+                    continue
+
+            # ③ 3분봉+5분봉 모두 음수→양수 전환 + 개별 신호 모두 buy_pre
             macd = _get_macd_det(ticker, max_age_minutes=6)
             if not macd.get("from_negative") or not macd.get("both_buy_pre"):
                 logger.debug(
@@ -1266,7 +1294,7 @@ class TradingEngine:
                 )
                 continue
 
-            # ② 거래량 재급증 확인
+            # ④ 거래량 재팽창 확인
             vol_rows = fetch_all(
                 "SELECT volume FROM intraday_candles WHERE ticker=? ORDER BY bar_time DESC LIMIT 6",
                 (ticker,),
@@ -1275,10 +1303,10 @@ class TradingEngine:
                 recent_vol = sum(int(r["volume"]) for r in vol_rows[:2]) / 2
                 prev_vol   = sum(int(r["volume"]) for r in vol_rows[2:6]) / 4
                 if prev_vol > 0 and recent_vol < prev_vol * 1.3:
-                    logger.debug(f"[재진입 보류] {ticker} — 거래량 재급증 미충족 ({recent_vol/prev_vol:.2f}x < 1.3x)")
+                    logger.debug(f"[재진입 보류] {ticker} — 거래량 재팽창 미충족 ({recent_vol/prev_vol:.2f}x < 1.3x)")
                     continue
 
-            # ③ RSI + VWAP 확인 (hot_list 스냅샷에서 RSI 읽기)
+            # ⑤ RSI + VWAP 확인 (hot_list 스냅샷에서 RSI 읽기)
             item = watch["item"]
             rsi = float(item.get("rsi") or 55.0)
             if rsi >= 72.0:
@@ -1291,21 +1319,20 @@ class TradingEngine:
                 continue
 
             # 모든 조건 충족 → 재진입 실행
+            # _cur_px_quick 이미 조회했으나 시간 경과로 재조회
             current_price = _fetch_current_price(ticker)
             if current_price <= 0:
                 continue
 
-            # 재진입 사이즈: 원래 배분의 70% (보수적, 재진입 리스크 관리)
-            mscore = float(item.get("momentum_score") or 0.0)
-            ms_mult = 0.7 + (mscore / 130.0) * 0.8
-            ms_mult = max(0.7, min(1.5, ms_mult))
-            max_invest = usable_cash * max_single_pct / 100 * ms_mult * 0.70
+            # 재진입 사이즈: 단일 종목 배분의 50% (청산-2 정책)
+            max_invest = usable_cash * max_single_pct / 100 * 0.50
             qty = max(1, int(max_invest * _TRANCHE_RATIOS[0] / current_price))
 
             logger.info(
-                f"[MACD 재진입] {ticker} — 3분봉+5분봉 동시 음수→양수 전환 + both_buy_pre + 거래량↑ + VWAP 위 "
+                f"[MACD 재진입] {ticker} — 청산가({watch['exit_price']:,.0f}) -1%이내 + "
+                f"3분봉+5분봉 음수→양수 + 거래량↑ + VWAP 위 "
                 f"| RSI {rsi:.0f} | 3m={macd.get('sig_3m')} 5m={macd.get('sig_5m')} "
-                f"| 수량 {qty}주 @ {current_price:,.0f}"
+                f"| 수량 {qty}주 @ {current_price:,.0f} (재진입 {watch['reentry_count']+1}/2회)"
             )
 
             # 재진입 판단: 간소화 (Claude 재호출 없이 지표 기반으로 직접 진입)
@@ -1865,6 +1892,7 @@ def _compute_entry_score(
     ticker_stats: dict | None = None,
     signal_feedback: dict | None = None,
     sector_holdings: int = 0,
+    bear_market_penalty: float = 0.0,
 ) -> tuple[list[str], float, float]:
     """
     진입 신뢰도 점수 (0~110) + 하드 차단 사유 + 사이즈 배율.
@@ -2201,6 +2229,9 @@ def _compute_entry_score(
     else:
         _min_score = 50.0  # 오후는 기존 50pt 유지 (수급 약화 이미 시간 가중치에 반영)
 
+    # [리스크-2] 하락장 페널티 — KOSPI 하락 + 섹터 60%↑ 하락 시 임계값 상향
+    _min_score += bear_market_penalty
+
     # 사이즈 배율
     if score >= 72.0:
         size_mult = 1.00
@@ -2338,6 +2369,16 @@ def _load_global_context() -> dict:
         "SELECT global_risk_score, korea_market_outlook FROM global_condition ORDER BY created_at DESC LIMIT 1"
     )
     return dict(row) if row else {"global_risk_score": 5, "korea_market_outlook": "neutral"}
+
+
+def _get_declining_sector_ratio() -> float:
+    """sector_strength 테이블에서 당일 하락 섹터 비율 반환 (0.0~1.0)."""
+    rows = fetch_all("SELECT avg_ret_1d FROM sector_strength")
+    if not rows:
+        return 0.0
+    total = len(rows)
+    declining = sum(1 for r in rows if float(r["avg_ret_1d"] or 0.0) < 0)
+    return declining / total
 
 
 def _load_market_full_context() -> tuple[dict, float | None]:
