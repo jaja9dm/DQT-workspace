@@ -35,8 +35,8 @@ logger = get_logger(__name__)
 
 # KIND 공시 검색 API (JSON)
 _KIND_DISCLOSURE_URL = (
-    "https://kind.krx.co.kr/disclosureinfo/todaydisclosure/main.do"
-    "?method=searchTodayDisclosureInfo&currentPage=1&rowsPerPage=30"
+    "https://kind.krx.co.kr/disclosure/todaydisclosure.do"
+    "?method=searchTodayDisclosureMain&currentPage=1&rowsPerPage=30"
     "&orderMode=0&orderStat=D&forward=todaydisclosure_main"
 )
 
@@ -223,7 +223,7 @@ class UniverseManager:
             # KIND 응답은 EUC-KR 인코딩
             html = raw.decode("euc-kr", errors="replace")
         except Exception as e:
-            logger.warning(f"KIND 공시 페이지 요청 실패: {e}")
+            logger.debug(f"KIND 공시 페이지 요청 실패: {e}")
             return
 
         # HTML에서 종목 코드(6자리 숫자) + 종목명 추출
