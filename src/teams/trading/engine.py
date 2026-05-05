@@ -901,9 +901,6 @@ class TradingEngine:
             self._check_blocked_rescan()
             return []
 
-        # 게이트 통과 — 차단 타이머 리셋
-        self._all_blocked_since = 0.0
-
         # ── 가용 예수금 조회 ─────────────────────
         available_cash = _fetch_available_cash()
         if available_cash <= 0:
@@ -935,7 +932,11 @@ class TradingEngine:
         candidates = price_filtered
         if not candidates:
             logger.debug("Gate 4.6: 예수금 대비 주가 필터 통과 종목 없음")
+            self._check_blocked_rescan()
             return []
+
+        # Gate 4.6까지 통과한 경우에만 차단 타이머 리셋
+        self._all_blocked_since = 0.0
 
         # ── Gate 5: Claude 최종 판단 (배치) ──────
         # 12:00 이후는 run_once() 진입 자체가 차단되므로 여기까지 오면 항상 오전
@@ -1830,9 +1831,9 @@ def _compute_entry_score(
     else:
         _tv_floor = _min_vol     # 소형주 — 기존 기준 유지 (기본 2.0)
 
-    # 전략별 추가 완화 (갭업/눌림목/시장강세/오프닝급락은 어떤 크기든 1.2 이하 허용)
+    # 전략별 추가 완화 (갭업/눌림목/시장강세/오프닝급락은 _min_vol 이하 허용)
     if is_gap_up or is_pullback or is_mkt_mom or is_op_plunge:
-        _vol_floor = min(_tv_floor, 1.2)
+        _vol_floor = min(_tv_floor, _min_vol)
     else:
         _vol_floor = _tv_floor
 

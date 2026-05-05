@@ -26,19 +26,17 @@ def get_logger(name: str) -> logging.Logger:
         if logger.handlers:  # 락 획득 후 재확인 (double-checked locking)
             return logger
 
-    logger.setLevel(logging.DEBUG)
+        logger.setLevel(logging.DEBUG)
 
-    # 콘솔 핸들러
-    ch = logging.StreamHandler(sys.stdout)
-    ch.setLevel(logging.INFO)
-    ch.setFormatter(logging.Formatter(_FMT, _DATE_FMT))
+        ch = logging.StreamHandler(sys.stdout)
+        ch.setLevel(logging.INFO)
+        ch.setFormatter(logging.Formatter(_FMT, _DATE_FMT))
 
-    # 파일 핸들러 (DEBUG 포함 전체 기록)
-    fh = logging.FileHandler(LOG_DIR / "dqt.log", encoding="utf-8")
-    fh.setLevel(logging.DEBUG)
-    fh.setFormatter(logging.Formatter(_FMT, _DATE_FMT))
+        fh = logging.FileHandler(LOG_DIR / "dqt.log", encoding="utf-8")
+        fh.setLevel(logging.DEBUG)
+        fh.setFormatter(logging.Formatter(_FMT, _DATE_FMT))
 
-    logger.addHandler(ch)
-    logger.addHandler(fh)
-    logger.propagate = False  # 루트 로거로 전파 차단 (중복 출력 방지)
+        logger.addHandler(ch)
+        logger.addHandler(fh)
+        logger.propagate = False
     return logger

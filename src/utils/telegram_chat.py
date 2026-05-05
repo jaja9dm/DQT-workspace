@@ -36,7 +36,7 @@ logger = get_logger(__name__)
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
 
 _BASE_URL = "https://api.telegram.org/bot{token}/{method}"
-_POLL_TIMEOUT = 10      # long polling 대기 시간 (초) — 짧게 해야 재시작 시 409 회피
+_POLL_SLEEP = 1         # short-poll 간격 (초) — timeout=0 short-poll 사용, 409 없음
 _HISTORY_MAX  = 30      # 채팅별 최대 보관 메시지 수 (15회 왕복)
 _MAX_TOKENS   = 1024
 
@@ -53,11 +53,6 @@ def _tg(method: str, payload: dict | None = None, timeout: int = 10) -> dict:
     url = _BASE_URL.format(token=settings.TELEGRAM_BOT_TOKEN, method=method)
     try:
         resp = _session.post(url, json=payload or {}, timeout=timeout)
-        if resp.status_code == 409 and method == "getUpdates":
-            wait = _POLL_TIMEOUT + 5
-            logger.debug(f"Telegram 409: 이전 세션 만료 대기 {wait}s")
-            time.sleep(wait)
-            return {}
         resp.raise_for_status()
         return resp.json()
     except Exception as e:
@@ -831,15 +826,22 @@ class TelegramChatBot:
         if not settings.TELEGRAM_BOT_TOKEN or not settings.TELEGRAM_CHAT_ID:
             logger.info("텔레그램 설정 없음 — 챗봇 비활성")
             return
-        # webhook 제거 (409 Conflict 방지) 후 Telegram 서버 이전 세션 만료 대기
-        _tg("deleteWebhook", {"drop_pending_updates": False})
-        time.sleep(2)
-        # 기존 pending 업데이트를 flush해서 offset 동기화
-        result = _tg("getUpdates", {"offset": -1, "timeout": 1}, timeout=5)
-        updates = result.get("result", [])
-        if updates:
-            self._last_update_id = updates[-1]["update_id"]
-        time.sleep(1)
+        # webhook 제거 후 이전 long-poll 세션이 완전히 해소될 때까지 대기
+        _tg("deleteWebhook", {"drop_pending_updates": True})
+        url = _BASE_URL.format(token=settings.TELEGRAM_BOT_TOKEN, method="getUpdates")
+        for _ in range(20):   # 최대 60초 대기
+            try:
+                resp = _session.post(url, json={"offset": -1, "timeout": 0}, timeout=5)
+                if resp.status_code == 200:
+                    updates = resp.json().get("result", [])
+                    if updates:
+                        self._last_update_id = updates[-1]["update_id"]
+                    break
+                if resp.status_code == 409:
+                    logger.debug("Telegram 409 대기 중 — 이전 세션 만료 재시도")
+                    time.sleep(3)
+            except Exception:
+                time.sleep(3)
         self._thread.start()
         logger.info("텔레그램 AI 파트너 봇 시작")
 
@@ -847,28 +849,21 @@ class TelegramChatBot:
         self._stop_event.set()
 
     def _poll_loop(self) -> None:
+        # short-poll (timeout=0): long-poll과 달리 동시 연결 제한(409)이 없음
         retry_delay = 5
         while not self._stop_event.is_set():
             try:
                 result = _tg(
                     "getUpdates",
-                    {"offset": self._last_update_id + 1, "timeout": _POLL_TIMEOUT},
-                    timeout=_POLL_TIMEOUT + 5,
+                    {"offset": self._last_update_id + 1, "timeout": 0},
+                    timeout=10,
                 )
                 updates = result.get("result", [])
                 for update in updates:
                     self._last_update_id = max(self._last_update_id, update["update_id"])
                     self._handle_update(update)
-                retry_delay = 5  # 성공 시 리셋
-            except HTTPError as e:
-                if e.code == 409:
-                    # 이전 세션이 Telegram 서버에 남아있음 — 세션 만료까지 대기
-                    logger.debug(f"폴링 409: 이전 세션 대기 중 ({_POLL_TIMEOUT + 5}s)")
-                    time.sleep(_POLL_TIMEOUT + 5)
-                else:
-                    logger.debug(f"폴링 오류: {e}")
-                    time.sleep(retry_delay)
-                    retry_delay = min(retry_delay * 2, 60)
+                retry_delay = 5
+                time.sleep(1)  # short-poll은 sleep으로 Telegram 서버 부하 조절
             except Exception as e:
                 logger.debug(f"폴링 오류: {e}")
                 time.sleep(retry_delay)

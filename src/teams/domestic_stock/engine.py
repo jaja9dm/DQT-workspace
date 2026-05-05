@@ -426,6 +426,19 @@ def _score_slot_health(
         if snap.rsi > 75:
             _deduct(15.0, f"RSI {snap.rsi:.0f} — 눌림목 조건 위배")
 
+    # ── 공통: 주가 > 가용 슬롯 예산 (1주도 못 사는 종목) ──────────────
+    try:
+        from src.teams.research.param_tuner import get_param as _gp2
+        from src.infra.kis_gateway import KISGateway as _GW2
+        _avail = _GW2().get_available_cash()
+        _pct   = _gp2("max_single_position_pct", 33.0)
+        _budget = _avail * _pct / 100
+        _px = getattr(snap, "current_price", 0) or getattr(snap, "close", 0)
+        if _budget > 0 and _px > _budget:
+            _deduct(60.0, f"주가 {_px:,.0f}원 > 슬롯예산 {_budget:,.0f}원 — 매수 불가")
+    except Exception:
+        pass
+
     score = max(0.0, score)
     if not worst_reason:
         worst_reason = "양호"
