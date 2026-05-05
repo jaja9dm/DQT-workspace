@@ -177,9 +177,13 @@ def _fetch_investor_flow(market: str) -> InvestorFlow:
     """
     KIS API로 투자자별 매매동향 조회.
     market: 'KOSPI' | 'KOSDAQ'
+    FHKST01010900은 KOSPI(J)만 지원 — KOSDAQ 호출 시 INVALID FID 에러 발생
     """
+    if market != "KOSPI":
+        return InvestorFlow()
+
     gw = KISGateway()
-    mktdiv = "J" if market == "KOSPI" else "Q"  # KIS 시장 구분
+    mktdiv = "J"
 
     try:
         resp = gw.request(
