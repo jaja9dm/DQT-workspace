@@ -283,9 +283,7 @@
     <a class="h2" href="#7-리스크-정책">7. 리스크 정책</a>
     <a class="h2" href="#8-개발-현황">8. 개발 현황</a>
     <a class="h2" href="#9-향후-작업-todo">9. 향후 작업 (TODO)</a>
-    <a class="h3" href="#리스크-2-시장-하락-국면-감지-_소_">[리스크-2] 시장 하락 국면 감지 _(소)_</a>
-    <a class="h3" href="#청산-2-재진입-로직-_중_">[청산-2] 재진입 로직 _(중)_</a>
-    <a class="h3" href="#청산-3-손절-후-슬롯-자동-교체-_중_">[청산-3] 손절 후 슬롯 자동 교체 _(중)_</a>
+    <a class="h3" href="#완료된-항목">✅ 완료된 항목</a>
     <a class="h3" href="#ai-1-claude-판단-피드백-루프-_대_">[AI-1] Claude 판단 피드백 루프 _(대)_</a>
     <a class="h3" href="#시뮬-1-beforeafter-비교-시뮬레이션-_대_">[시뮬-1] Before/After 비교 시뮬레이션 _(대)_</a>
     <a class="h2" href="#10-운용-환경">10. 운용 환경</a>
@@ -321,7 +319,7 @@ Claude API와 한국투자증권 KIS API를 결합한 데일리 퀀트 자동매
 </tr>
 <tr>
 <td>현재 버전</td>
-<td>v2.4.0</td>
+<td>v2.4.1</td>
 </tr>
 <tr>
 <td>상태</td>
@@ -340,6 +338,11 @@ Claude API와 한국투자증권 KIS API를 결합한 데일리 퀀트 자동매
 </tr>
 </thead>
 <tbody>
+<tr>
+<td>v2.4.1</td>
+<td>2026-05-06</td>
+<td>하락장 대응·재진입·손절 후 슬롯 교체 — [리스크-2] 하락장 페널티(<code>bear_market_score_penalty</code>), [청산-2] 재진입 청산가 -1% 조건·2회 한도·50% 사이즈, [청산-3] 손절 후 30분 쿨다운(<code>stop_cooldown</code>) 슬롯 자동 재개방</td>
+</tr>
 <tr>
 <td>v2.4.0</td>
 <td>2026-05-05</td>
@@ -1320,6 +1323,11 @@ CREATE TABLE sector_strength (
 <td>✅ 완료</td>
 </tr>
 <tr>
+<td>Phase 5.9</td>
+<td>하락장 대응·재진입·손절 후 슬롯 교체 (v2.4.1) — [리스크-2] 하락장 페널티, [청산-2] 재진입 조건·한도·사이즈, [청산-3] 30분 쿨다운 슬롯 자동 교체</td>
+<td>✅ 완료</td>
+</tr>
+<tr>
 <td>Phase 6</td>
 <td>실거래 검증 (2026-04-17 ~ / 누적 +151,025원 / 70% 승률)</td>
 <td>🔄 진행 중</td>
@@ -1333,28 +1341,33 @@ CREATE TABLE sector_strength (
 </table>
 <hr />
 <h2 id="9-향후-작업-todo">9. 향후 작업 (TODO)</h2>
-<h3 id="리스크-2-시장-하락-국면-감지-소">[리스크-2] 시장 하락 국면 감지 <em>(소)</em></h3>
-<ul>
-<li><strong>목표:</strong> KOSPI 당일 하락 + 하락 종목 비율 60% 이상 동시 충족 시 진입 점수 임계값 +5pt</li>
-<li><strong>위치:</strong> Gate 3.5 또는 <code>_compute_entry_score()</code> 내부</li>
-<li><strong>데이터 출처:</strong> <code>domestic_market/analyzer.py</code> 또는 <code>market_condition.summary</code> JSON</li>
-<li><strong>파라미터:</strong> <code>_gp("bear_market_score_penalty", 5.0)</code> 로 조정 가능</li>
-</ul>
-<hr />
-<h3 id="청산-2-재진입-로직-중">[청산-2] 재진입 로직 <em>(중)</em></h3>
-<ul>
-<li><strong>목표:</strong> 청산 후 청산가 -1% 이내 + MACD <code>buy_pre</code> 재전환 + 거래량 재팽창 시 50% 재진입</li>
-<li><strong>위치:</strong> <code>trading/engine.py</code> — <code>_reentry_watchlist</code> 감시 로직 이미 존재</li>
-<li><strong>한도:</strong> 2회 (<code>_macd_reentry_count</code> 이미 있음, 한도만 조정)</li>
-<li><strong>사이즈:</strong> 50% (기존 25%에서 상향)</li>
-</ul>
-<hr />
-<h3 id="청산-3-손절-후-슬롯-자동-교체-중">[청산-3] 손절 후 슬롯 자동 교체 <em>(중)</em></h3>
-<ul>
-<li><strong>목표:</strong> 손절 실행 후 30분 타이머 만료 시 해당 슬롯만 재스캔</li>
-<li><strong>위치:</strong> <code>position_monitor/engine.py</code> — <code>force_slot_rescan()</code> 이미 존재</li>
-<li><strong>구현:</strong> <code>_slot_replace_timer: dict[str, float]</code> 슬롯별 타이머 / 전체 rescan 말고 특정 슬롯만 재탐색</li>
-</ul>
+<h3 id="완료된-항목">✅ 완료된 항목</h3>
+<table>
+<thead>
+<tr>
+<th>항목</th>
+<th>내용</th>
+<th>완료 버전</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>[리스크-2] 하락장 감지</td>
+<td>KOSPI &lt; -0.5% + 섹터 하락 비율 ≥ 60% → Gate 4.2 최소 점수 +5pt</td>
+<td>v2.4.1</td>
+</tr>
+<tr>
+<td>[청산-2] 재진입 조건 강화</td>
+<td>청산가 -1% 이내 조건 추가, 2회 한도, 50% 사이즈</td>
+<td>v2.4.1</td>
+</tr>
+<tr>
+<td>[청산-3] 손절 후 슬롯 교체</td>
+<td>손절 후 30분 쿨다운(<code>stop_cooldown</code>) → 해당 슬롯만 재스캔</td>
+<td>v2.4.1</td>
+</tr>
+</tbody>
+</table>
 <hr />
 <h3 id="ai-1-claude-판단-피드백-루프-대">[AI-1] Claude 판단 피드백 루프 <em>(대)</em></h3>
 <ul>
@@ -1403,7 +1416,7 @@ CREATE TABLE sector_strength (
 </table>
   <div id="footer">
     <span>DQT-workspace 기획서</span>
-    <span>최종 업데이트: 2026-05-05</span>
+    <span>최종 업데이트: 2026-05-06</span>
   </div>
 </main>
 
