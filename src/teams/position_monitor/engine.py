@@ -15,6 +15,7 @@ engine.py — 포지션 감시 서브엔진
   손절선 = max(현재 손절선, 현재가 × (1 - TRAILING_FLOOR_PCT))
   MACD sell_pre 신호 발생 시 손절선 간격 절반으로 타이트하게 조임
   손절선은 절대 내려가지 않음
+  VWAP 동적 하한: max(매수가×0.98, VWAP×0.99) — 기관 평균 매수 단가 하회 시 즉시 컷
 
 사다리 매수 (하락 시 평단 낮추기):
   현재가 ≤ 매수가 × (1 - LADDER_TRIGGER_PCT) 이고 아직 미실행 시
@@ -1825,6 +1826,7 @@ def _update_trailing_floor(
     수익이 TRAILING_TRIGGER% 이상이면 손절선을 현재가 기준 TRAILING_FLOOR% 아래로 상향.
     tight=True (MACD bearish) 이면 간격을 절반으로 줄여 더 타이트하게 추적.
     손절선은 절대 내려가지 않음.
+    VWAP 동적 하한: max(entry×0.98, VWAP×0.99) — 기관 지지선 붕괴 시 즉시 컷.
     손절선이 실제로 올라간 경우 거래소 사전 손절 주문도 취소 후 재제출.
     """
     current_floor = float(ts["trailing_floor"])
@@ -1849,6 +1851,24 @@ def _update_trailing_floor(
         new_floor = max(current_floor, candidate_floor)
     else:
         new_floor = current_floor
+
+    # [포지션-5] VWAP 동적 하한: max(entry×0.98, VWAP×0.99)
+    # VWAP은 당일 기관 평균 매수 단가 — 이 선 아래는 기관 지지 붕괴
+    try:
+        from src.utils.vwap import get_vwap as _get_vwap
+        _vwap = _get_vwap(ticker)
+        if _vwap > 0:
+            _vwap_floor = max(avg_price * 0.98, _vwap * 0.99)
+            if _vwap_floor > new_floor:
+                logger.debug(
+                    f"[VWAP 손절선] {ticker} "
+                    f"VWAP {_vwap:,.0f}×0.99={_vwap*0.99:,.0f} | "
+                    f"entry×0.98={avg_price*0.98:,.0f} → "
+                    f"하한 {_vwap_floor:,.0f} (기존 {new_floor:,.0f})"
+                )
+                new_floor = _vwap_floor
+    except Exception:
+        pass
 
     execute(
         """
