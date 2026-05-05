@@ -244,6 +244,13 @@ def init_db() -> None:
                 last_updated      DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         """)
+        # 기존 DB 마이그레이션: risk_status max_slots 컬럼 추가
+        try:
+            conn.execute(
+                "ALTER TABLE risk_status ADD COLUMN max_slots INTEGER NOT NULL DEFAULT 3"
+            )
+        except Exception:
+            pass
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

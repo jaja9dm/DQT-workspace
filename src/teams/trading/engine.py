@@ -491,12 +491,17 @@ class TradingEngine:
             logger.info(f"Gate 1 차단: 리스크 레벨 {level} — 신규 진입 금지")
             return []
 
-        # ── Gate 1.5: 최대 보유 종목 수 ──────────
+        # ── Gate 1.5: 최대 보유 종목 수 (리스크 레벨 연동) ──────────
         from src.teams.research.param_tuner import get_param
-        max_pos = int(get_param("max_positions", 3.0))
+        _param_max = int(get_param("max_positions", 3.0))
+        _risk_max  = int(risk.get("max_slots", 3))   # Level 3→2, Level 4→1
+        max_pos = min(_param_max, _risk_max)
         open_count = _count_open_positions()
         if open_count >= max_pos:
-            logger.debug(f"Gate 1.5 차단: 현재 {open_count}종목 보유 (최대 {max_pos}종목) — 신규 진입 금지")
+            logger.debug(
+                f"Gate 1.5 차단: 현재 {open_count}종목 보유 "
+                f"(최대 {max_pos}종목, 리스크 L{level} 제한={_risk_max}) — 신규 진입 금지"
+            )
             return []
 
         # ── Gate 2: 글로벌 시황 ──────────────────

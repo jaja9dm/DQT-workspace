@@ -6,10 +6,10 @@ engine.py — 위기 관리팀 메인 엔진
   리스크 레벨(1~5)을 산출하고 risk_status 테이블에 저장한다.
 
   리스크 레벨에 따라 매매팀·포지션 감시팀의 행동이 바뀐다:
-    Level 1 (정상)  — 전략 전체 가동, 손절 -5%
-    Level 2 (주의)  — 신규 진입 70%로 제한, 손절 -3%
-    Level 3 (경계)  — 신규 진입 40%로 제한
-    Level 4 (위험)  — 신규 진입 20%로 제한, 손절 -1%
+    Level 1 (정상)  — 전략 전체 가동, 최대 3슬롯
+    Level 2 (주의)  — 신규 진입 80% 제한, 최대 3슬롯
+    Level 3 (경계)  — 신규 진입 60% 제한, 최대 2슬롯
+    Level 4 (위험)  — 신규 진입 30% 제한, 최대 1슬롯, 손절 강화
     Level 5 (극위험) — 신규 진입 금지, 전량 청산 신호
 
 실행 주기: 15분마다
@@ -42,14 +42,15 @@ _PORTFOLIO_LOSS_EMERGENCY = -5.0  # 포트폴리오 -5%
 
 # ── 리스크 레벨 정의 ──────────────────────────────────────────
 
-# (position_limit_pct, max_single_trade_pct, stop_loss_tighten, description)
+# (position_limit_pct, max_single_trade_pct, stop_loss_tighten, description, max_slots)
 # max_single_trade_pct: 1회 종목당 투입 한도 (가용 예수금 대비 %)
-_LEVEL_SPEC: dict[int, tuple[int, float, int, str]] = {
-    1: (100, 33.0, 0, "정상 — 전략 전체 가동"),      # 3종목 × 33% = 99% → 예수금 전액 투입
-    2: (80,  24.0, 0, "주의 — 신규 진입 80% 제한"),  # 3종목 × 24% × 80% ≈ 58%
-    3: (60,  18.0, 0, "경계 — 신규 진입 60% 제한"),  # 3종목 × 18% × 60% ≈ 32%
-    4: (30,   8.0, 1, "위험 — 신규 진입 30% 제한 / 손절 강화"),
-    5: (0,    0.0, 1, "극위험 — 신규 진입 금지 / 전량 청산"),
+# max_slots: 동시 보유 최대 슬롯 수
+_LEVEL_SPEC: dict[int, tuple[int, float, int, str, int]] = {
+    1: (100, 33.0, 0, "정상 — 전략 전체 가동",               3),
+    2: (80,  24.0, 0, "주의 — 신규 진입 80% 제한",           3),
+    3: (60,  18.0, 0, "경계 — 신규 진입 60% 제한 / 최대 2슬롯", 2),
+    4: (30,   8.0, 1, "위험 — 신규 진입 30% 제한 / 최대 1슬롯", 1),
+    5: (0,    0.0, 1, "극위험 — 신규 진입 금지 / 전량 청산",   0),
 }
 
 
@@ -410,15 +411,15 @@ def _score_to_level(score: int) -> int:
 def _save_to_db(level: int, score: int, alerts: list[str]) -> dict:
     """risk_status 테이블에 저장."""
     spec = _LEVEL_SPEC[level]
-    position_limit_pct, max_single_trade_pct, stop_loss_tighten, description = spec
+    position_limit_pct, max_single_trade_pct, stop_loss_tighten, description, max_slots = spec
 
     execute(
         """
         INSERT INTO risk_status
             (risk_level, risk_score, position_limit_pct,
              max_single_trade_pct, stop_loss_tighten,
-             active_alerts, recommended_action)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             active_alerts, recommended_action, max_slots)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             level,
@@ -428,6 +429,7 @@ def _save_to_db(level: int, score: int, alerts: list[str]) -> dict:
             stop_loss_tighten,
             json.dumps(alerts, ensure_ascii=False),
             description,
+            max_slots,
         ),
     )
 
@@ -437,6 +439,7 @@ def _save_to_db(level: int, score: int, alerts: list[str]) -> dict:
         "position_limit_pct": position_limit_pct,
         "max_single_trade_pct": max_single_trade_pct,
         "stop_loss_tighten": stop_loss_tighten,
+        "max_slots": max_slots,
         "active_alerts": alerts,
         "recommended_action": description,
     }
@@ -472,6 +475,7 @@ def get_current_risk() -> dict:
         "stop_loss_tighten": spec[2],
         "active_alerts": [],
         "recommended_action": spec[3],
+        "max_slots": spec[4],
     }
 
 
