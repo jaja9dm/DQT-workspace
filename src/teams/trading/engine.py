@@ -492,8 +492,8 @@ class TradingEngine:
             return []
 
         # ── Gate 1.5: 최대 보유 종목 수 (리스크 레벨 연동) ──────────
-        from src.teams.research.param_tuner import get_param
-        _param_max = int(get_param("max_positions", 3.0))
+        from src.teams.research.param_tuner import get_param as _gp
+        _param_max = int(_gp("max_positions", 3.0))
         _risk_max  = int(risk.get("max_slots", 3))   # Level 3→2, Level 4→1
         max_pos = min(_param_max, _risk_max)
         open_count = _count_open_positions()
@@ -621,7 +621,6 @@ class TradingEngine:
         #   ≥ 72점 → 풀사이즈 진입
         #   50~71점 → 75% 사이즈 진입 (경계 종목 — 기회 포기 대신 보수적 참여)
         #   < 50점 → 차단
-        from src.teams.research.param_tuner import get_param as _gp
         _min_vol      = _gp("hot_list_min_vol_ratio", 2.0)
         _max_rsi_hard = _gp("hot_list_max_rsi",       82.0)
         _max_rsi_soft = _gp("hot_list_rsi_hot_limit", 72.0)
