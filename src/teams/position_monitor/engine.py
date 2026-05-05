@@ -127,6 +127,8 @@ class PositionMonitorEngine:
         self._macd_prev: dict[str, str | None] = {}  # {ticker: last_signal}
         # 이전 사이클 MACD 히스토그램 — 모멘텀 피크 감지용 (동적 스캘핑)
         self._macd_hist_prev: dict[str, float] = {}  # {ticker: prev hist_3m}
+        # [청산-3] 손절 후 슬롯 교체 타이머 {slot: stop_time}
+        self._slot_replace_timer: dict[str, float] = {}
 
     def start(self) -> None:
         logger.info("포지션 감시 엔진 시작")
@@ -411,6 +413,9 @@ class PositionMonitorEngine:
             action = self._evaluate_position(pos, stop_loss_pct, level, macd_cache=macd_cache)
             if action:
                 actions.append(action)
+
+        # [청산-3] 손절 쿨다운 슬롯 타이머 체크
+        self._check_slot_replace_timers()
 
         return actions
 
@@ -1161,7 +1166,7 @@ class PositionMonitorEngine:
                 avg_price=avg_price,
                 name=name,
             )
-            self._cleanup_after_sell(ticker)
+            self._cleanup_after_sell(ticker, is_stop_loss=True)
             return {
                 "ticker": ticker,
                 "action": "stop_loss",
@@ -1210,7 +1215,7 @@ class PositionMonitorEngine:
                 f"@ {exec_price:,.0f}원 | 주문번호 {order_no}"
             )
 
-            self._cleanup_after_sell(ticker)
+            self._cleanup_after_sell(ticker, is_stop_loss=(action == "stop_loss"))
             return {
                 "ticker": ticker,
                 "action": action,
@@ -1240,7 +1245,7 @@ class PositionMonitorEngine:
                     avg_price=avg_price,
                     name=name,
                 )
-                self._cleanup_after_sell(ticker)
+                self._cleanup_after_sell(ticker, is_stop_loss=True)
                 return {
                     "ticker": ticker,
                     "action": "stop_loss",
@@ -1258,8 +1263,9 @@ class PositionMonitorEngine:
                 pass
             return None
 
-    def _cleanup_after_sell(self, ticker: str) -> None:
+    def _cleanup_after_sell(self, ticker: str, is_stop_loss: bool = False) -> None:
         """매도 완료(또는 이미 청산 확인) 후 내부 상태 정리."""
+        import time as _time
         # trailing_stop 삭제 (이미 삭제됐어도 무해)
         _delete_trailing_stop(ticker)
 
@@ -1276,13 +1282,44 @@ class PositionMonitorEngine:
 
         # 슬롯 해제 — 포지션 청산 시 해당 슬롯을 재탐색 가능 상태로
         try:
-            from src.teams.domestic_stock.engine import release_slot, get_slot_for_ticker
+            from src.teams.domestic_stock.engine import get_slot_for_ticker, release_slot
+            from src.infra.database import execute as _db_exec
+            from datetime import date as _date
             _slot = get_slot_for_ticker(ticker)
             if _slot:
-                release_slot(_slot)
+                if is_stop_loss:
+                    # [청산-3] 손절 후 30분 쿨다운 — 즉시 재스캔 방지
+                    _db_exec(
+                        "UPDATE slot_assignments SET status='stop_cooldown', "
+                        "updated_at=CURRENT_TIMESTAMP WHERE slot=? AND trade_date=?",
+                        (_slot, _date.today().isoformat()),
+                    )
+                    self._slot_replace_timer[_slot] = _time.time()
+                    logger.info(
+                        f"[슬롯 쿨다운] {ticker}({_slot}) 손절 → 30분 후 재스캔 예약"
+                    )
+                else:
+                    release_slot(_slot)
         except Exception:
             pass
 
+    def _check_slot_replace_timers(self) -> None:
+        """[청산-3] 손절 쿨다운 슬롯 중 30분 경과한 것을 'empty'로 전환."""
+        import time as _time
+        if not self._slot_replace_timer:
+            return
+        now = _time.time()
+        expired = [slot for slot, ts in self._slot_replace_timer.items() if now - ts >= 1800]
+        if not expired:
+            return
+        from src.teams.domestic_stock.engine import force_slot_rescan_single
+        for slot in expired:
+            try:
+                force_slot_rescan_single(slot)
+                logger.info(f"[슬롯 재개방] {slot} — 손절 후 30분 경과, 재스캔 허용")
+            except Exception as e:
+                logger.warning(f"[슬롯 재개방 실패] {slot}: {e}")
+            del self._slot_replace_timer[slot]
 
     def _place_buy(
         self,

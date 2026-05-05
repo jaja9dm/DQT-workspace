@@ -467,11 +467,18 @@ def _get_empty_slots() -> list[str]:
     today = date.today().isoformat()
     try:
         rows = fetch_all(
-            "SELECT slot FROM slot_assignments WHERE trade_date = ? AND status = 'active' AND replace_requested = 0",
+            """
+            SELECT slot FROM slot_assignments
+            WHERE trade_date = ?
+              AND (
+                (status = 'active' AND replace_requested = 0)
+                OR status = 'stop_cooldown'
+              )
+            """,
             (today,),
         )
-        filled = {r["slot"] for r in rows}
-        return [s for s in _ALL_SLOTS if s not in filled]
+        locked = {r["slot"] for r in rows}
+        return [s for s in _ALL_SLOTS if s not in locked]
     except Exception:
         return list(_ALL_SLOTS)
 
@@ -650,6 +657,21 @@ def release_slot(slot: str) -> None:
         logger.info(f"슬롯 해제: {slot}")
     except Exception as e:
         logger.warning(f"슬롯 해제 실패 [{slot}]: {e}")
+
+
+def force_slot_rescan_single(slot: str) -> None:
+    """[청산-3] stop_cooldown 상태 슬롯을 'empty'로 전환해 재스캔을 허용한다."""
+    today = date.today().isoformat()
+    execute(
+        """
+        UPDATE slot_assignments
+        SET status = 'empty', ticker = NULL, name = NULL,
+            signal_type = NULL, reason = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE slot = ? AND trade_date = ? AND status = 'stop_cooldown'
+        """,
+        (slot, today),
+    )
+    logger.info(f"[청산-3] 슬롯 재개방: {slot}")
 
 
 def get_slot_for_ticker(ticker: str) -> str | None:
