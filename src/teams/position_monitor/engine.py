@@ -76,24 +76,24 @@ _TRAILING_TIGHT_FLOOR = _TRAILING_FLOOR / 2                   # MACD 약화 시 
 _LADDER_TRIGGER       = settings.LADDER_TRIGGER_PCT
 _LADDER_QTY_RATIO     = settings.LADDER_QTY_RATIO
 _SCALE_IN_TRIGGER_PCT = 3.0
-_SCALE_IN_QTY_RATIO   = 0.3
+_SCALE_IN_QTY_RATIO   = 0.20   # 30% → 20% (누적 비중 50% 이내 제한)
 _SCALE_IN_MAX         = 2
 
 # 스마트 물타기 기본값
 _DIP_BUY_MIN_LOSS     = -1.0
-_DIP_BUY_MAX_LOSS     = -4.9
+_DIP_BUY_MAX_LOSS     = -2.5   # -4.9% → -2.5% (손실 확대 방어)
 _DIP_BUY_QTY_RATIO    = 0.25
 _DIP_BUY_MAX          = 2
-_DIP_BUY_VOL_MIN      = 1.5
+_DIP_BUY_VOL_MIN      = 2.0    # 1.5배 → 2.0배 (강한 수급만)
 _DIP_BUY_HOTLIST_MIN  = 15
 
 # 물타기 후 MACD 반등 탈출 기본값
 _MACD_REVERSAL_EXIT_MIN_PNL = 0.3
 _MACD_REVERSAL_EXIT_MAX_PNL = 4.9
 
-# 불타기 기본값
+# 불타기 기본값 (누적 비중 50% 이내: 불타기30% + 피라미딩20% = 50%)
 _FIRE_BUY_TRIGGER_PCT = 1.5
-_FIRE_BUY_QTY_RATIO   = 0.5
+_FIRE_BUY_QTY_RATIO   = 0.30   # 50% → 30% (누적 비중 50% 이내 제한)
 _FIRE_BUY_VOL_MIN     = 2.0
 _FIRE_BUY_HOTLIST_MIN = 30
 
@@ -566,16 +566,19 @@ class PositionMonitorEngine:
             dip_max  = max(dip_max_dynamic, _p("dip_buy_max_loss", _DIP_BUY_MAX_LOSS))
             dip_max_count = int(_p("dip_buy_max_count", _DIP_BUY_MAX))
             dip_buy_count = int(ts.get("dip_buy_count", 0))
+            # MACD 조건 강화: 역행 아닌 것뿐 아니라 sell_pre/sell도 제외
+            _macd_dip_ok = macd_sig in ("hold", "buy_pre", "buy")
             if (
                 dip_min >= pnl_pct >= dip_max
-                and not macd_bearish
+                and _macd_dip_ok
                 and dip_buy_count < dip_max_count
                 and risk_level < 4
-                and _today_sl_cnt == 0   # 당일 손절 이력 없을 때만 물타기 허용
             ):
                 hot = _check_hotlist_for_dip(ticker)
                 if hot:
-                    dip_qty = max(1, int(quantity * _p("dip_buy_qty_ratio", _DIP_BUY_QTY_RATIO)))
+                    _base_dip_qty = max(1, int(quantity * _p("dip_buy_qty_ratio", _DIP_BUY_QTY_RATIO)))
+                    # 당일 손절 이력 있으면 수량 50%로 제한 (추가 리스크 최소화)
+                    dip_qty = max(1, _base_dip_qty // 2) if _today_sl_cnt > 0 else _base_dip_qty
                     vol_ratio = hot.get("volume_ratio", 0)
                     logger.info(
                         f"[스마트 물타기] {ticker} | 눌림 {pnl_pct:+.2f}% | "
@@ -763,23 +766,35 @@ class PositionMonitorEngine:
                         )
 
             # ── 3.6b. 재진입 판단 ────────────────────────────────────────────
-            # 단순 -1% 가격 트리거 대신:
-            #   우선순위 1: MACD buy_pre 전환 + 최소 눌림 (-0.3%) → 모멘텀 재개 신호
-            #   우선순위 2: 충분한 눌림 (-scalp_reload_dip%) + MACD bearish 아닐 때
+            # ATR 기반 동적 재진입 트리거:
+            #   우선순위 1: MACD buy_pre + ATR×0.3 눌림 (변동성 작으면 빨리, 크면 느리게)
+            #   우선순위 2: ATR×1.5 눌림 + MACD 비역행 (충분한 눌림 확인)
             if ts_scalp_exit > 0 and ts_scalp_qty > 0:
                 from_exit_pct = (current_price - ts_scalp_exit) / ts_scalp_exit * 100
+
+                # ATR 기반 동적 임계값 계산
+                try:
+                    _hl_atr = fetch_one(
+                        "SELECT atr_pct FROM hot_list WHERE ticker=? ORDER BY created_at DESC LIMIT 1",
+                        (ticker,),
+                    )
+                    _atr_pct = float(_hl_atr["atr_pct"]) if _hl_atr and _hl_atr["atr_pct"] else 1.0
+                except Exception:
+                    _atr_pct = 1.0
+                _atr_quick_dip  = max(0.2, _atr_pct * 0.3)          # MACD buy_pre 최소 눌림
+                _atr_reload_dip = max(0.8, min(2.5, _atr_pct * 1.5)) # 충분한 눌림 기준
 
                 reload = False
                 reload_reason = ""
 
-                if macd_sig == "buy_pre" and from_exit_pct <= -0.3:
-                    # MACD buy_pre: 모멘텀 재개 신호 — 작은 눌림에도 재진입
+                if macd_sig == "buy_pre" and from_exit_pct <= -_atr_quick_dip:
+                    # MACD buy_pre: 모멘텀 재개 신호 — ATR 기반 최소 눌림만 확인
                     reload = True
-                    reload_reason = f"MACD buy_pre + 눌림{from_exit_pct:.1f}%"
-                elif from_exit_pct <= -_p("scalp_reload_dip", 1.5) and not macd_bearish:
+                    reload_reason = f"MACD buy_pre + 눌림{from_exit_pct:.1f}% (ATR기준-{_atr_quick_dip:.1f}%)"
+                elif from_exit_pct <= -_atr_reload_dip and not macd_bearish:
                     # 충분한 가격 눌림 + MACD 역행 아닐 때
                     reload = True
-                    reload_reason = f"눌림{from_exit_pct:.1f}% (MACD:{macd_sig})"
+                    reload_reason = f"눌림{from_exit_pct:.1f}% ≤ -{_atr_reload_dip:.1f}% (ATR기준, MACD:{macd_sig})"
 
                 if reload:
                     logger.info(
