@@ -503,9 +503,11 @@ class KISGateway:
                 else:
                     resp = requests.post(url, headers=headers, json=req.body, timeout=10)
 
-                # 500 서버 오류 — KIS 서버 내부 오류, 재시도 의미 없음 → 즉시 실패
+                # 4xx/500 — 재시도해도 의미 없는 오류는 즉시 실패
                 if resp.status_code == 500:
                     raise RuntimeError(f"KIS API 서버 오류 (500)")
+                if resp.status_code == 404:
+                    raise RuntimeError(f"KIS API 404 Not Found: {req.path}")
 
                 resp.raise_for_status()
                 data = resp.json()

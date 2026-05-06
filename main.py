@@ -10,8 +10,11 @@ DQT-workspace 시스템 진입점.
 """
 
 import atexit
+import faulthandler
 import os
 import sys
+import traceback
+from datetime import datetime
 
 from src.config.settings import settings
 from src.infra.database import init_db
@@ -21,6 +24,27 @@ from src.utils.logger import get_logger
 logger = get_logger("main")
 
 _PID_FILE = os.path.join(os.path.dirname(__file__), "dqt.pid")
+_CRASH_LOG = os.path.join(os.path.dirname(__file__), "logs", "crash.log")
+
+
+def _setup_crash_logger() -> None:
+    """처리되지 않은 예외와 segfault를 crash.log에 기록."""
+    os.makedirs(os.path.dirname(_CRASH_LOG), exist_ok=True)
+
+    # segfault / abort 시 스택 트레이스 기록
+    with open(_CRASH_LOG, "a") as f:
+        faulthandler.enable(f)
+
+    def _excepthook(exc_type, exc_value, exc_tb):
+        msg = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+        with open(_CRASH_LOG, "a") as f:
+            f.write(f"\n{'='*60}\n")
+            f.write(f"CRASH {datetime.now().isoformat()}  PID={os.getpid()}\n")
+            f.write(msg)
+        logger.critical(f"비정상 종료: {exc_value}")
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = _excepthook
 
 
 def _acquire_pid_lock() -> None:
@@ -41,6 +65,7 @@ def _acquire_pid_lock() -> None:
 
 
 def main() -> None:
+    _setup_crash_logger()
     _acquire_pid_lock()
 
     logger.info("=" * 60)
