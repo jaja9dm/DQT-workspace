@@ -831,6 +831,11 @@ class TradingEngine:
                 bear_market_penalty=_bear_penalty,
             )
 
+            # VWAP 위치 기반 점수 보정 (Gate 4.5에서 계산된 값)
+            _vwap_adj = float(c.get("_vwap_score_adj") or 0.0)
+            if _vwap_adj != 0.0:
+                score = max(0.0, min(100.0, score + _vwap_adj))
+
             if hard_fails:
                 logger.info(f"Gate 4.2 차단: {tk} — {' | '.join(hard_fails)}")
                 continue
@@ -948,12 +953,23 @@ class TradingEngine:
             _is_op_plunge_c = sig_type_c == "opening_plunge_rebound"
             if not (_is_pullback_c or _is_op_plunge_c):
                 _vwap, _cur_px = _get_vwap_position(tk)
-                if _vwap > 0 and _cur_px < _vwap * 0.995:
-                    logger.info(
-                        f"Gate 4.5 차단: {tk} 현재가 {_cur_px:,.0f} < VWAP {_vwap:,.0f} × 0.995 "
-                        f"(수급 중심선 하회 — 모멘텀 약화)"
-                    )
-                    continue
+                if _vwap > 0 and _cur_px > 0:
+                    _vwap_pos_pct = (_cur_px / _vwap - 1) * 100
+                    if _vwap_pos_pct < 0.0:
+                        # VWAP 아래 — 기관 평균 매수가 미달, 차단
+                        logger.info(
+                            f"Gate 4.5 차단: {tk} 현재가 {_cur_px:,.0f} < VWAP {_vwap:,.0f} "
+                            f"({_vwap_pos_pct:+.2f}% — 수급 중심선 하회)"
+                        )
+                        continue
+                    # VWAP 위치 기반 점수 가감 (후보 dict에 기록 → 사이징 반영)
+                    c["_vwap_pos_pct"] = _vwap_pos_pct
+                    if _vwap_pos_pct < 0.5:
+                        c["_vwap_score_adj"] = -5.0   # VWAP 근처 — 기관 지지 불확실
+                    elif _vwap_pos_pct >= 1.5:
+                        c["_vwap_score_adj"] = 5.0    # VWAP 1.5%↑ — 기관 강지지
+                    else:
+                        c["_vwap_score_adj"] = 0.0
 
             # 전략D: 오프닝 급락 반등 — 3분봉+5분봉 듀얼 확인 + 실제 급락 검증
             if sig_type == "opening_plunge_rebound":
@@ -2175,6 +2191,31 @@ def _compute_entry_score(
         score += 2.0
     elif trading_value >= 10_000_000_000:  # 100억↑
         score += 1.0
+
+    # 거래량 지속성 (0~10pt) — 1봉 폭증 vs 연속 고수량 구분
+    # 최근 3봉 평균이 이전 5봉 평균 대비 지속적으로 높을수록 신뢰도 상승
+    try:
+        from src.infra.database import fetch_all as _fa_vol
+        _vol_rows = _fa_vol(
+            "SELECT volume FROM intraday_candles WHERE ticker=? ORDER BY bar_time DESC LIMIT 8",
+            (ticker,),
+        )
+        if len(_vol_rows) >= 8:
+            _v_recent = sum(int(r["volume"]) for r in _vol_rows[:3]) / 3
+            _v_base   = sum(int(r["volume"]) for r in _vol_rows[3:8]) / 5
+            if _v_base > 0:
+                _vol_persist = _v_recent / _v_base
+                if _vol_persist >= 2.0:
+                    score += 10.0  # 3봉 연속 2배↑ — 강한 수급 지속
+                elif _vol_persist >= 1.5:
+                    score += 6.0   # 1.5배↑ — 보통 수준 지속
+                elif _vol_persist >= 1.2:
+                    score += 3.0   # 1.2배↑ — 약한 지속
+                elif _vol_persist < 0.8:
+                    score -= 5.0   # 거래량 감소 추세 — 신뢰도 하락
+                    score = max(0.0, score)
+    except Exception:
+        pass
 
     # RSI 구간 (0~20pt) — 이상적 진입은 45~65
     if rsi < 45:

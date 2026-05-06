@@ -689,20 +689,33 @@ class PositionMonitorEngine:
                     exhaustion += bonus
                     exh_signals.append(f"연속sell_pre {consec_sell}회(+{bonus:.2f})")
 
-                # 거래량 하락세: 최근 3봉 평균 < 이전 3봉 평균 → 모멘텀 소진 신호
+                # 거래량 소진 감지: 최근 3봉 vs 이전 봉들 비교 (12봉으로 확대)
                 try:
                     from src.infra.database import fetch_all as _fa
                     _vol_rows = _fa(
                         "SELECT volume FROM intraday_candles WHERE ticker = ? "
-                        "ORDER BY bar_time DESC LIMIT 6",
+                        "ORDER BY bar_time DESC LIMIT 12",
                         (ticker,),
                     )
                     if len(_vol_rows) >= 6:
-                        _recent_vol = sum(int(r["volume"]) for r in _vol_rows[:3]) / 3
-                        _earlier_vol = sum(int(r["volume"]) for r in _vol_rows[3:6]) / 3
-                        if _earlier_vol > 0 and _recent_vol < _earlier_vol * 0.70:
-                            exhaustion += 0.15
-                            exh_signals.append(f"거래량감소({_recent_vol/_earlier_vol:.2f}x)")
+                        _v_recent = sum(int(r["volume"]) for r in _vol_rows[:3]) / 3
+                        _v_base   = sum(int(r["volume"]) for r in _vol_rows[3:min(12, len(_vol_rows))]) / max(1, min(9, len(_vol_rows) - 3))
+                        if _v_base > 0:
+                            _vol_ratio_now = _v_recent / _v_base
+                            if _vol_ratio_now < 0.50:
+                                # 급감: 기준 대비 절반 이하 → 수급 완전 이탈
+                                exhaustion += 0.25
+                                exh_signals.append(f"거래량급감({_vol_ratio_now:.2f}x)")
+                            elif _vol_ratio_now < 0.70:
+                                # 완만한 감소
+                                exhaustion += 0.15
+                                exh_signals.append(f"거래량감소({_vol_ratio_now:.2f}x)")
+                            # 추가: 최근 3봉이 연속 감소 추세인지 확인
+                            if len(_vol_rows) >= 3:
+                                _v0, _v1, _v2 = [int(_vol_rows[i]["volume"]) for i in range(3)]
+                                if _v0 < _v1 < _v2:  # 봉1 > 봉2 > 봉3 (최신이 가장 적음)
+                                    exhaustion += 0.10
+                                    exh_signals.append("거래량연속감소")
                 except Exception:
                     pass
 
