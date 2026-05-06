@@ -247,19 +247,19 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=15, timezone="Asia/Seoul"
         ), id="daily_review_debrief", name="일일 매매 복기")
 
-        # 16:40 — 내일 매수 종목 저녁 선점 (방향 1 전략)
-        s.add_job(self._run_evening_selection, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Seoul"
-        ), id="evening_selection", name="저녁 종목 선점")
-
         # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (16:25)
         s.add_job(self._run_param_tuning, CronTrigger(
             day_of_week="mon-fri", hour=16, minute=25, timezone="Asia/Seoul"
         ), id="param_tuning", name="자동 파라미터 튜닝")
 
-        # 자동 종료 — 모든 배치 완료 후 프로세스 종료 (16:35)
+        # 16:30 — 내일 매수 종목 저녁 선점 (방향 1 전략, auto_shutdown 전에 실행)
+        s.add_job(self._run_evening_selection, CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
+        ), id="evening_selection", name="저녁 종목 선점")
+
+        # 자동 종료 — 모든 배치 완료 후 프로세스 종료 (16:45, 저녁 선점 완료 대기)
         s.add_job(self._auto_shutdown, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=35, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Seoul"
         ), id="auto_shutdown", name="자동 종료")
 
         # 연구소 심층 백테스트 (일요일 주 1회)
