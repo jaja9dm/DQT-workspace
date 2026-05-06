@@ -207,6 +207,11 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
         ), id="pre_market_setup", name="장 전 유니버스 재구성")
 
+        # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
+        s.add_job(self._run_open_trade, CronTrigger(
+            day_of_week="mon-fri", hour=9, minute=1, timezone="Asia/Seoul"
+        ), id="open_trade", name="시초가 선점 매수")
+
         # 장 시작 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)
         s.add_job(self._start_realtime_engines, CronTrigger(
             day_of_week="mon-fri", hour=9, minute=0, timezone="Asia/Seoul"
@@ -241,6 +246,11 @@ class DQTScheduler:
         s.add_job(self._run_daily_review, CronTrigger(
             day_of_week="mon-fri", hour=16, minute=15, timezone="Asia/Seoul"
         ), id="daily_review_debrief", name="일일 매매 복기")
+
+        # 16:40 — 내일 매수 종목 저녁 선점 (방향 1 전략)
+        s.add_job(self._run_evening_selection, CronTrigger(
+            day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Seoul"
+        ), id="evening_selection", name="저녁 종목 선점")
 
         # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (16:25)
         s.add_job(self._run_param_tuning, CronTrigger(
@@ -483,6 +493,27 @@ class DQTScheduler:
             ResearchEngine().run(deep=True)
         except Exception as e:
             logger.error(f"연구소 백테스트 오류: {e}", exc_info=True)
+
+    def _run_open_trade(self) -> None:
+        """09:01 — 전일 저녁 선점 종목 시초가 매수."""
+        if not is_trading_day():
+            return
+        try:
+            if self._trading:
+                self._trading.execute_open_trade()
+        except Exception as e:
+            logger.error(f"시초가 매수 오류: {e}", exc_info=True)
+
+    def _run_evening_selection(self) -> None:
+        """16:40 — 내일 매수 종목 저녁 선점."""
+        if not is_trading_day():
+            return
+        logger.info("저녁 종목 선점 실행")
+        try:
+            from src.teams.trading.evening_selector import run_evening_selection
+            run_evening_selection()
+        except Exception as e:
+            logger.error(f"저녁 선점 오류: {e}", exc_info=True)
 
     def _purge_sentiment_cache(self) -> None:
         """자정 — 감성 캐시 만료 정리."""

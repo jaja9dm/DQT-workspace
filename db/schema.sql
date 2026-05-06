@@ -391,3 +391,19 @@ CREATE INDEX IF NOT EXISTS idx_trade_context_date ON trade_context(trade_date, t
 CREATE INDEX IF NOT EXISTS idx_slot_trade_date    ON slot_assignments(trade_date);
 CREATE INDEX IF NOT EXISTS idx_hot_list_ticker    ON hot_list(ticker);
 CREATE INDEX IF NOT EXISTS idx_macd_signal_ticker ON intraday_macd_signal(ticker, created_at DESC);
+
+-- ────────────────────────────────────────
+-- 전일 저녁 선점 종목 (방향 1 전략)
+-- 매일 16:40 Claude가 내일 시초가 매수할 종목 1개를 선정해 저장
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS tomorrow_pick (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    pick_date   DATE NOT NULL UNIQUE,   -- 매수 실행 날짜 (내일)
+    ticker      TEXT NOT NULL,
+    name        TEXT,
+    reason      TEXT,                   -- Claude 선정 이유
+    entry_price REAL DEFAULT NULL,      -- 실제 진입가 (체결 후 기록)
+    status      TEXT DEFAULT 'pending', -- pending | executed | skipped
+    created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+);
