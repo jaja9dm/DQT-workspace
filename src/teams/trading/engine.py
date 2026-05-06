@@ -2831,8 +2831,8 @@ def _init_trailing_stop(
             INSERT INTO trailing_stop
                 (ticker, entry_price, trailing_floor, highest_price,
                  ladder_bought, scale_in_count, dip_buy_count,
-                 trigger_pct, floor_pct)
-            VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?)
+                 trigger_pct, floor_pct, updated_at)
+            VALUES (?, ?, ?, ?, 0, 0, 0, ?, ?, CURRENT_TIMESTAMP)
             """,
             (ticker, entry_price, initial_floor, entry_price, _trigger, _floor),
         )

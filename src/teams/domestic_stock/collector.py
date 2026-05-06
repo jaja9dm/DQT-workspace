@@ -303,9 +303,13 @@ def _compute_indicators(ticker: str, current_price: float, current_volume: int) 
         ma20 = float(close.rolling(20).mean().iloc[-1]) if len(close) >= 20 else 0.0
         ma60 = float(close.rolling(60).mean().iloc[-1]) if len(close) >= 60 else 0.0
 
-        # 거래량 비율
+        # 거래량 비율 (시간 보정: 오전 부분 거래량을 하루치로 환산)
         avg_vol = float(volume_series.rolling(_MA_VOL_PERIOD).mean().iloc[-1]) if len(volume_series) >= _MA_VOL_PERIOD else 0.0
-        volume_ratio = round(current_volume / avg_vol, 2) if avg_vol > 0 else 0.0
+        _now = datetime.now()
+        _elapsed_min = max((_now.hour * 60 + _now.minute) - 9 * 60, 1)  # 9:00 기준 경과 분
+        _day_fraction = min(_elapsed_min / 390.0, 1.0)  # 390분 = 6.5시간 (09:00~15:30)
+        _adj_vol = current_volume / max(_day_fraction, 0.05)  # 하루치로 환산
+        volume_ratio = round(_adj_vol / avg_vol, 2) if avg_vol > 0 else 0.0
 
         # pandas-ta 사용 시도 (설치 안 돼 있으면 수동 계산)
         try:

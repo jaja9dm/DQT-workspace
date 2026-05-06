@@ -2145,9 +2145,26 @@ def _reconcile_zombie_trailing_stops(engine_instance) -> None:
         if not zombie_rows:
             return
         from src.infra.stop_order_manager import get_stop_order_price
+        from datetime import datetime, timedelta
         for row in zombie_rows:
             row = dict(row)
             ticker = row["ticker"]
+            # 매수 직후 KIS 잔고 반영 지연 오탐 방지: updated_at 5분 이내면 스킵
+            updated_at_str = row.get("updated_at")
+            if not updated_at_str:
+                # updated_at NULL = INSERT 직후 DB 반영 전으로 간주 → 무조건 스킵
+                logger.warning(f"[좀비 체크 스킵] {ticker} — updated_at NULL (방금 생성 추정)")
+                continue
+            try:
+                updated_at = datetime.fromisoformat(str(updated_at_str))
+                if datetime.now() - updated_at < timedelta(minutes=5):
+                    logger.debug(
+                        f"[좀비 체크 스킵] {ticker} — trailing_stop 생성 "
+                        f"{int((datetime.now() - updated_at).total_seconds())}초 경과 (5분 미만)"
+                    )
+                    continue
+            except Exception:
+                pass
             entry_price = float(row.get("entry_price") or 0)
             stop_price = (
                 get_stop_order_price(ticker)

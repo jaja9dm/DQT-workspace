@@ -82,9 +82,17 @@ class ShortSellingCache:
     def _ensure_fresh(self) -> None:
         today = date.today()
         with self._data_lock:
-            already_fetched = self._fetched_date == today
-        if not already_fetched:
+            if self._fetched_date == today:
+                return
+            # 다른 스레드가 이미 fetch 중이면 스킵
+            if getattr(self, "_is_fetching", False):
+                return
+            self._is_fetching = True
+        try:
             self._fetch()
+        finally:
+            with self._data_lock:
+                self._is_fetching = False
 
     def _fetch(self, _force: bool = False) -> None:
         today = date.today()
@@ -135,8 +143,10 @@ class ShortSellingCache:
             logger.info(f"공매도 데이터 수집 완료: {len(new_data)}종목 ({today_str})")
 
         except Exception as e:
-            logger.warning(f"공매도 데이터 수집 실패: {e}")
-            # 실패해도 기존 캐시 유지 (당일 날짜 갱신 안 해서 재시도 안 함)
+            logger.debug(f"공매도 데이터 수집 실패: {e}")
+            # 실패 시 당일 날짜 설정 → 이후 호출은 스킵 (매 스캔마다 재시도 방지)
+            with self._data_lock:
+                self._fetched_date = date.today()
 
 
 # ── 모듈 레벨 편의 함수 ────────────────────────────────────────
