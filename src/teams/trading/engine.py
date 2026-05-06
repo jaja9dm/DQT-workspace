@@ -416,8 +416,9 @@ class TradingEngine:
         """
         09:01 시초가 매수 — 1~5순위 폴백 리스트 순서대로 갭+호가 체크 후 첫 합격 종목 매수.
 
-        갭 기준: +7% 초과(갭업 과도) 또는 -5% 미만(갭다운) → 스킵
-        호가 기준: bid/ask 비율(imbalance) < 0.7 → 매도 우위 → 스킵
+        갭 기준: +10% 초과(갭업 과도) 또는 -7% 미만(갭다운) → 스킵
+        호가 기준: bid/ask 비율(imbalance) < 0.6 → 매도 우위 → 스킵
+        마지막 순위: 갭 기준만 적용(호가 체크 생략) — 무조건 1종목 매수 보장
         """
         from src.infra.database import fetch_all as _fa, execute as _ex
         from src.utils.notifier import notify as _notify
@@ -439,12 +440,14 @@ class TradingEngine:
             return
 
         gw = KISGateway()
+        last_rank = picks[-1]["rank"]
 
         for pick in picks:
             rank = pick["rank"]
             ticker = pick["ticker"]
             name = pick["name"] or ticker
             ref_price = float(pick["ref_price"] or 0)
+            is_last = (rank == last_rank)
 
             def _skip(reason: str) -> None:
                 _ex(
@@ -465,25 +468,30 @@ class TradingEngine:
                 _skip("현재가 조회 실패")
                 continue
 
-            # 갭 체크
+            # 갭 체크 (전 순위 공통 — 마지막 순위도 포함)
             if ref_price > 0:
                 gap_pct = (current_price / ref_price - 1) * 100
-                if gap_pct > 7.0:
+                if gap_pct > 10.0:
                     _skip(f"갭업 과도 ({gap_pct:+.1f}%)")
                     continue
-                if gap_pct < -5.0:
+                if gap_pct < -7.0:
                     _skip(f"갭다운 ({gap_pct:+.1f}%)")
                     continue
                 gap_str = f"{gap_pct:+.1f}%"
             else:
                 gap_str = "기준가없음"
 
-            # 호가 체크
-            ob = gw.get_orderbook(ticker, priority=RequestPriority.TRADING)
-            imbalance = ob.get("imbalance", 1.0)
-            if imbalance < 0.7:
-                _skip(f"매도 우위 (호가비율 {imbalance:.2f})")
-                continue
+            # 호가 체크 (마지막 순위는 생략 — 무조건 매수 보장)
+            if not is_last:
+                ob = gw.get_orderbook(ticker, priority=RequestPriority.TRADING)
+                imbalance = ob.get("imbalance", 1.0)
+                if imbalance < 0.6:
+                    _skip(f"매도 우위 (호가비율 {imbalance:.2f})")
+                    continue
+            else:
+                ob = gw.get_orderbook(ticker, priority=RequestPriority.TRADING)
+                imbalance = ob.get("imbalance", 1.0)
+                logger.info(f"[시초가] 최종순위 {ticker} 호가비={imbalance:.2f} — 무조건 매수 진행")
 
             # 매수 수량
             quantity = int(available_cash / current_price)
