@@ -814,6 +814,22 @@ class TradingEngine:
             _sector_for_tk = str(c.get("sector") or "")
             _sector_cnt    = _portfolio_sector_counts.get(_sector_for_tk, 0) if _sector_for_tk else 0
 
+            # VWAP 위치 사전 계산 — _compute_entry_score() 전에 c에 기록해야 적용됨
+            if not (is_pullback or is_op_plunge):
+                try:
+                    _vwap_pre, _cur_px_pre = _get_vwap_position(tk)
+                    if _vwap_pre > 0 and _cur_px_pre > 0:
+                        _vpos = (_cur_px_pre / _vwap_pre - 1) * 100
+                        c["_vwap_pos_pct"] = _vpos
+                        if _vpos < 0.5:
+                            c["_vwap_score_adj"] = -5.0
+                        elif _vpos >= 1.5:
+                            c["_vwap_score_adj"] = 5.0
+                        else:
+                            c["_vwap_score_adj"] = 0.0
+                except Exception:
+                    pass
+
             hard_fails, score, size_mult = _compute_entry_score(
                 c=c,
                 is_gap_up=is_gap_up,
@@ -952,24 +968,13 @@ class TradingEngine:
             _is_pullback_c  = sig_type_c == "pullback_rebound"
             _is_op_plunge_c = sig_type_c == "opening_plunge_rebound"
             if not (_is_pullback_c or _is_op_plunge_c):
-                _vwap, _cur_px = _get_vwap_position(tk)
-                if _vwap > 0 and _cur_px > 0:
-                    _vwap_pos_pct = (_cur_px / _vwap - 1) * 100
-                    if _vwap_pos_pct < 0.0:
-                        # VWAP 아래 — 기관 평균 매수가 미달, 차단
-                        logger.info(
-                            f"Gate 4.5 차단: {tk} 현재가 {_cur_px:,.0f} < VWAP {_vwap:,.0f} "
-                            f"({_vwap_pos_pct:+.2f}% — 수급 중심선 하회)"
-                        )
-                        continue
-                    # VWAP 위치 기반 점수 가감 (후보 dict에 기록 → 사이징 반영)
-                    c["_vwap_pos_pct"] = _vwap_pos_pct
-                    if _vwap_pos_pct < 0.5:
-                        c["_vwap_score_adj"] = -5.0   # VWAP 근처 — 기관 지지 불확실
-                    elif _vwap_pos_pct >= 1.5:
-                        c["_vwap_score_adj"] = 5.0    # VWAP 1.5%↑ — 기관 강지지
-                    else:
-                        c["_vwap_score_adj"] = 0.0
+                # VWAP 위치는 위에서 사전 계산됨 — 여기서는 차단만 담당
+                _vwap_pos_pct = c.get("_vwap_pos_pct")
+                if _vwap_pos_pct is not None and _vwap_pos_pct < 0.0:
+                    logger.info(
+                        f"Gate 4.5 차단: {tk} VWAP {_vwap_pos_pct:+.2f}% — 수급 중심선 하회"
+                    )
+                    continue
 
             # 전략D: 오프닝 급락 반등 — 3분봉+5분봉 듀얼 확인 + 실제 급락 검증
             if sig_type == "opening_plunge_rebound":
@@ -2194,28 +2199,33 @@ def _compute_entry_score(
 
     # 거래량 지속성 (0~10pt) — 1봉 폭증 vs 연속 고수량 구분
     # 최근 3봉 평균이 이전 5봉 평균 대비 지속적으로 높을수록 신뢰도 상승
-    try:
-        from src.infra.database import fetch_all as _fa_vol
-        _vol_rows = _fa_vol(
-            "SELECT volume FROM intraday_candles WHERE ticker=? ORDER BY bar_time DESC LIMIT 8",
-            (ticker,),
-        )
-        if len(_vol_rows) >= 8:
-            _v_recent = sum(int(r["volume"]) for r in _vol_rows[:3]) / 3
-            _v_base   = sum(int(r["volume"]) for r in _vol_rows[3:8]) / 5
-            if _v_base > 0:
-                _vol_persist = _v_recent / _v_base
-                if _vol_persist >= 2.0:
-                    score += 10.0  # 3봉 연속 2배↑ — 강한 수급 지속
-                elif _vol_persist >= 1.5:
-                    score += 6.0   # 1.5배↑ — 보통 수준 지속
-                elif _vol_persist >= 1.2:
-                    score += 3.0   # 1.2배↑ — 약한 지속
-                elif _vol_persist < 0.8:
-                    score -= 5.0   # 거래량 감소 추세 — 신뢰도 하락
-                    score = max(0.0, score)
-    except Exception:
-        pass
+    _tk = str(c.get("ticker") or "")
+    if _tk:
+        try:
+            from src.infra.database import fetch_all as _fa_vol
+            _vol_rows = _fa_vol(
+                "SELECT volume FROM intraday_candles WHERE ticker=? ORDER BY bar_time DESC LIMIT 8",
+                (_tk,),
+            )
+            if len(_vol_rows) >= 8:
+                _v_recent = sum(int(r["volume"]) for r in _vol_rows[:3]) / 3
+                _v_base   = sum(int(r["volume"]) for r in _vol_rows[3:8]) / 5
+                if _v_base > 0:
+                    _vol_persist = _v_recent / _v_base
+                    if _vol_persist >= 2.0:
+                        score += 10.0  # 3봉 연속 2배↑ — 강한 수급 지속
+                    elif _vol_persist >= 1.5:
+                        score += 6.0   # 1.5배↑ — 보통 수준 지속
+                    elif _vol_persist >= 1.2:
+                        score += 3.0   # 1.2배↑ — 약한 지속
+                    elif _vol_persist < 0.5:
+                        score -= 7.0   # 급격한 거래량 이탈
+                        score = max(0.0, score)
+                    elif _vol_persist < 0.8:
+                        score -= 3.0   # 완만한 감소
+                        score = max(0.0, score)
+        except Exception:
+            pass
 
     # RSI 구간 (0~20pt) — 이상적 진입은 45~65
     if rsi < 45:
