@@ -207,9 +207,9 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
         ), id="pre_market_setup", name="장 전 유니버스 재구성")
 
-        # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
+        # 09:00 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
         s.add_job(self._run_open_trade, CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=1, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=9, minute=0, timezone="Asia/Seoul"
         ), id="open_trade", name="시초가 선점 매수")
 
         # 장 시작 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)
@@ -495,7 +495,7 @@ class DQTScheduler:
             logger.error(f"연구소 백테스트 오류: {e}", exc_info=True)
 
     def _run_open_trade(self) -> None:
-        """09:01 — 전일 저녁 선점 종목 시초가 매수."""
+        """09:00 — 전일 저녁 선점 종목 시초가 매수."""
         if not is_trading_day():
             return
         try:
