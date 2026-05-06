@@ -2284,7 +2284,10 @@ def _check_opening_plunge(ticker: str) -> tuple[bool, str]:
     if open_price <= 0:
         return False, "시가 데이터 없음"
 
-    min_low = min(float(r["low"]) for r in rows if float(r["low"]) > 0)
+    valid_lows = [float(r["low"]) for r in rows if float(r["low"]) > 0]
+    if not valid_lows:
+        return False, "저가 데이터 없음"
+    min_low = min(valid_lows)
     plunge_pct = (min_low - open_price) / open_price * 100
 
     if plunge_pct <= -3.0:
