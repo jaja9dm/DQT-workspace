@@ -218,9 +218,11 @@ class KISGateway:
             [{"ticker", "name", "price", "change_pct", "trading_value",
               "volume", "frgn_net_buy", "inst_net_buy"}, ...]
         """
-        # 모의투자 서버는 ranking/trading-value 엔드포인트 미지원 (404)
+        # 모의투자 서버 및 LIVE 서버 일부 계정은 ranking/trading-value 미지원 (404)
         from src.config.settings import settings as _s
         if _s.KIS_MODE == "paper":
+            return []
+        if getattr(self, "_trading_value_404", False):
             return []
 
         try:
@@ -260,7 +262,11 @@ class KISGateway:
                     continue
             return result
         except Exception as e:
-            logger.debug(f"거래대금 순위 조회 실패 ({market}): {e}")
+            if "404" in str(e):
+                self._trading_value_404 = True
+                logger.debug(f"거래대금 순위 조회 404 — 이후 호출 건너뜀 ({market})")
+            else:
+                logger.debug(f"거래대금 순위 조회 실패 ({market}): {e}")
             return []
 
     def get_orderbook(
