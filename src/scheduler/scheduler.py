@@ -207,9 +207,10 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
         ), id="pre_market_setup", name="장 전 유니버스 재구성")
 
-        # 09:00 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
+        # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
+        # 09:00에 _start_realtime_engines가 먼저 TradingEngine을 생성해야 하므로 1분 후 실행
         s.add_job(self._run_open_trade, CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=0, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=9, minute=1, timezone="Asia/Seoul"
         ), id="open_trade", name="시초가 선점 매수")
 
         # 장 시작 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)
@@ -448,8 +449,8 @@ class DQTScheduler:
             logger.error(f"매매 일지 생성 오류: {e}", exc_info=True)
 
     def _auto_shutdown(self) -> None:
-        """16:35 — 장 마감 후 자동 프로세스 종료."""
-        logger.info("자동 종료 시작 (16:35 스케줄)")
+        """16:45 — 장 마감 후 자동 프로세스 종료."""
+        logger.info("자동 종료 시작 (16:45 스케줄)")
         self.stop()
 
     def _run_param_tuning(self) -> None:
