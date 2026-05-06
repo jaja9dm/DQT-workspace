@@ -9,6 +9,12 @@ __pycache__/
 db/*.db
 db/*.db-wal
 db/*.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+# KIS 인증 토큰 캐시
+.kis_token_cache.json
 
 # 로그
 logs/
