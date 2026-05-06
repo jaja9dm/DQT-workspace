@@ -414,93 +414,136 @@ class TradingEngine:
 
     def execute_open_trade(self) -> None:
         """
-        09:01 시초가 매수 — 전일 저녁 선점 종목을 예수금 100%로 즉시 매수.
-        기존 포지션이 있거나 갭이 ±7% 초과면 스킵.
+        09:01 시초가 매수 — 1~5순위 폴백 리스트 순서대로 갭+호가 체크 후 첫 합격 종목 매수.
+
+        갭 기준: +7% 초과(갭업 과도) 또는 -5% 미만(갭다운) → 스킵
+        호가 기준: bid/ask 비율(imbalance) < 0.7 → 매도 우위 → 스킵
         """
-        from src.infra.database import fetch_one as _fo, execute as _ex
+        from src.infra.database import fetch_all as _fa, execute as _ex
         from src.utils.notifier import notify as _notify
 
         today = date.today().isoformat()
-        pick = _fo("SELECT ticker, name, reason FROM tomorrow_pick WHERE pick_date=? AND status='pending'", (today,))
-        if not pick:
+        picks = _fa(
+            "SELECT rank, ticker, name, reason, ref_price FROM tomorrow_pick "
+            "WHERE pick_date=? AND status='pending' ORDER BY rank",
+            (today,),
+        )
+        if not picks:
             logger.debug("[시초가 매수] 오늘 선점 종목 없음")
             return
 
-        ticker = pick["ticker"]
-        name = pick["name"] or ticker
-
-        # 기존 포지션 있으면 스킵
-        existing = _fo("SELECT ticker FROM trailing_stop WHERE ticker=?", (ticker,))
-        if existing:
-            logger.info(f"[시초가 매수] {ticker} 이미 포지션 보유 중 — 스킵")
-            _ex("UPDATE tomorrow_pick SET status='skipped', updated_at=CURRENT_TIMESTAMP WHERE pick_date=?", (today,))
-            return
-
-        # 현재가(시초가) 조회
-        current_price = _fetch_current_price(ticker)
-        if current_price <= 0:
-            logger.warning(f"[시초가 매수] {ticker} 현재가 조회 실패 — 스킵")
-            return
-
-        # 어제 종가 대비 갭 체크 — ±7% 초과면 스킵
-        prev_row = _fo(
-            "SELECT exec_price FROM trades WHERE ticker=? AND action='buy' ORDER BY id DESC LIMIT 1",
-            (ticker,),
-        )
-        if prev_row:
-            # trades 기반 추정 (정확하진 않지만 보수적 체크)
-            pass  # 갭 체크는 복잡해서 현재가만으로 판단 생략 — 너무 보수적이면 기회 놓침
-
-        # 예수금 100% 사용
         available_cash = _fetch_available_cash()
         if available_cash <= 0:
-            logger.warning("[시초가 매수] 예수금 없음 — 스킵")
+            logger.warning("[시초가 매수] 예수금 없음")
+            _ex("UPDATE tomorrow_pick SET status='skipped' WHERE pick_date=? AND status='pending'", (today,))
             return
 
-        quantity = int(available_cash / current_price)
-        if quantity <= 0:
-            logger.warning(f"[시초가 매수] {ticker} 1주 살 예수금 부족 ({available_cash:,.0f}원 < {current_price:,.0f}원)")
-            return
+        gw = KISGateway()
 
-        logger.info(
-            f"[시초가 매수] {name}({ticker}) {quantity}주 @ {current_price:,.0f}원 "
-            f"(예수금 {available_cash:,.0f}원 100% 투입)"
-        )
+        for pick in picks:
+            rank = pick["rank"]
+            ticker = pick["ticker"]
+            name = pick["name"] or ticker
+            ref_price = float(pick["ref_price"] or 0)
 
-        decision = {
-            "buy": True,
-            "reason": pick["reason"] or "전일 저녁 선점",
-            "target_pct": 5.0,
-            "stop_pct": 3.0,
-            "rsi": 55.0,
-            "volume_ratio": 1.0,
-            "signal_type": "evening_pick",
-            "market_score": 0.5,
-            "atr_pct": 0.0,
-        }
+            def _skip(reason: str) -> None:
+                _ex(
+                    "UPDATE tomorrow_pick SET status='skipped', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE pick_date=? AND rank=?",
+                    (today, rank),
+                )
+                logger.info(f"[시초가] {rank}순위 {ticker} 스킵 — {reason}")
 
-        result = self._place_buy(
-            ticker=ticker,
-            name=name,
-            quantity=quantity,
-            current_price=current_price,
-            tranche=1,
-            decision=decision,
-            tight_stop=False,
-        )
+            # 기존 포지션 체크
+            if _has_open_position(ticker):
+                _skip("이미 포지션 보유 중")
+                continue
 
-        if result:
-            _ex(
-                "UPDATE tomorrow_pick SET status='executed', entry_price=?, updated_at=CURRENT_TIMESTAMP WHERE pick_date=?",
-                (current_price, today),
+            # 시초가 조회
+            current_price = _fetch_current_price(ticker)
+            if current_price <= 0:
+                _skip("현재가 조회 실패")
+                continue
+
+            # 갭 체크
+            if ref_price > 0:
+                gap_pct = (current_price / ref_price - 1) * 100
+                if gap_pct > 7.0:
+                    _skip(f"갭업 과도 ({gap_pct:+.1f}%)")
+                    continue
+                if gap_pct < -5.0:
+                    _skip(f"갭다운 ({gap_pct:+.1f}%)")
+                    continue
+                gap_str = f"{gap_pct:+.1f}%"
+            else:
+                gap_str = "기준가없음"
+
+            # 호가 체크
+            ob = gw.get_orderbook(ticker, priority=RequestPriority.TRADING)
+            imbalance = ob.get("imbalance", 1.0)
+            if imbalance < 0.7:
+                _skip(f"매도 우위 (호가비율 {imbalance:.2f})")
+                continue
+
+            # 매수 수량
+            quantity = int(available_cash / current_price)
+            if quantity <= 0:
+                _skip(f"예수금 부족 ({available_cash:,.0f}원 < {current_price:,.0f}원)")
+                continue
+
+            logger.info(
+                f"[시초가 매수] {rank}순위 {name}({ticker}) "
+                f"갭={gap_str} 호가비={imbalance:.2f} "
+                f"{quantity}주 @ {current_price:,.0f}원 (예수금 {available_cash:,.0f}원)"
             )
-            _notify(
-                f"🚀 <b>[시초가 매수 완료]</b> {name}({ticker})\n"
-                f"💰 {quantity}주 × {current_price:,.0f}원 = {quantity*current_price:,.0f}원\n"
-                f"📝 {pick['reason']}"
+
+            decision = {
+                "buy": True,
+                "reason": pick["reason"] or "전일 저녁 선점",
+                "target_pct": 5.0,
+                "stop_pct": 3.0,
+                "rsi": 55.0,
+                "volume_ratio": 1.0,
+                "signal_type": "evening_pick",
+                "market_score": 0.5,
+                "atr_pct": 0.0,
+            }
+
+            result = self._place_buy(
+                ticker=ticker,
+                name=name,
+                quantity=quantity,
+                current_price=current_price,
+                tranche=1,
+                decision=decision,
+                tight_stop=False,
             )
-        else:
-            logger.error(f"[시초가 매수] {ticker} 주문 실패")
+
+            if result:
+                _ex(
+                    "UPDATE tomorrow_pick SET status='executed', entry_price=?, updated_at=CURRENT_TIMESTAMP "
+                    "WHERE pick_date=? AND rank=?",
+                    (current_price, today, rank),
+                )
+                # 나머지 pending → skipped
+                _ex(
+                    "UPDATE tomorrow_pick SET status='skipped', updated_at=CURRENT_TIMESTAMP "
+                    "WHERE pick_date=? AND status='pending'",
+                    (today,),
+                )
+                _notify(
+                    f"🚀 <b>[시초가 매수 완료]</b> {rank}순위 {name}({ticker})\n"
+                    f"📊 갭={gap_str} 호가비={imbalance:.2f}\n"
+                    f"💰 {quantity}주 × {current_price:,.0f}원 = {quantity*current_price:,.0f}원\n"
+                    f"📝 {pick['reason']}"
+                )
+                return
+            else:
+                _skip("주문 API 실패 — 다음 순위로")
+
+        # 전 순위 탈락
+        logger.info("[시초가 매수] 5순위 모두 갭/호가 조건 불충족 — 오늘 매수 없음")
+        _notify("⚠️ <b>[시초가 매수 없음]</b> 선점 종목 전부 갭/호가 기준 미달")
 
     def run_once(self) -> list[dict]:
         """
@@ -510,11 +553,13 @@ class TradingEngine:
         Returns:
             실행된 주문 목록
         """
-        # 방향 1 전략: 시초가 매수가 이미 완료됐으면 장 중 신규 진입 차단
+        # 방향 1 전략: 선점 종목이 pending(아직 체크 전) 또는 executed(이미 매수) 상태면 장 중 스캔 차단
         today = date.today().isoformat()
-        from src.infra.database import fetch_one as _fo
-        _pick = _fo("SELECT status FROM tomorrow_pick WHERE pick_date=?", (today,))
-        if _pick and _pick["status"] in ("executed", "pending"):
+        _pick_active = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM tomorrow_pick WHERE pick_date=? AND status IN ('executed','pending')",
+            (today,),
+        )
+        if _pick_active and _pick_active["cnt"] > 0:
             logger.debug("[방향1] 선점 전략 활성화 — 장 중 신규 스캔 스킵")
             return []
 

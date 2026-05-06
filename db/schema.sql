@@ -398,12 +398,15 @@ CREATE INDEX IF NOT EXISTS idx_macd_signal_ticker ON intraday_macd_signal(ticker
 -- ────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS tomorrow_pick (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    pick_date   DATE NOT NULL UNIQUE,   -- 매수 실행 날짜 (내일)
+    pick_date   DATE NOT NULL,          -- 매수 실행 날짜 (내일)
+    rank        INTEGER NOT NULL DEFAULT 1,  -- 우선순위 1~5
     ticker      TEXT NOT NULL,
     name        TEXT,
     reason      TEXT,                   -- Claude 선정 이유
+    ref_price   REAL DEFAULT NULL,      -- 선정 시점 기준가 (갭 체크용)
     entry_price REAL DEFAULT NULL,      -- 실제 진입가 (체결 후 기록)
     status      TEXT DEFAULT 'pending', -- pending | executed | skipped
     created_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(pick_date, rank)
 );
