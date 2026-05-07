@@ -2185,10 +2185,14 @@ def _reconcile_zombie_trailing_stops(engine_instance) -> None:
                 continue
             try:
                 updated_at = datetime.fromisoformat(str(updated_at_str))
-                if datetime.now() - updated_at < timedelta(minutes=5):
+                # CURRENT_TIMESTAMP는 UTC 저장 → UTC 기준으로 비교
+                from datetime import timezone
+                now_utc = datetime.now(timezone.utc).replace(tzinfo=None)
+                elapsed = now_utc - updated_at
+                if elapsed < timedelta(minutes=5):
                     logger.debug(
                         f"[좀비 체크 스킵] {ticker} — trailing_stop 생성 "
-                        f"{int((datetime.now() - updated_at).total_seconds())}초 경과 (5분 미만)"
+                        f"{int(elapsed.total_seconds())}초 경과 (5분 미만)"
                     )
                     continue
             except Exception:
