@@ -2021,9 +2021,6 @@ class TradingEngine:
                     trigger_pct=trigger_pct,
                     floor_pct=floor_pct,
                 )
-                initial_floor = current_price * (1 - stop_pct / 100)
-                from src.infra.stop_order_manager import place_stop_order
-                place_stop_order(ticker, quantity, initial_floor)
 
             return {
                 "ticker": ticker,

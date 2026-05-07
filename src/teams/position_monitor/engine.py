@@ -1028,8 +1028,6 @@ class PositionMonitorEngine:
                             "UPDATE trailing_stop SET trailing_floor = ?, updated_at = CURRENT_TIMESTAMP WHERE ticker = ?",
                             (lock_floor, ticker),
                         )
-                        from src.infra.stop_order_manager import update_stop_order
-                        update_stop_order(ticker, quantity, lock_floor)
                         logger.info(
                             f"[익절 보류] {ticker} | +{pnl_pct:.1f}% 달성 but MACD {macd_sig} 강세 | "
                             f"손절선 → {lock_floor:,.0f}원 (매수가+1%) 으로 상향, 홀딩 유지"
@@ -1950,9 +1948,6 @@ def _update_trailing_floor(
             f"[트레일링{tight_label}] {ticker} 손절선 상향: {current_floor:,.0f} → {new_floor:,.0f}원 "
             f"(현재가 {current_price:,.0f}, 수익 {gain_pct:+.1f}%)"
         )
-        from src.infra.stop_order_manager import update_stop_order
-        update_stop_order(ticker, quantity, new_floor)
-
     return new_floor
 
 
