@@ -48,19 +48,41 @@ def _setup_crash_logger() -> None:
 
 
 def _acquire_pid_lock() -> None:
-    """이미 실행 중인 인스턴스가 있으면 즉시 종료."""
+    """이미 실행 중인 main.py 인스턴스를 모두 종료하고 PID 파일 획득."""
+    import signal
+    import subprocess
+
+    my_pid = os.getpid()
+
+    # dqt.pid 파일에 등록된 기존 프로세스 종료
     if os.path.exists(_PID_FILE):
         try:
             pid = int(open(_PID_FILE).read().strip())
-            os.kill(pid, 0)          # 프로세스 존재 여부 확인 (0 = no-op signal)
-            logger.error(f"이미 실행 중 (PID {pid}). 중복 실행 방지로 종료.")
-            sys.exit(1)
-        except (ProcessLookupError, PermissionError):
-            pass                     # 기존 PID가 죽어있으면 덮어씀
-        except ValueError:
-            pass                     # PID 파일 내용 이상 → 덮어씀
+            if pid != my_pid:
+                os.kill(pid, signal.SIGTERM)
+                logger.info(f"기존 인스턴스 종료 요청 (PID {pid})")
+        except (ProcessLookupError, PermissionError, ValueError):
+            pass
+
+    # pgrep으로 이름이 같은 다른 main.py 프로세스도 모두 종료
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", "python.*main\\.py"],
+            capture_output=True, text=True,
+        )
+        for pid_str in result.stdout.strip().splitlines():
+            pid = int(pid_str.strip())
+            if pid != my_pid:
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    logger.info(f"중복 main.py 인스턴스 종료 (PID {pid})")
+                except (ProcessLookupError, PermissionError):
+                    pass
+    except Exception:
+        pass
+
     with open(_PID_FILE, "w") as f:
-        f.write(str(os.getpid()))
+        f.write(str(my_pid))
     atexit.register(lambda: os.path.exists(_PID_FILE) and os.remove(_PID_FILE))
 
 
