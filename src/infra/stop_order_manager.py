@@ -197,7 +197,12 @@ def _cancel_on_kis(order: dict) -> str:
     except Exception as e:
         err_str = str(e)
         # "정정/취소할 수량이 없습니다" = 손절 주문이 이미 KIS에서 자동 체결됨
-        if "정정/취소할 수량" in err_str or "취소할 수량" in err_str:
+        # "정정취소 가능수량이 없습니다" — 동일 의미의 다른 KIS 메시지
+        if (
+            "정정/취소할 수량" in err_str
+            or "취소할 수량" in err_str
+            or "정정취소 가능수량" in err_str
+        ):
             logger.info(
                 f"[Stop Order] {order['ticker']} 주문번호 {order['order_no']}: "
                 f"이미 체결됨 (자동 손절 확정)"
