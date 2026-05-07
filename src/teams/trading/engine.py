@@ -1883,6 +1883,38 @@ class TradingEngine:
         tr_id = "VTTC0802U" if settings.KIS_MODE == "paper" else "TTTC0802U"
         acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
 
+        # KIS 실제 주문가능수량 사전 확인 — 실제 종목/가격으로 조회해야
+        # 더미 종목(005930) 기반 예수금 추정치와 일치하지 않는 문제 방지.
+        # max_buy_qty=0 → 즉시 중단, max_buy_qty < quantity → 수량 하향 조정
+        _psbl_tr = "VTTC8908R" if settings.KIS_MODE == "paper" else "TTTC8908R"
+        try:
+            _psbl = gw.request(
+                method="GET",
+                path="/uapi/domestic-stock/v1/trading/inquire-psbl-order",
+                params={
+                    "CANO": acnt_no,
+                    "ACNT_PRDT_CD": acnt_prdt_cd,
+                    "PDNO": ticker,
+                    "ORD_UNPR": str(int(current_price)),
+                    "ORD_DVSN": "01",
+                    "CMA_EVLU_AMT_ICLD_YN": "N",
+                    "OVRS_ICLD_YN": "N",
+                },
+                tr_id=_psbl_tr,
+                priority=RequestPriority.TRADING,
+            )
+            _max_qty = int(_psbl.get("output", {}).get("max_buy_qty", quantity) or quantity)
+            if _max_qty == 0:
+                logger.warning(f"[매수 사전 검증] {ticker} KIS 주문가능수량 0 — 예수금 부족, 매수 취소")
+                return None
+            if _max_qty < quantity:
+                logger.info(
+                    f"[매수 사전 검증] {ticker} 요청 {quantity}주 → KIS 최대 {_max_qty}주로 조정"
+                )
+                quantity = _max_qty
+        except Exception as _pse:
+            logger.debug(f"[매수 사전 검증] {ticker} TTTC8908R 실패 (원래 수량 유지): {_pse}")
+
         try:
             resp = gw.request(
                 method="POST",
