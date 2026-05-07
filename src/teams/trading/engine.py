@@ -64,25 +64,40 @@ _TRANCHE_RATIOS = [0.60, 0.25, 0.15]
 # 오프닝 게이트 정적 시스템 프롬프트 — 캐시 대상
 # ─────────────────────────────────────────────────────────────────────
 _OPENING_GATE_SYSTEM_PROMPT = """당신은 국내 주식 퀀트 트레이더입니다.
-장 시작 직후 즉시 매수를 진행할지, 아니면 9시 10분까지 관망할지 판단하세요.
+장 시작 직후 시황을 평가해 매수 시작 시각을 4단계 중 선택하세요.
 
-## 즉시 매수 기준 (참고)
-- 리스크 레벨 ≤ 3
-- 글로벌 리스크 점수 ≤ 5
-- 국내 시황 점수 ≥ 0.0 (neutral 이상이면 충분)
-- 한국 시장 전망 neutral 또는 positive
+## 4단계 시작 시각
 
-## 즉시 매수 기준 (엄격하게 판단)
-아래 조건을 모두 충족해야 즉시 매수(true):
+### 1. immediate — 즉시 매수 (시장 매우 강함)
 - 리스크 레벨 ≤ 2
 - 글로벌 리스크 점수 ≤ 4
 - 국내 시황 점수 ≥ +0.2 (명확한 강세)
 - 한국 시장 전망 positive
 
-그 외에는 모두 관망(false)으로 선택하세요.
+### 2. wait_910 — 9:10부터 매수 (기본 / 혼조)
+- 리스크 레벨 ≤ 3
+- 글로벌 리스크 점수 ≤ 6
+- 국내 시황 점수 -0.2 ~ +0.2 (혼조)
+- 한국 시장 전망 neutral
+
+### 3. wait_930 — 9:30부터 매수 (약세 - 30분 관망)
+- 국내 시황 점수 -0.5 ~ -0.2 (약세)
+- 글로벌 리스크 7~8
+- 한국 시장 전망 negative
+- 변동성 큼
+
+### 4. wait_1000 — 10:00부터 매수 (급락 - 1시간 관망)
+- 리스크 레벨 ≥ 4
+- 국내 시황 점수 ≤ -0.5 (급락)
+- 글로벌 리스크 ≥ 9
+- 시장 패닉 신호
+
+## 판단 원칙
+의심스러우면 더 보수적인 단계 선택.
+잘못된 즉시 매수가 잘못된 관망보다 손실이 큼.
 
 JSON만 응답:
-{"immediate": <true|false>, "reason": "<근거 30자 이내>"}"""
+{"mode": "immediate|wait_910|wait_930|wait_1000", "reason": "<근거 40자 이내>"}"""
 
 # ─────────────────────────────────────────────────────────────────────
 # 매수 판단 정적 시스템 프롬프트 — 캐시 대상 (1024 토큰 이상)
@@ -283,9 +298,19 @@ class TradingEngine:
         logger.info("매매팀 엔진 종료")
 
     def reset_opening_gate(self) -> None:
-        """오프닝 게이트 해제 — 09:10 재점검 시 스케줄러가 호출."""
-        self._buy_allowed_from = None
-        logger.info("오프닝 게이트 해제 — 매수 재개")
+        """오프닝 게이트 해제 — 09:10 재점검 시 스케줄러가 호출.
+
+        단, 동적 게이트가 09:10 이후를 지정한 경우(wait_930/wait_1000)는
+        예약된 시각까지 유지한다.
+        """
+        now = datetime.now()
+        if self._buy_allowed_from is None or now >= self._buy_allowed_from:
+            self._buy_allowed_from = None
+            logger.info("오프닝 게이트 해제 — 매수 재개")
+        else:
+            logger.info(
+                f"오프닝 게이트 유지 — {self._buy_allowed_from.strftime('%H:%M')}까지 대기 (동적 게이트)"
+            )
 
     # ──────────────────────────────────────────
     # 관심종목 거래량/체결강도 감시 (45초 폴링)
@@ -582,13 +607,16 @@ class TradingEngine:
             return []
 
         if not self._opening_gate_checked:
-            # 첫 사이클에서 시황 평가 후 즉시 매수 or 9:10 대기 결정
+            # 첫 사이클에서 시황 평가 후 4단계 시작 시각 결정 (즉시/9:10/9:30/10:00)
             self._opening_gate_checked = True
-            immediate = self._check_opening_gate()
-            if not immediate:
-                # 9:10 (09:10:00) 이후부터 매수 허용
-                self._buy_allowed_from = now.replace(hour=9, minute=10, second=0, microsecond=0)
-                logger.info(f"오프닝 게이트: 관망 — {self._buy_allowed_from.strftime('%H:%M')}부터 매수 허용")
+            gate = self._check_opening_gate()
+            start_hm = gate["start_hm"]
+            if start_hm > 0:
+                h, m = divmod(start_hm, 100)
+                self._buy_allowed_from = now.replace(hour=h, minute=m, second=0, microsecond=0)
+                logger.info(
+                    f"오프닝 게이트: {gate['label']}부터 매수 허용 ({gate['mode']})"
+                )
                 return []
 
         if self._buy_allowed_from and now < self._buy_allowed_from:
@@ -1499,34 +1527,45 @@ class TradingEngine:
 
         return orders
 
-    def _check_opening_gate(self) -> bool:
+    def _check_opening_gate(self) -> dict:
         """
-        장 시작 직후 시황을 평가하여 즉시 매수 가능 여부를 반환.
+        장 시작 직후 시황을 평가해 매수 시작 시각을 결정.
 
-        Claude에게 현재 글로벌·국내 시황, 리스크 레벨을 종합하여 판단 요청.
+        Claude에게 글로벌·국내 시황, 리스크 레벨, KOSPI 등락을 종합 판단 요청.
 
         Returns:
-            True  → 즉시 매수 허용 (시장이 진짜 좋음)
-            False → 9:10까지 관망 권고
+            dict: {"mode": str, "start_hm": int, "label": str, "reason": str}
+            mode      — immediate | wait_910 | wait_930 | wait_1000
+            start_hm  — 0(즉시) | 910 | 930 | 1000
+            label     — UI/로그용 한글 표시
         """
         from src.utils.notifier import notify
 
         global_ctx  = _load_global_context()
-        market_ctx, _ = _load_market_full_context()
+        market_ctx, kospi_live = _load_market_full_context()
         risk        = get_current_risk()
         risk_level  = risk.get("risk_level", 3)
         market_score = market_ctx.get("market_score", 0.0)
         global_risk  = global_ctx.get("global_risk_score", 5)
         outlook      = global_ctx.get("korea_market_outlook", "neutral")
+        kospi_str    = f"{kospi_live:+.2f}%" if kospi_live is not None else "N/A"
 
         prompt = (
-            f"오전 9시 장 시작 직후입니다. 현재 시황을 보고 즉시 매수 여부를 판단하세요.\n\n"
+            f"오전 9시 장 시작 직후입니다. 현재 시황을 보고 매수 시작 시각을 4단계 중 선택하세요.\n\n"
             f"## 현재 시황\n"
             f"- 리스크 레벨: {risk_level}/5 (5가 최대 위험)\n"
             f"- 글로벌 리스크 점수: {global_risk}/10\n"
             f"- 한국 시장 전망: {outlook}\n"
-            f"- 국내 시황 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)"
+            f"- 국내 시황 점수: {market_score:+.2f} (-1.0 약세 ~ +1.0 강세)\n"
+            f"- KOSPI 장중 등락: {kospi_str}"
         )
+
+        _MODE_MAP = {
+            "immediate": (0,    "즉시"),
+            "wait_910":  (910,  "9:10"),
+            "wait_930":  (930,  "9:30"),
+            "wait_1000": (1000, "10:00"),
+        }
 
         try:
             response = _client.messages.create(
@@ -1546,24 +1585,26 @@ class TradingEngine:
             raw = response.content[0].text.strip()
             raw = _extract_json(raw)
             result = json.loads(raw)
-            immediate = bool(result.get("immediate", False))
+            mode = str(result.get("mode", "wait_910"))
+            if mode not in _MODE_MAP:
+                mode = "wait_910"
+            start_hm, label = _MODE_MAP[mode]
             import html as _html
-            reason    = _html.escape(result.get("reason", ""))
+            reason = _html.escape(result.get("reason", ""))
 
-            if immediate:
+            if mode == "immediate":
                 msg = f"✅ <b>[오프닝 게이트]</b> 즉시 매수 허용\n{reason}"
-                logger.info(f"오프닝 게이트: 즉시 매수 — {reason}")
             else:
-                msg = f"⏳ <b>[오프닝 게이트]</b> 9:10까지 관망\n{reason}\n(9:10 이후 자동 재개)"
-                logger.info(f"오프닝 게이트: 관망 — {reason}")
-
+                msg = f"⏳ <b>[오프닝 게이트]</b> {label}부터 매수\n{reason}"
+            logger.info(f"오프닝 게이트: {label} 시작 — {reason}")
             notify(msg)
-            return immediate
+
+            return {"mode": mode, "start_hm": start_hm, "label": label, "reason": reason}
 
         except Exception as e:
-            logger.warning(f"오프닝 게이트 Claude 판단 실패: {e} — 기본값 관망")
+            logger.warning(f"오프닝 게이트 Claude 판단 실패: {e} — 기본값 9:10 대기")
             notify("⏳ <b>[오프닝 게이트]</b> Claude 판단 불가 — 9:10까지 관망 (기본값)")
-            return False
+            return {"mode": "wait_910", "start_hm": 910, "label": "9:10", "reason": "Claude 판단 실패"}
 
     # ──────────────────────────────────────────
     # 전체 게이트 차단 감시 — 3분 지속 시 슬롯 강제 리셋
