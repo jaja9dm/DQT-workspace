@@ -493,8 +493,8 @@ class TradingEngine:
                 imbalance = ob.get("imbalance", 1.0)
                 logger.info(f"[시초가] 최종순위 {ticker} 호가비={imbalance:.2f} — 무조건 매수 진행")
 
-            # 매수 수량
-            quantity = int(available_cash / current_price)
+            # 매수 수량 — 예수금 95% 사용 (수수료·세금·KIS 내부 마진 여유)
+            quantity = int(available_cash * 0.95 / current_price)
             if quantity <= 0:
                 _skip(f"예수금 부족 ({available_cash:,.0f}원 < {current_price:,.0f}원)")
                 continue
