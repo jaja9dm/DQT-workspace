@@ -2715,7 +2715,8 @@ def _fetch_available_cash() -> float:
             priority=RequestPriority.DATA_COLLECTION,
         )
         output = resp.get("output", {})
-        cash = float(output.get("ord_psbl_cash", 0) or 0)
+        # nrcvb_buy_amt: 미수금 없는 실제 매수가능금액 (ord_psbl_cash보다 정확)
+        cash = float(output.get("nrcvb_buy_amt", 0) or output.get("ord_psbl_cash", 0) or 0)
         if cash > 0:
             _cash_cache_value = cash
             _cash_cache_ts = time.time()

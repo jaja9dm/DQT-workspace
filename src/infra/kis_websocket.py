@@ -39,7 +39,7 @@ logger = get_logger(__name__)
 
 _WS_URL = "ws://ops.koreainvestment.com:21000"
 _APPROVAL_PATH = "/oauth2/Approval"
-_RECONNECT_DELAY = 5   # 재연결 대기 (초)
+_RECONNECT_DELAY = 60  # 재연결 대기 (초) — 너무 빠른 루프로 API 과부하 방지
 _PING_INTERVAL = 60    # WebSocket 핑 주기 (초)
 
 
