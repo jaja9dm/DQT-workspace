@@ -270,10 +270,11 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         ), id="evening_selection", name="저녁 종목 선점")
 
-        # 자동 종료 — 모든 배치 완료 후 프로세스 종료 (16:45, 저녁 선점 완료 대기)
-        s.add_job(self._auto_shutdown, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Seoul"
-        ), id="auto_shutdown", name="자동 종료")
+        # 자동 종료 비활성화 — launchd 재시작 불안정으로 인해 24/7 가동.
+        # 16:45 EOD 배치는 그대로 작동, 프로세스만 살려둠.
+        # s.add_job(self._auto_shutdown, CronTrigger(
+        #     day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Seoul"
+        # ), id="auto_shutdown", name="자동 종료")
 
         # 연구소 심층 백테스트 (일요일 주 1회)
         s.add_job(self._run_research_deep, CronTrigger(
