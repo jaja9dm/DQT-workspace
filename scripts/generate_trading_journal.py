@@ -97,12 +97,12 @@ def _load_review(trade_date: str) -> dict:
 def _load_cash_snapshot(trade_date: str) -> dict:
     """position_snapshot에서 당일 예수금 조회."""
     row = fetch_one(
-        "SELECT * FROM position_snapshot WHERE date(saved_at)=? ORDER BY saved_at ASC LIMIT 1",
+        "SELECT * FROM position_snapshot WHERE date(snapshot_at)=? ORDER BY snapshot_at ASC LIMIT 1",
         (trade_date,),
     )
     start = dict(row) if row else {}
     row2 = fetch_one(
-        "SELECT * FROM position_snapshot WHERE date(saved_at)=? ORDER BY saved_at DESC LIMIT 1",
+        "SELECT * FROM position_snapshot WHERE date(snapshot_at)=? ORDER BY snapshot_at DESC LIMIT 1",
         (trade_date,),
     )
     end = dict(row2) if row2 else {}

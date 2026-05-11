@@ -207,6 +207,12 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
         ), id="pre_market_setup", name="장 전 유니버스 재구성")
 
+        # 08:50 — 아침 종목 최종 결정 (오버나이트 미국장 + 최근 7일 누적 트렌드)
+        # evening_selector(어제 16:30)의 잠정 picks를 미국장 반영 후 갱신
+        s.add_job(self._run_morning_pick, CronTrigger(
+            day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
+        ), id="morning_pick", name="아침 시초가 종목 최종 결정")
+
         # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
         # 09:00에 _start_realtime_engines가 먼저 TradingEngine을 생성해야 하므로 1분 후 실행
         s.add_job(self._run_open_trade, CronTrigger(
@@ -227,6 +233,12 @@ class DQTScheduler:
         s.add_job(self._stop_realtime_engines, CronTrigger(
             day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
         ), id="stop_engines", name="실시간 엔진 정지")
+
+        # 15:35 — 일일 시장 저널 적재 (장 마감 직후, fresh 데이터)
+        # 다음날 08:50 morning_picker가 최근 7일 시계열로 활용
+        s.add_job(self._run_daily_journal, CronTrigger(
+            day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
+        ), id="daily_journal", name="일일 시장 저널 적재")
 
         # 장 마감 후 배치: 리포트팀
         s.add_job(self._run_report, CronTrigger(
@@ -515,6 +527,28 @@ class DQTScheduler:
             run_evening_selection()
         except Exception as e:
             logger.error(f"저녁 선점 오류: {e}", exc_info=True)
+
+    def _run_daily_journal(self) -> None:
+        """15:35 — 장 마감 직후 일일 시장 저널 적재."""
+        if not is_trading_day():
+            return
+        logger.info("일일 시장 저널 적재 실행")
+        try:
+            from src.teams.research.market_daily_report import run_daily_journal
+            run_daily_journal()
+        except Exception as e:
+            logger.error(f"일일 시장 저널 오류: {e}", exc_info=True)
+
+    def _run_morning_pick(self) -> None:
+        """08:50 — 오버나이트 미국장 + 최근 7일 누적으로 오늘 종목 최종 결정."""
+        if not is_trading_day():
+            return
+        logger.info("아침 시초가 종목 최종 결정 실행")
+        try:
+            from src.teams.research.morning_picker import run_morning_pick
+            run_morning_pick()
+        except Exception as e:
+            logger.error(f"아침 선정 오류: {e}", exc_info=True)
 
     def _purge_sentiment_cache(self) -> None:
         """자정 — 감성 캐시 만료 정리."""

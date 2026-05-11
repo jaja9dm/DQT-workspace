@@ -410,3 +410,23 @@ CREATE TABLE IF NOT EXISTS tomorrow_pick (
     updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
     UNIQUE(pick_date, rank)
 );
+
+-- ────────────────────────────────────────
+-- 일일 시장 저널: 장 마감 직후(15:35) 누적 저장
+-- 다음날 08:50 morning_picker가 최근 7일 시계열로 활용
+-- ────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS daily_market_journal (
+    date              DATE PRIMARY KEY,                  -- 거래일
+    kospi_close       REAL,
+    kospi_chg_pct     REAL,
+    kosdaq_close      REAL,
+    kosdaq_chg_pct    REAL,
+    foreign_net_buy   REAL,                              -- 외국인 순매수 (억원)
+    inst_net_buy      REAL,                              -- 기관 순매수 (억원)
+    top30_by_value    TEXT,                              -- JSON: [{ticker,name,value_krw,chg_pct,sector},...]
+    sector_scores     TEXT,                              -- JSON: {sector_name: score,...}
+    notable_themes    TEXT,                              -- JSON: ["AI반도체","조선","바이오"] (Claude 요약)
+    summary           TEXT,                              -- Claude 시장 요약 (문장형)
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_daily_market_journal_date ON daily_market_journal(date DESC);

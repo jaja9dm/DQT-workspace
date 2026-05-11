@@ -114,8 +114,7 @@ def _fetch_portfolio_summary() -> dict:
         "positions": [],
     }
     try:
-        from src.infra.kis_gateway import KISGateway
-        from src.infra.rate_limiter import RequestPriority
+        from src.infra.kis_gateway import KISGateway, RequestPriority
         gw = KISGateway()
         acnt_no, acnt_prdt_cd = (settings.KIS_ACCOUNT_NO.split("-") + ["01"])[:2]
         tr_id = "VTTC8434R" if settings.KIS_MODE == "paper" else "TTTC8434R"

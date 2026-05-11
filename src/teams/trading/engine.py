@@ -277,6 +277,12 @@ class TradingEngine:
         # 전체 게이트 차단 감시 — 3분 지속 시 슬롯 강제 리셋
         self._all_blocked_since: float = 0.0
 
+        # 연속 손절 쿨다운 (당일 누적 stop_loss 기반)
+        # 2회 도달 → 30분 신규 매수 차단, 3회 도달 → 당일 매매 종료
+        self._stop_loss_cooldown_until: datetime | None = None
+        self._stop_loss_day_blocked: bool = False
+        self._stop_loss_count_last: int = 0  # 직전 감지 카운트 (전이 감지용)
+
         # 관심종목 거래량 급등 감시 — 45초 폴링
         self._force_run = threading.Event()           # 감시 스레드가 즉시 실행 요청 시 set
         self._watchdog_vol: dict[str, dict] = {}      # {ticker: {"vol": int, "ts": float}}
@@ -425,6 +431,10 @@ class TradingEngine:
                     self._watchdog_vol.clear()
                     self._opening_gate_checked = False
                     self._buy_allowed_from = None
+                    # 연속손절 쿨다운/일일 종료 플래그 리셋
+                    self._stop_loss_cooldown_until = None
+                    self._stop_loss_day_blocked = False
+                    self._stop_loss_count_last = 0
 
                 self.run_once()
                 self._force_run.clear()  # 정상 사이클 완료 후 강제실행 플래그 초기화
@@ -682,6 +692,49 @@ class TradingEngine:
                     f"{_declining_ratio:.0%} ≥ 60% — 진입 최소 점수 +{_bear_penalty:.0f}pt"
                 )
 
+        # ── Gate 3.5: 연속 손절 쿨다운 ───────────────────────────
+        # 당일 누적 손절(filled stop_loss) 횟수에 따라 신규 매수를 차단한다.
+        #   2회 도달 직후 → 30분간 쿨다운 (직후 1회만 로그)
+        #   3회 도달 직후 → 당일 매매 종료 (장 마감까지 신규 매수 금지)
+        # 보유 종목 매도/익절/손절은 영향 없음 (이 Gate는 신규 진입 경로에만 위치).
+        _today_iso = date.today().isoformat()
+        _sl_row = fetch_one(
+            "SELECT COUNT(*) AS cnt FROM trades "
+            "WHERE date=? AND action='stop_loss' AND status='filled'",
+            (_today_iso,),
+        )
+        _sl_count = int(_sl_row["cnt"]) if _sl_row else 0
+
+        # 2회 도달 전이 감지 → 30분 쿨다운 셋업 (1회만 로그)
+        if _sl_count >= 2 and self._stop_loss_count_last < 2 and not self._stop_loss_day_blocked:
+            self._stop_loss_cooldown_until = now + timedelta(minutes=30)
+            logger.warning(
+                "[연속손절 쿨다운] 30분간 신규 매수 차단 "
+                f"(당일 손절 {_sl_count}회, ~{self._stop_loss_cooldown_until.strftime('%H:%M')})"
+            )
+
+        # 3회 도달 전이 감지 → 당일 매매 종료
+        if _sl_count >= 3 and not self._stop_loss_day_blocked:
+            self._stop_loss_day_blocked = True
+            logger.warning(
+                f"[당일 매매 종료] 연속 손절 {_sl_count}회 — 신규 매수 영구 차단"
+            )
+
+        self._stop_loss_count_last = _sl_count
+
+        if self._stop_loss_day_blocked:
+            logger.info(
+                f"Gate 3.5 차단: 당일 매매 종료 (누적 손절 {_sl_count}회) — 신규 매수 금지"
+            )
+            return []
+        if self._stop_loss_cooldown_until is not None and now < self._stop_loss_cooldown_until:
+            _remain = int((self._stop_loss_cooldown_until - now).total_seconds() // 60)
+            logger.info(
+                f"Gate 3.5 차단: 연속손절 쿨다운 — "
+                f"누적 손절 {_sl_count}회, ~{self._stop_loss_cooldown_until.strftime('%H:%M')} ({_remain}분 남음)"
+            )
+            return []
+
         # ── Gate 4: Hot List ─────────────────────
         hot_list = _load_hot_list()
         if not hot_list:
@@ -807,6 +860,15 @@ class TradingEngine:
             is_pullback  = signal_type == "pullback_rebound"
             is_mkt_mom   = signal_type == "market_momentum"
             is_op_plunge = signal_type == "opening_plunge_rebound"
+
+            # Gate 4.2 갭업 추격매수 차단: 등락률 +5% 이상이면 신규 진입 금지.
+            # (보유 종목 추가매수/분할매수는 별도 경로이며 이 신규 진입 루프는 통과 X)
+            # 5/7·5/11 "갭업 후 추격매수 → 즉시 손절" 패턴 차단.
+            if price_chg >= 5.0 and not _has_open_position(tk):
+                logger.info(
+                    f"Gate 4.2 차단: {tk} 갭업 추격 — 등락률 {price_chg:+.2f}% ≥ 5%"
+                )
+                continue
 
             _tk_stats      = _load_ticker_stats(tk)
             _sector_for_tk = str(c.get("sector") or "")
