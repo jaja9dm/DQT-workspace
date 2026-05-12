@@ -410,38 +410,66 @@ def _save_daily_top_value(row: dict) -> None:
     )
 
 
-# ── 3. KOSDAQ 거래대금 pykrx 보강 ────────────────────────────
+# ── 3. KOSDAQ 거래대금 보강 ──────────────────────────────────
+#
+# 2026-05-12: pykrx의 get_index_ohlcv_by_date가 KRX 응답 스키마 변경으로
+# KeyError("지수명") 발생 — 사용 불가. KRX 직접 JSON API도 403 차단.
+# → Naver Finance 스크래핑 (안정·공식 사이트, 광범위 사용)으로 대체.
 
 def _augment_kosdaq_with_pykrx(today: str) -> None:
-    """KOSDAQ 종합 거래대금/거래량을 pykrx에서 가져와 갱신.
+    """KOSDAQ 종합 거래대금/거래량을 Naver Finance에서 가져와 갱신.
 
-    KIS API가 지수의 거래대금을 직접 제공하지 않아 0으로 저장된 값을 보강.
-    pykrx 호출이 실패해도 그대로 진행 (이미 KIS 데이터는 저장됨).
+    함수명은 기존 호환을 위해 유지. 내부 구현은 Naver 스크래핑.
+    Naver Finance가 차단/장애일 경우에는 조용히 스킵.
     """
-    try:
-        from pykrx import stock as _pkstock
-    except Exception:
-        logger.debug("[EOD] pykrx 미설치 — KOSDAQ 거래대금 보강 스킵")
-        return
+    import re
+
+    import requests
 
     try:
-        # 최근 5거래일 범위 (오늘 거래일이면 마지막 행 = 오늘)
-        end = datetime.strptime(today, "%Y-%m-%d")
-        start = end - timedelta(days=10)
-        df = _pkstock.get_index_ohlcv_by_date(
-            start.strftime("%Y%m%d"),
-            end.strftime("%Y%m%d"),
-            "2001",   # 코스닥 종합
-        )
-        if df.empty:
-            logger.debug("[EOD] pykrx KOSDAQ 데이터 없음")
+        hdr = {
+            "User-Agent": (
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko)"
+            ),
+            "Referer": "https://finance.naver.com/",
+        }
+        url = "https://finance.naver.com/sise/sise_index_day.naver?code=KOSDAQ&page=1"
+        resp = requests.get(url, headers=hdr, timeout=8)
+        if resp.status_code != 200:
+            logger.debug(f"[EOD] Naver KOSDAQ HTTP {resp.status_code} — 보강 스킵")
             return
-        last = df.iloc[-1]
-        # pykrx KOSDAQ: '거래대금' (원 단위) — 억원으로 변환
-        tv_won = float(last.get("거래대금", 0) or 0)
-        vol_shr = float(last.get("거래량", 0) or 0)
-        tv_eok = round(tv_won / 1e8, 1)
-        vol_man = round(vol_shr / 10000.0, 1)
+        # 각 행: 날짜·종가·등락폭·등락률·거래량(천주)·거래대금(백만원)
+        rx = re.compile(
+            r'<tr>\s*'
+            r'<td class="date">(\d{4}\.\d{2}\.\d{2})</td>\s*'
+            r'<td class="number_1">([\d,]+\.\d+)</td>'
+            r'.*?'
+            r'<td class="number_1"[^>]*>\s*<span[^>]*>\s*([+-]?[\d.]+)%\s*</span>'
+            r'.*?'
+            r'<td class="number_1"[^>]*>([\d,]+)</td>\s*'
+            r'<td class="number_1"[^>]*>([\d,]+)</td>',
+            re.DOTALL,
+        )
+        rows = rx.findall(resp.text)
+        if not rows:
+            logger.debug("[EOD] Naver KOSDAQ 파싱 실패 — 0건")
+            return
+        # 가장 최근(첫 행)이 오늘 (장 마감 후 15:35+ 호출)
+        date_str, _close, _chg, vol_thr, tv_mil = rows[0]
+        # 날짜 일치 확인 (today=YYYY-MM-DD, date_str=YYYY.MM.DD)
+        date_norm = date_str.replace(".", "-")
+        if date_norm != today:
+            logger.debug(
+                f"[EOD] Naver 첫 행 날짜({date_norm}) != today({today}) — "
+                f"장 마감 전이거나 휴장일 → 보강 스킵"
+            )
+            return
+        vol_int = int(vol_thr.replace(",", ""))    # 천주
+        tv_int  = int(tv_mil.replace(",", ""))     # 백만원
+        # DB 스키마: volume=만주, trading_value=억원
+        vol_man = round(vol_int / 10.0, 1)         # 천주 → 만주 (÷10)
+        tv_eok  = round(tv_int / 100.0, 1)         # 백만원 → 억원 (÷100)
         execute(
             """
             UPDATE kosdaq_condition
@@ -451,11 +479,11 @@ def _augment_kosdaq_with_pykrx(today: str) -> None:
             (vol_man, tv_eok, today),
         )
         logger.info(
-            f"[EOD] kosdaq_condition pykrx 보강 — 거래대금 {tv_eok:,.0f}억 | "
+            f"[EOD] kosdaq_condition Naver 보강 — 거래대금 {tv_eok:,.0f}억 | "
             f"거래량 {vol_man:,.0f}만주"
         )
     except Exception as e:
-        logger.debug(f"[EOD] pykrx KOSDAQ 보강 스킵: {e}")
+        logger.debug(f"[EOD] Naver KOSDAQ 보강 스킵: {e}")
 
 
 # ── CLI 진입점 ────────────────────────────────────────────────

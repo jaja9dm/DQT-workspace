@@ -260,26 +260,38 @@ def _ask_claude(
     # 2) 어제 한국 시장
     kr_lines = []
     if market_row:
-        kr_lines.append(f"market_score={market_row.get('market_score'):.2f}, dir={market_row.get('market_direction')}")
+        try:
+            score = float(market_row.get("market_score") or 0)
+            kr_lines.append(f"market_score={score:.2f}, dir={market_row.get('market_direction') or '-'}")
+        except (TypeError, ValueError):
+            kr_lines.append(f"dir={market_row.get('market_direction') or '-'}")
         if market_row.get("summary"):
             try:
                 ms = json.loads(market_row.get("summary") or "{}")
                 if isinstance(ms, dict):
                     kospi = ms.get("kospi")
                     kosdaq = ms.get("kosdaq")
-                    if kospi is not None:
-                        kr_lines.append(f"KOSPI {kospi:+.2f}%, KOSDAQ {kosdaq:+.2f}%")
+                    if kospi is not None and kosdaq is not None:
+                        kr_lines.append(f"KOSPI {float(kospi):+.2f}%, KOSDAQ {float(kosdaq):+.2f}%")
+                    elif kospi is not None:
+                        kr_lines.append(f"KOSPI {float(kospi):+.2f}%")
                     if ms.get("analysis"):
                         kr_lines.append(f"요약: {ms['analysis'][:200]}")
             except Exception:
                 kr_lines.append(f"요약: {str(market_row.get('summary'))[:200]}")
     if kosdaq_row:
+        # None-safe formatting (모든 필드는 NULL일 수 있음)
+        def _fmt(v, spec, default="-"):
+            try:
+                return format(float(v), spec)
+            except (TypeError, ValueError):
+                return default
         kr_lines.append(
-            f"KOSDAQ 종합: 종가={kosdaq_row.get('close'):,.2f} "
-            f"등락={kosdaq_row.get('chg_pct'):+.2f}% | "
-            f"거래대금={kosdaq_row.get('trading_value'):,.0f}억 | "
-            f"외인={kosdaq_row.get('foreign_net_buy'):+.0f}억 | "
-            f"기관={kosdaq_row.get('inst_net_buy'):+.0f}억"
+            f"KOSDAQ 종합: 종가={_fmt(kosdaq_row.get('close'), ',.2f')} "
+            f"등락={_fmt(kosdaq_row.get('chg_pct'), '+.2f')}% | "
+            f"거래대금={_fmt(kosdaq_row.get('trading_value'), ',.0f')}억 | "
+            f"외인={_fmt(kosdaq_row.get('foreign_net_buy'), '+.0f')}억 | "
+            f"기관={_fmt(kosdaq_row.get('inst_net_buy'), '+.0f')}억"
         )
     kr_block = "\n".join(kr_lines) if kr_lines else "(데이터 없음)"
 

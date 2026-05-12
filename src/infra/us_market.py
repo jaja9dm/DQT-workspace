@@ -68,26 +68,65 @@ _KEY_STOCKS: dict[str, str] = {
 
 # 거래량 상위 후보군 (yfinance가 most_actives 정식 API를 제공하지 않으므로
 # 시가총액·관심도 높은 종목 풀에서 거래량 상위 N개 추출).
+# 풀 갱신 주기: 분기 1회 권장. 풀이 좁으면 거래량 TOP 10이 거의 고정됨.
 _VOLUME_POOL: dict[str, str] = {
+    # AI · 반도체
     "NVDA":  "엔비디아",
-    "TSLA":  "테슬라",
-    "AAPL":  "애플",
     "AMD":   "AMD",
+    "AVGO":  "브로드컴",
+    "MU":    "마이크론",
+    "INTC":  "인텔",
+    "TSM":   "TSMC",
+    "ARM":   "ARM",
+    "SMCI":  "수퍼마이크로",
+    "QCOM":  "퀄컴",
+    "ORCL":  "오라클",
+    # 빅테크 · SaaS
+    "AAPL":  "애플",
     "MSFT":  "마이크로소프트",
     "GOOGL": "구글",
     "META":  "메타",
     "AMZN":  "아마존",
-    "TSM":   "TSMC",
     "NFLX":  "넷플릭스",
-    "INTC":  "인텔",
     "PLTR":  "팔란티어",
-    "AVGO":  "브로드컴",
-    "MU":    "마이크론",
+    "CRM":   "세일즈포스",
+    # EV · 자동차
+    "TSLA":  "테슬라",
+    "RIVN":  "리비안",
+    "F":     "포드",
+    "GM":    "GM",
+    # 핀테크 · 결제 · 크립토
     "COIN":  "코인베이스",
-    "SMCI":  "수퍼마이크로",
-    "ARM":   "ARM",
-    "QQQ":   "나스닥100 ETF",
+    "MSTR":  "마이크로스트래티지",
+    "PYPL":  "페이팔",
+    "SQ":    "블록(스퀘어)",
+    # 은행 · 금융
+    "JPM":   "JP모건",
+    "BAC":   "뱅크오브아메리카",
+    "WFC":   "웰스파고",
+    "GS":    "골드만삭스",
+    # 헬스 · 바이오
+    "LLY":   "일라이릴리",
+    "NVO":   "노보노디스크",
+    "PFE":   "화이자",
+    "MRNA":  "모더나",
+    # 소비재 · 미디어 · 기타 핵심
+    "DIS":   "디즈니",
+    "NKE":   "나이키",
+    "WMT":   "월마트",
+    "RBLX":  "로블록스",
+    "UBER":  "우버",
+    # 인기 ETF (시장 자금 흐름 지표)
     "SPY":   "S&P500 ETF",
+    "QQQ":   "나스닥100 ETF",
+    "DIA":   "다우 ETF",
+    "IWM":   "러셀2000 ETF",
+    "VOO":   "VOO S&P500",
+    "TLT":   "장기국채 ETF",
+    "ARKK":  "아크 혁신 ETF",
+    "SOXL":  "반도체 3x ETF",
+    "XLF":   "금융 섹터 ETF",
+    "XLE":   "에너지 섹터 ETF",
 }
 
 
@@ -222,26 +261,45 @@ def fetch_us_market_data() -> USMarketSnapshot:
 def fetch_us_volume_top(n: int = 10) -> list[dict]:
     """
     yfinance 후보군에서 거래량 상위 N 종목 반환.
+    풀이 50종목 정도면 직렬 호출 시 1~2분 소요 → ThreadPool로 병렬화.
 
     Returns:
         [{ticker, name_kr, volume, chg_pct}, ...] — 거래량 내림차순
     """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     results: list[dict] = []
-    for ticker, name_kr in _VOLUME_POOL.items():
+
+    def _one(item: tuple[str, str]) -> dict | None:
+        ticker, name_kr = item
         try:
-            price, chg, volume = _fast_quote(ticker)
+            # 재시도 횟수 줄여 빠른 폴백 (volume_top은 보조 정보)
+            t = yf.Ticker(ticker)
+            info = t.fast_info
+            price = float(info.last_price or 0)
+            prev_close = float(info.previous_close or price)
+            chg_pct = ((price - prev_close) / prev_close * 100) if prev_close else 0.0
+            volume = int(info.last_volume or 0)
             if volume <= 0:
-                continue
-            results.append({
+                return None
+            return {
                 "ticker":  ticker,
                 "name_kr": name_kr,
                 "volume":  volume,
-                "chg_pct": chg,
-                "close":   price,
-            })
+                "chg_pct": round(chg_pct, 3),
+                "close":   round(price, 4),
+            }
         except Exception as e:
             logger.debug(f"volume_top 조회 실패 [{ticker}]: {e}")
-            continue
+            return None
+
+    # 동시 8요청 (Yahoo도 IP 단위 throttle이 있으니 너무 크게 잡지 않음)
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        futures = [ex.submit(_one, kv) for kv in _VOLUME_POOL.items()]
+        for f in as_completed(futures):
+            r = f.result()
+            if r:
+                results.append(r)
 
     results.sort(key=lambda x: x["volume"], reverse=True)
     return results[:n]

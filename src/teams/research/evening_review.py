@@ -352,22 +352,32 @@ def _ask_claude(
             f"  {t['rank']}. {t['name']}({t['ticker']}) {chg_s} {delta_s}"
         )
 
+    def _fmt(v, spec, default="-"):
+        try:
+            return format(float(v), spec)
+        except (TypeError, ValueError):
+            return default
+
     mkt_lines = []
     if market_row:
         mkt_lines.append(
-            f"market_score={market_row.get('market_score'):.2f} dir={market_row.get('market_direction')}"
+            f"market_score={_fmt(market_row.get('market_score'), '.2f')} "
+            f"dir={market_row.get('market_direction') or '-'}"
         )
         try:
             ms = json.loads(market_row.get("summary") or "{}")
             if isinstance(ms, dict) and ms.get("kospi") is not None:
-                mkt_lines.append(f"KOSPI {ms['kospi']:+.2f}% KOSDAQ {ms.get('kosdaq', 0):+.2f}%")
+                mkt_lines.append(
+                    f"KOSPI {_fmt(ms.get('kospi'), '+.2f')}% "
+                    f"KOSDAQ {_fmt(ms.get('kosdaq', 0), '+.2f')}%"
+                )
         except Exception:
             pass
     if kosdaq_row:
         mkt_lines.append(
-            f"KOSDAQ 종가={kosdaq_row.get('close'):,.2f} | "
-            f"외인={kosdaq_row.get('foreign_net_buy'):+.0f}억 | "
-            f"기관={kosdaq_row.get('inst_net_buy'):+.0f}억"
+            f"KOSDAQ 종가={_fmt(kosdaq_row.get('close'), ',.2f')} | "
+            f"외인={_fmt(kosdaq_row.get('foreign_net_buy'), '+.0f')}억 | "
+            f"기관={_fmt(kosdaq_row.get('inst_net_buy'), '+.0f')}억"
         )
     mkt_block = "\n".join(f"  {x}" for x in mkt_lines) or "  (데이터 없음)"
 
@@ -556,6 +566,12 @@ def _format_message(
     lines.append("")
 
     # 시장 요약
+    def _fmt(v, spec, default="-"):
+        try:
+            return format(float(v), spec)
+        except (TypeError, ValueError):
+            return default
+
     if market_row or kosdaq_row:
         lines.append("📊 <b>오늘 시장</b>")
         if market_row:
@@ -563,19 +579,19 @@ def _format_message(
                 ms = json.loads(market_row.get("summary") or "{}")
                 if isinstance(ms, dict) and ms.get("kospi") is not None:
                     lines.append(
-                        f"  KOSPI <b>{ms['kospi']:+.2f}%</b> | "
-                        f"KOSDAQ <b>{ms.get('kosdaq', 0):+.2f}%</b>"
+                        f"  KOSPI <b>{_fmt(ms.get('kospi'), '+.2f')}%</b> | "
+                        f"KOSDAQ <b>{_fmt(ms.get('kosdaq', 0), '+.2f')}%</b>"
                     )
             except Exception:
                 pass
             lines.append(
-                f"  방향: {market_row.get('market_direction')} "
-                f"(score {market_row.get('market_score'):.2f})"
+                f"  방향: {market_row.get('market_direction') or '-'} "
+                f"(score {_fmt(market_row.get('market_score'), '.2f')})"
             )
         if kosdaq_row:
             lines.append(
-                f"  KOSDAQ 외인 {kosdaq_row.get('foreign_net_buy'):+.0f}억 | "
-                f"기관 {kosdaq_row.get('inst_net_buy'):+.0f}억"
+                f"  KOSDAQ 외인 {_fmt(kosdaq_row.get('foreign_net_buy'), '+.0f')}억 | "
+                f"기관 {_fmt(kosdaq_row.get('inst_net_buy'), '+.0f')}억"
             )
         lines.append("")
 
