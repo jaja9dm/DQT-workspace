@@ -14,12 +14,13 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from urllib.request import Request, urlopen
 
 import FinanceDataReader as fdr
 import pandas as pd
 
+from src.infra.database import execute
 from src.infra.kis_gateway import KISGateway, RequestPriority
 from src.utils.retry import retry_call, with_retry
 from src.utils.logger import get_logger
@@ -177,13 +178,18 @@ def _fetch_investor_flow(market: str) -> InvestorFlow:
     """
     KIS API로 투자자별 매매동향 조회.
     market: 'KOSPI' | 'KOSDAQ'
-    FHKST01010900은 KOSPI(J)만 지원 — KOSDAQ 호출 시 INVALID FID 에러 발생
-    """
-    if market != "KOSPI":
-        return InvestorFlow()
 
+    KOSPI: FHKST01010900 + FID_COND_MRKT_DIV_CODE=J
+    KOSDAQ: FHKST01010900 + FID_COND_MRKT_DIV_CODE=Q  (어시스턴트 모델 전환 2026-05-12 추가)
+            KIS 일부 구현에서 INVALID FID 응답 시 빈 InvestorFlow 반환.
+    """
     gw = KISGateway()
-    mktdiv = "J"
+    if market == "KOSPI":
+        mktdiv = "J"
+    elif market == "KOSDAQ":
+        mktdiv = "Q"
+    else:
+        return InvestorFlow()
 
     try:
         resp = gw.request(
@@ -337,3 +343,69 @@ def collect() -> DomesticMarketData:
         f"기관 {data.kospi_flow.institutional_net:+.0f}억"
     )
     return data
+
+
+# ── KOSDAQ 시황 별도 적재 ─────────────────────────────────────
+# 어시스턴트 모델 전환 (2026-05-12) — kosdaq_condition 테이블에 일일 적재.
+# market_condition(KOSPI 중심)과 별도 트랙으로 운영.
+
+def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
+    """
+    KOSDAQ 시황 데이터를 kosdaq_condition 테이블에 INSERT OR REPLACE.
+
+    Args:
+        data: 이미 collect() 결과가 있으면 재사용. None이면 자체 호출.
+
+    Returns:
+        저장된 row dict.
+    """
+    if data is None:
+        data = collect()
+
+    today = str(date.today())
+
+    # KOSDAQ 거래대금: 현재 KIS inquire-index-price에서 직접 제공 안 됨.
+    # KIS volume(거래량 — 만주 단위) 기반 추정 → 정밀치는 daily_eod_loader(Phase4)에서 보강.
+    volume_man = round(data.kosdaq.volume / 10000.0, 1) if data.kosdaq.volume else 0.0
+
+    # 거래대금: 종가 × 거래량 추정 (억원 단위). 정확한 값은 Phase 4에서 KRX/PYKRX로 대체.
+    trading_value_bn = 0.0
+    if data.kosdaq.current > 0 and data.kosdaq.volume > 0:
+        # 지수가격 × 지수거래량은 의미 없으므로 0 처리 — Phase 4에서 KRX 거래대금으로 대체
+        trading_value_bn = 0.0
+
+    row = {
+        "date":             today,
+        "close":            data.kosdaq.current,
+        "chg_pct":          data.kosdaq.change_pct,
+        "volume":           volume_man,
+        "trading_value":    trading_value_bn,
+        "foreign_net_buy":  data.kosdaq_flow.foreign_net,
+        "inst_net_buy":     data.kosdaq_flow.institutional_net,
+        "indiv_net_buy":    data.kosdaq_flow.individual_net,
+        "program_net_buy":  0.0,  # KIS API 직접 미지원 — Phase 4에서 보강
+    }
+
+    try:
+        execute(
+            """
+            INSERT OR REPLACE INTO kosdaq_condition (
+                date, close, chg_pct, volume, trading_value,
+                foreign_net_buy, inst_net_buy, indiv_net_buy, program_net_buy
+            ) VALUES (
+                :date, :close, :chg_pct, :volume, :trading_value,
+                :foreign_net_buy, :inst_net_buy, :indiv_net_buy, :program_net_buy
+            )
+            """,
+            tuple(row.values()),
+        )
+        logger.info(
+            f"kosdaq_condition 저장 — {today} | "
+            f"종가 {row['close']:,.2f} ({row['chg_pct']:+.2f}%) | "
+            f"외인 {row['foreign_net_buy']:+.0f}억 | "
+            f"기관 {row['inst_net_buy']:+.0f}억"
+        )
+    except Exception as e:
+        logger.error(f"kosdaq_condition 저장 실패: {e}", exc_info=True)
+
+    return row

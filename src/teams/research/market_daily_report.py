@@ -1,4 +1,7 @@
-"""
+"""⚠️ DEPRECATED (2026-05-12) — 자동 매매 모델에서 사용. 어시스턴트 모델 전환으로 호출되지 않음.
+대체: src/teams/research/daily_eod_loader.py (Phase 4).
+
+[원본 docstring]
 market_daily_report.py — 일일 시장 저널 작성 (장 마감 직후 데이터 축적)
 
 실행 시각: 평일 15:35 (장 마감 직후 — 매매팀/시황팀 데이터 fresh)

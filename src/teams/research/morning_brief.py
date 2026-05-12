@@ -1,0 +1,642 @@
+"""
+morning_brief.py — 아침 시황 브리핑 (08:45 발송)
+
+어시스턴트 모델 전환 (2026-05-12) — Phase 5.
+
+역할:
+  매일 08:45 (한국 시각) 텔레그램으로 디테일한 아침 브리핑 발송 + DB 저장.
+
+브리핑 구성:
+  1. 오버나이트 미국 마감 (S&P/NASDAQ/Dow + 환율·금리·VIX + 주요 종목)
+  2. 어제 한국 시장 (KOSPI/KOSDAQ/외인·기관/주도 섹터)
+  3. 누적 학습 적용 — active learnings 컨텍스트 주입
+  4. 섹터 4분류 (HOT / WATCH / COLD / AVOID)
+  5. 추천 종목 5개 + 회피 종목 5개 (Claude 분석)
+  6. 전략 톤 + 한 줄 요약
+
+핵심 함수:
+  run_morning_brief() -> dict
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import date, datetime, timedelta
+
+import anthropic
+
+from src.config.settings import settings
+from src.infra.database import execute, fetch_all, fetch_one
+from src.infra.us_market import get_latest_us_snapshot
+from src.utils.logger import get_logger
+from src.utils.notifier import check_claude_error, notify
+
+logger = get_logger(__name__)
+
+_client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
+
+# 거래일 판단 (scheduler.is_trading_day는 import 시점에 의존성 충돌 가능 → 가벼운 로컬 체크)
+try:
+    from src.scheduler.scheduler import is_trading_day
+except Exception:
+    def is_trading_day(dt: datetime | None = None) -> bool:
+        if dt is None:
+            dt = datetime.now()
+        return dt.weekday() < 5
+
+
+# ── 시스템 프롬프트 (정적 — cache_control ephemeral) ───────────
+
+_SYSTEM_PROMPT = """당신은 한국 주식시장에서 단타·스윙 매매를 보조하는 AI 어시스턴트입니다.
+사용자는 사람이 직접 매매하며, 당신은 매일 아침 시장 컨텍스트를 정리해 추천 종목과 회피 종목을 제시합니다.
+
+## 입력 데이터
+- 오버나이트 미국 마감 (S&P/NASDAQ/Dow, VIX, US10Y, 주요 ETF, 핵심 종목 8개)
+- 어제 한국 시장 (KOSPI/KOSDAQ 종가·등락률, 외인·기관 순매수)
+- 최근 5~10일 거래대금 TOP 100 추이
+- 어제 저녁 회고 (lessons + market_regime)
+- 활성 누적 학습 (status='active' AND confidence>=0.5)
+
+## 결정 원칙
+1. 활성 누적 학습을 반드시 컨텍스트로 사용 — lessons_applied에 사용한 lesson ID 명시
+2. NASDAQ 강세 → 반도체/AI 우선 / NASDAQ 약세 → 방어주·내수
+3. VIX 급등 (+15%↑) → 추천 사이즈 줄이고 strategy_tone "보수적"
+4. 어제 외인 -2000억↓ 4일 연속이면 KOSPI 약세 패턴 — 회피 우선
+5. RSI 80↑ 종목 추천 금지 (단, 누적 학습에서 명시적으로 허용한 경우 예외)
+6. 갭업 +5%↑ 추격 매수 금지 — 추천 entry가는 보수적 진입가
+7. picks 5개·avoids 5개 권장. 데이터 부족 시 줄여도 됨.
+8. confidence: 1(낮음) ~ 5(매우 높음). 외인+기관 동시 매수 + RSI 60~70 + 누적 학습 일치 시 5.
+
+## 응답 형식 (STRICT JSON만 — 코드 펜스/주석/설명문/trailing comma 금지)
+{
+  "market_regime": "strong|sideways|weak|reversal|volatile",
+  "macro_view": "<오늘 한국 시장 시각 3~5문장 한국어>",
+  "strategy_tone": "<공격적|보수적|관망|선별적>",
+  "headline": "<한 줄 요약 — 30자 이내>",
+  "sectors": {
+    "hot":   [{"sector": "<업종명>", "score": 0.0~1.0, "reason": "<짧은 이유>"}, ...],
+    "watch": [{"sector": "...", "score": ..., "reason": "..."}, ...],
+    "cold":  [{"sector": "...", "score": ..., "reason": "..."}, ...],
+    "avoid": [{"sector": "...", "score": ..., "reason": "..."}, ...]
+  },
+  "picks": [
+    {
+      "rank": 1,
+      "ticker": "<6자리>",
+      "name": "<종목명>",
+      "reason": "<선정 이유 1~2줄>",
+      "confidence": 1~5,
+      "entry": <숫자 — 권장 진입가>,
+      "stop_loss_pct": <음수 — 손절 %>,
+      "take_profit_pct": <양수 — 익절 %>,
+      "themes": ["<테마1>", ...],
+      "risk": "<리스크 요인 1줄>"
+    }
+  ],
+  "avoids": [
+    {"ticker": "...", "name": "...", "reason": "..."}
+  ],
+  "lessons_applied": [<learning id>, ...]
+}
+
+규칙:
+- 첫 글자 `{` 마지막 글자 `}` — 그 외 문자 없음.
+- picks 0~5, avoids 0~5. ticker는 6자리 문자열.
+- sectors.hot/watch/cold/avoid 각 0~5개.
+- lessons_applied는 정수 ID 배열."""
+
+
+_MAX_PICKS = 5
+_MAX_AVOIDS = 5
+_TELEGRAM_LIMIT = 4000      # 안전 마진
+
+
+# ── JSON 추출 ────────────────────────────────────────────────
+
+def _extract_json(raw: str) -> str:
+    text = raw.strip()
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)\s*```", text)
+    if m:
+        text = m.group(1)
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start: end + 1]
+    text = re.sub(r",(\s*[\]}])", r"\1", text)
+    return text
+
+
+# ── 데이터 수집 ──────────────────────────────────────────────
+
+def _fetch_recent_top_value(days: int = 7) -> list[dict]:
+    """최근 N거래일 daily_top_value 시계열."""
+    rows = fetch_all(
+        """
+        SELECT date, ticker, name, sector, rank, chg_pct, trading_value
+        FROM daily_top_value
+        WHERE date >= date('now', '-' || ? || ' days', 'localtime')
+        ORDER BY date DESC, rank ASC
+        """,
+        (days * 2,),     # 주말 등 비거래일 포함 여유
+    )
+    return [dict(r) for r in rows] if rows else []
+
+
+def _fetch_last_kosdaq() -> dict | None:
+    row = fetch_one(
+        "SELECT * FROM kosdaq_condition ORDER BY date DESC LIMIT 1"
+    )
+    return dict(row) if row else None
+
+
+def _fetch_last_market_condition() -> dict | None:
+    row = fetch_one(
+        "SELECT * FROM market_condition ORDER BY created_at DESC LIMIT 1"
+    )
+    return dict(row) if row else None
+
+
+def _fetch_yesterday_review() -> dict | None:
+    row = fetch_one(
+        "SELECT * FROM evening_review ORDER BY date DESC LIMIT 1"
+    )
+    return dict(row) if row else None
+
+
+def _fetch_active_learnings(limit: int = 20) -> list[dict]:
+    rows = fetch_all(
+        """
+        SELECT id, category, content, confidence, times_validated, times_failed
+        FROM learnings
+        WHERE status = 'active' AND confidence >= 0.5
+        ORDER BY confidence DESC, times_validated DESC
+        LIMIT ?
+        """,
+        (limit,),
+    )
+    return [dict(r) for r in rows] if rows else []
+
+
+def _aggregate_recent_tickers(rows: list[dict], days: int = 5) -> list[dict]:
+    """최근 N일 거래대금 TOP 100 등장 빈도 → 누적 수급 강세 후보."""
+    cutoff = (date.today() - timedelta(days=days * 2)).isoformat()
+    counter: dict[str, dict] = {}
+    for r in rows:
+        if r["date"] < cutoff:
+            continue
+        tk = r["ticker"]
+        if not tk:
+            continue
+        slot = counter.setdefault(tk, {
+            "ticker": tk,
+            "name":   r["name"] or "",
+            "sector": r["sector"] or "",
+            "appearances": 0,
+            "avg_chg": 0.0,
+            "avg_value": 0.0,
+        })
+        slot["appearances"] += 1
+        slot["avg_chg"] += float(r["chg_pct"] or 0)
+        slot["avg_value"] += float(r["trading_value"] or 0)
+
+    out = []
+    for s in counter.values():
+        n = max(1, s["appearances"])
+        out.append({
+            "ticker":      s["ticker"],
+            "name":        s["name"],
+            "sector":      s["sector"],
+            "appearances": s["appearances"],
+            "avg_chg_pct": round(s["avg_chg"] / n, 2),
+            "avg_value_eok": round(s["avg_value"] / n / 1e8, 0),
+        })
+    out.sort(key=lambda x: (-x["appearances"], -x["avg_value_eok"], -x["avg_chg_pct"]))
+    return out[:30]
+
+
+# ── Claude 호출 ──────────────────────────────────────────────
+
+def _ask_claude(
+    *,
+    us_snap: dict | None,
+    kosdaq_row: dict | None,
+    market_row: dict | None,
+    recent_top: list[dict],
+    cumulative: list[dict],
+    yesterday_rev: dict | None,
+    learnings: list[dict],
+) -> dict:
+    """Claude(main) 호출 → 브리핑 JSON."""
+
+    # 1) 미국 마감 요약
+    if us_snap:
+        try:
+            key_stocks = json.loads(us_snap.get("key_stocks") or "{}")
+        except Exception:
+            key_stocks = {}
+        ks_lines = []
+        for tk, info in (key_stocks or {}).items():
+            if not isinstance(info, dict):
+                continue
+            ks_lines.append(
+                f"  - {info.get('name_kr', tk)}({tk}): "
+                f"{info.get('close', 0):.2f} ({info.get('chg_pct', 0):+.2f}%)"
+            )
+        us_block = (
+            f"날짜: {us_snap.get('date')}\n"
+            f"S&P500: {us_snap.get('sp500_close', 0):,.2f} ({us_snap.get('sp500_chg_pct', 0):+.2f}%)\n"
+            f"NASDAQ: {us_snap.get('nasdaq_close', 0):,.2f} ({us_snap.get('nasdaq_chg_pct', 0):+.2f}%)\n"
+            f"Dow:    {us_snap.get('dow_close', 0):,.2f} ({us_snap.get('dow_chg_pct', 0):+.2f}%)\n"
+            f"VIX:    {us_snap.get('vix', 0):.2f} (변화 {us_snap.get('vix_chg', 0):+.2f}pt)\n"
+            f"US10Y:  {us_snap.get('us10y_yield', 0):.3f}%\n"
+            f"SOXX:   {us_snap.get('soxx', 0):.2f} ({us_snap.get('soxx_chg_pct', 0):+.2f}%)\n"
+            f"LIT:    {us_snap.get('lit', 0):.2f} ({us_snap.get('lit_chg_pct', 0):+.2f}%)\n"
+            f"주요 종목:\n" + ("\n".join(ks_lines) if ks_lines else "  (없음)")
+        )
+    else:
+        us_block = "(데이터 없음)"
+
+    # 2) 어제 한국 시장
+    kr_lines = []
+    if market_row:
+        kr_lines.append(f"market_score={market_row.get('market_score'):.2f}, dir={market_row.get('market_direction')}")
+        if market_row.get("summary"):
+            try:
+                ms = json.loads(market_row.get("summary") or "{}")
+                if isinstance(ms, dict):
+                    kospi = ms.get("kospi")
+                    kosdaq = ms.get("kosdaq")
+                    if kospi is not None:
+                        kr_lines.append(f"KOSPI {kospi:+.2f}%, KOSDAQ {kosdaq:+.2f}%")
+                    if ms.get("analysis"):
+                        kr_lines.append(f"요약: {ms['analysis'][:200]}")
+            except Exception:
+                kr_lines.append(f"요약: {str(market_row.get('summary'))[:200]}")
+    if kosdaq_row:
+        kr_lines.append(
+            f"KOSDAQ 종합: 종가={kosdaq_row.get('close'):,.2f} "
+            f"등락={kosdaq_row.get('chg_pct'):+.2f}% | "
+            f"거래대금={kosdaq_row.get('trading_value'):,.0f}억 | "
+            f"외인={kosdaq_row.get('foreign_net_buy'):+.0f}억 | "
+            f"기관={kosdaq_row.get('inst_net_buy'):+.0f}억"
+        )
+    kr_block = "\n".join(kr_lines) if kr_lines else "(데이터 없음)"
+
+    # 3) 최근 일자별 시장 흐름 (TOP10 거래대금)
+    by_date: dict[str, list[dict]] = {}
+    for r in recent_top:
+        by_date.setdefault(r["date"], []).append(r)
+    daily_lines = []
+    for d in sorted(by_date.keys(), reverse=True)[:5]:
+        rows = by_date[d][:10]
+        names = ", ".join(f"{x['name'] or x['ticker']}({x['chg_pct']:+.1f}%)" for x in rows)
+        daily_lines.append(f"[{d}] TOP10: {names}")
+    daily_block = "\n".join(daily_lines) if daily_lines else "(데이터 없음)"
+
+    # 4) 누적 등장 종목 (수급 시계열)
+    cum_lines = []
+    for i, c in enumerate(cumulative[:15], 1):
+        cum_lines.append(
+            f"{i}. {c['name'] or c['ticker']}({c['ticker']}) "
+            f"등장={c['appearances']}회 평균등락={c['avg_chg_pct']:+.2f}% "
+            f"평균거래대금={c['avg_value_eok']:,.0f}억 섹터={c['sector'] or '-'}"
+        )
+    cum_block = "\n".join(cum_lines) if cum_lines else "(데이터 없음)"
+
+    # 5) 어제 회고
+    if yesterday_rev:
+        rv_block = (
+            f"date={yesterday_rev.get('date')}, "
+            f"accuracy={yesterday_rev.get('accuracy_pct')}%, "
+            f"headline={yesterday_rev.get('headline')}\n"
+            f"내일 전망: {yesterday_rev.get('tomorrow_outlook') or '-'}"
+        )
+    else:
+        rv_block = "(없음 — 첫 운영)"
+
+    # 6) 활성 학습
+    if learnings:
+        lr_block = "\n".join(
+            f"  #{l['id']} [{l['category']}, conf={l['confidence']:.2f}] {l['content']}"
+            for l in learnings
+        )
+    else:
+        lr_block = "(아직 학습 없음)"
+
+    user_content = f"""## 오버나이트 미국 마감
+{us_block}
+
+## 어제 한국 시장
+{kr_block}
+
+## 최근 5거래일 거래대금 TOP10 흐름
+{daily_block}
+
+## 최근 5일 누적 등장 종목 (수급 시계열)
+{cum_block}
+
+## 어제 저녁 회고
+{rv_block}
+
+## 활성 누적 학습 (반드시 적용·참조)
+{lr_block}
+
+시스템 프롬프트 규칙에 따라 STRICT JSON으로만 응답하세요."""
+
+    try:
+        response = _client.messages.create(
+            model=settings.CLAUDE_MODEL_MAIN,
+            max_tokens=3500,
+            temperature=0,
+            timeout=60.0,
+            system=[
+                {
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            messages=[{"role": "user", "content": user_content}],
+        )
+        raw = response.content[0].text.strip()
+        cleaned = _extract_json(raw)
+        parsed = json.loads(cleaned)
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+    except Exception as e:
+        logger.error(f"[morning_brief] Claude 호출 실패: {type(e).__name__}: {e}")
+        check_claude_error(e, "morning_brief")
+        return {}
+
+
+# ── 메시지 작성 ──────────────────────────────────────────────
+
+def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
+    """텔레그램 HTML 메시지 작성 (4096자 이내)."""
+    regime_emoji = {
+        "strong":   "📈",
+        "sideways": "↔️",
+        "weak":     "📉",
+        "reversal": "🔄",
+        "volatile": "🌪",
+    }.get(brief.get("market_regime", "sideways"), "")
+
+    lines: list[str] = []
+    lines.append(f"🌅 <b>아침 시황 브리핑 — {today}</b>")
+    headline = brief.get("headline") or ""
+    if headline:
+        lines.append(f"💬 <i>{headline}</i>")
+    lines.append("")
+
+    # 오버나이트
+    if us_snap:
+        lines.append("🌃 <b>오버나이트 미국 마감</b>")
+        lines.append(
+            f"  S&amp;P500 <b>{us_snap.get('sp500_chg_pct', 0):+.2f}%</b> | "
+            f"NASDAQ <b>{us_snap.get('nasdaq_chg_pct', 0):+.2f}%</b> | "
+            f"Dow {us_snap.get('dow_chg_pct', 0):+.2f}%"
+        )
+        lines.append(
+            f"  VIX {us_snap.get('vix', 0):.1f} ({us_snap.get('vix_chg', 0):+.1f}pt) | "
+            f"US10Y {us_snap.get('us10y_yield', 0):.2f}%"
+        )
+        lines.append(
+            f"  SOXX {us_snap.get('soxx_chg_pct', 0):+.2f}% | "
+            f"LIT {us_snap.get('lit_chg_pct', 0):+.2f}%"
+        )
+        # 주요 종목 5개 (한글)
+        try:
+            ks = json.loads(us_snap.get("key_stocks") or "{}")
+        except Exception:
+            ks = {}
+        if ks:
+            top5 = list(ks.items())[:5]
+            ks_line = " · ".join(
+                f"{v.get('name_kr', k)} {v.get('chg_pct', 0):+.1f}%"
+                for k, v in top5 if isinstance(v, dict)
+            )
+            if ks_line:
+                lines.append(f"  {ks_line}")
+        lines.append("")
+
+    # 매크로/시장 시각
+    macro_view = brief.get("macro_view") or ""
+    if macro_view:
+        lines.append(f"{regime_emoji} <b>시황 분석</b>")
+        # 텔레그램 4096자 한도 — 시황은 600자로 컷
+        lines.append(f"  {macro_view[:600]}")
+        lines.append("")
+
+    # 섹터 4분류
+    sectors = brief.get("sectors") or {}
+    sect_keys = [("hot", "🔥 HOT"), ("watch", "👀 WATCH"),
+                 ("cold", "❄️ COLD"), ("avoid", "🚫 AVOID")]
+    has_sectors = any(sectors.get(k) for k, _ in sect_keys)
+    if has_sectors:
+        lines.append("📊 <b>섹터 분류</b>")
+        for k, label in sect_keys:
+            items = sectors.get(k) or []
+            if not items:
+                continue
+            names = " · ".join(
+                f"{(s.get('sector') or '-')}" for s in items[:5]
+            )
+            lines.append(f"  {label}: {names}")
+        lines.append("")
+
+    # 추천 종목 5개 (디테일)
+    picks = brief.get("picks") or []
+    if picks:
+        lines.append(f"⭐ <b>추천 종목 ({len(picks)})</b>")
+        for p in picks[:_MAX_PICKS]:
+            rk = p.get("rank") or "?"
+            tk = p.get("ticker") or ""
+            nm = p.get("name") or tk
+            conf = p.get("confidence") or 0
+            stars = "★" * int(conf) + "☆" * (5 - int(conf))
+            entry = p.get("entry")
+            sl = p.get("stop_loss_pct")
+            tp = p.get("take_profit_pct")
+            themes = p.get("themes") or []
+            risk = p.get("risk") or ""
+            reason = (p.get("reason") or "").replace("\n", " ")
+            lines.append(f"  <b>{rk}. {nm}({tk})</b>  {stars}")
+            if reason:
+                lines.append(f"     {reason[:200]}")
+            range_parts = []
+            if entry:
+                range_parts.append(f"진입 {int(entry):,}원")
+            if sl is not None:
+                range_parts.append(f"손절 {sl:+.1f}%")
+            if tp is not None:
+                range_parts.append(f"익절 {tp:+.1f}%")
+            if range_parts:
+                lines.append(f"     {' · '.join(range_parts)}")
+            if themes:
+                lines.append(f"     테마: {', '.join(themes[:4])}")
+            if risk:
+                lines.append(f"     ⚠️ {risk[:120]}")
+        lines.append("")
+
+    # 회피 종목 5개
+    avoids = brief.get("avoids") or []
+    if avoids:
+        lines.append(f"🚫 <b>회피 종목 ({len(avoids)})</b>")
+        for a in avoids[:_MAX_AVOIDS]:
+            tk = a.get("ticker") or ""
+            nm = a.get("name") or tk
+            reason = (a.get("reason") or "").replace("\n", " ")
+            lines.append(f"  • {nm}({tk}) — {reason[:120]}")
+        lines.append("")
+
+    # 누적 학습 적용
+    applied = brief.get("lessons_applied") or []
+    if applied:
+        lines.append(f"📚 적용 학습: {', '.join('#' + str(i) for i in applied[:10])}")
+
+    # 전략 톤
+    tone = brief.get("strategy_tone") or ""
+    if tone:
+        lines.append(f"🎯 전략 톤: <b>{tone}</b>")
+
+    # 컷
+    msg = "\n".join(lines)
+    if len(msg) > _TELEGRAM_LIMIT:
+        msg = msg[:_TELEGRAM_LIMIT] + "\n...[truncated]"
+    return msg
+
+
+# ── DB 저장 ──────────────────────────────────────────────────
+
+def _save_briefing(today: str, brief: dict, us_snap: dict | None,
+                   market_row: dict | None, full_message: str,
+                   sent: bool) -> None:
+    try:
+        sectors = brief.get("sectors") or {}
+        execute(
+            """
+            INSERT OR REPLACE INTO morning_briefing (
+                date, overnight_us, macro, kr_context,
+                market_regime, sectors_hot, sectors_watch, sectors_cold, sectors_avoid,
+                picks, avoids, lessons_applied, strategy_tone, headline,
+                full_message, sent_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                today,
+                json.dumps(us_snap, ensure_ascii=False, default=str) if us_snap else None,
+                json.dumps({"view": brief.get("macro_view", "")}, ensure_ascii=False),
+                json.dumps(market_row, ensure_ascii=False, default=str) if market_row else None,
+                brief.get("market_regime", ""),
+                json.dumps(sectors.get("hot") or [], ensure_ascii=False),
+                json.dumps(sectors.get("watch") or [], ensure_ascii=False),
+                json.dumps(sectors.get("cold") or [], ensure_ascii=False),
+                json.dumps(sectors.get("avoid") or [], ensure_ascii=False),
+                json.dumps(brief.get("picks") or [], ensure_ascii=False),
+                json.dumps(brief.get("avoids") or [], ensure_ascii=False),
+                json.dumps(brief.get("lessons_applied") or [], ensure_ascii=False),
+                brief.get("strategy_tone", ""),
+                brief.get("headline", ""),
+                full_message,
+                datetime.now().isoformat(timespec="seconds") if sent else None,
+            ),
+        )
+        # learnings.last_used 갱신
+        applied = brief.get("lessons_applied") or []
+        for lid in applied:
+            try:
+                execute(
+                    "UPDATE learnings SET last_used = ? WHERE id = ?",
+                    (today, int(lid)),
+                )
+            except Exception:
+                continue
+    except Exception as e:
+        logger.error(f"[morning_brief] morning_briefing 저장 오류: {e}", exc_info=True)
+
+
+# ── 메인 진입점 ───────────────────────────────────────────────
+
+def run_morning_brief() -> dict:
+    """오늘 아침 시황 분석 + 추천 5종 + 회피 5종. 텔레그램 발송 + DB 저장.
+
+    Returns:
+        {
+            "date": str,
+            "picks_count": int,
+            "avoids_count": int,
+            "sent": bool
+        }
+    """
+    today = date.today().isoformat()
+    if not is_trading_day(datetime.now()):
+        logger.info(f"[morning_brief] {today} 휴장일 — 스킵")
+        return {"date": today, "picks_count": 0, "avoids_count": 0, "sent": False}
+
+    logger.info(f"[morning_brief] 시작 — {today}")
+
+    # 데이터 수집
+    us_snap        = get_latest_us_snapshot()
+    market_row     = _fetch_last_market_condition()
+    kosdaq_row     = _fetch_last_kosdaq()
+    recent_top     = _fetch_recent_top_value(days=7)
+    cumulative     = _aggregate_recent_tickers(recent_top, days=5)
+    yesterday_rev  = _fetch_yesterday_review()
+    learnings      = _fetch_active_learnings(limit=20)
+
+    if not us_snap and not market_row and not recent_top:
+        msg = (
+            f"⚠️ <b>[아침 브리핑]</b> {today}\n"
+            f"데이터 부족 — us_market/market_condition/daily_top_value 모두 비어 있습니다.\n"
+            f"운영 초기에는 며칠간 데이터를 누적해야 정상 브리핑이 가능합니다."
+        )
+        notify(msg)
+        _save_briefing(today, {}, None, None, msg, sent=True)
+        return {"date": today, "picks_count": 0, "avoids_count": 0, "sent": True}
+
+    brief = _ask_claude(
+        us_snap=us_snap,
+        kosdaq_row=kosdaq_row,
+        market_row=market_row,
+        recent_top=recent_top,
+        cumulative=cumulative,
+        yesterday_rev=yesterday_rev,
+        learnings=learnings,
+    )
+
+    if not brief:
+        fallback = (
+            f"⚠️ <b>[아침 브리핑]</b> {today}\n"
+            f"Claude 분석 실패 — API 오류 또는 응답 파싱 실패\n"
+        )
+        if learnings:
+            fallback += "\n📚 <b>오늘 적용할 활성 학습</b>\n"
+            for l in learnings[:5]:
+                fallback += f"  • #{l['id']} [{l['category']}] {l['content'][:80]}\n"
+        sent = notify(fallback)
+        _save_briefing(today, {}, us_snap, market_row, fallback, sent)
+        return {"date": today, "picks_count": 0, "avoids_count": 0, "sent": sent}
+
+    # 메시지 작성 + 발송
+    msg = _format_message(today, brief, us_snap)
+    sent = notify(msg)
+    if not sent:
+        logger.warning("[morning_brief] 텔레그램 발송 실패 — DB 저장은 진행")
+
+    _save_briefing(today, brief, us_snap, market_row, msg, sent)
+
+    picks_n  = len(brief.get("picks") or [])
+    avoids_n = len(brief.get("avoids") or [])
+    logger.info(
+        f"[morning_brief] 완료 — picks={picks_n} avoids={avoids_n} sent={sent}"
+    )
+    return {"date": today, "picks_count": picks_n, "avoids_count": avoids_n, "sent": sent}
+
+
+# ── CLI ──────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    r = run_morning_brief()
+    print(r)

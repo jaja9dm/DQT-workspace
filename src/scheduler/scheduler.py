@@ -207,11 +207,18 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
         ), id="pre_market_setup", name="장 전 유니버스 재구성")
 
+        # ⚠️ DEPRECATED (2026-05-12) — 자동 매매 모델 비활성화로 morning_picker 호출 중단.
+        # 어시스턴트 모델 전환: 08:45 morning_brief.py로 대체 (Phase 5 적용 완료).
         # 08:50 — 아침 종목 최종 결정 (오버나이트 미국장 + 최근 7일 누적 트렌드)
         # evening_selector(어제 16:30)의 잠정 picks를 미국장 반영 후 갱신
-        s.add_job(self._run_morning_pick, CronTrigger(
-            day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
-        ), id="morning_pick", name="아침 시초가 종목 최종 결정")
+        # s.add_job(self._run_morning_pick, CronTrigger(
+        #     day_of_week="mon-fri", hour=8, minute=50, timezone="Asia/Seoul"
+        # ), id="morning_pick", name="아침 시초가 종목 최종 결정")
+
+        # 08:45 — 아침 시황 브리핑 (어시스턴트 모델 Phase 5)
+        s.add_job(self._run_morning_brief, CronTrigger(
+            day_of_week="mon-fri", hour=8, minute=45, timezone="Asia/Seoul"
+        ), id="morning_brief", name="아침 시황 브리핑")
 
         # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
         # 09:00에 _start_realtime_engines가 먼저 TradingEngine을 생성해야 하므로 1분 후 실행
@@ -234,11 +241,25 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
         ), id="stop_engines", name="실시간 엔진 정지")
 
+        # ⚠️ DEPRECATED (2026-05-12) — 자동 매매 모델 비활성화로 daily_journal 호출 중단.
+        # 어시스턴트 모델 전환: 15:35 daily_eod_loader.py로 대체 (Phase 4 적용 완료).
         # 15:35 — 일일 시장 저널 적재 (장 마감 직후, fresh 데이터)
         # 다음날 08:50 morning_picker가 최근 7일 시계열로 활용
-        s.add_job(self._run_daily_journal, CronTrigger(
+        # s.add_job(self._run_daily_journal, CronTrigger(
+        #     day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
+        # ), id="daily_journal", name="일일 시장 저널 적재")
+
+        # 15:35 — EOD 데이터 적재 (어시스턴트 모델 Phase 4)
+        # stop_engines(15:35)와 동일 분이지만 별개 잡 — APScheduler가 동시 실행
+        s.add_job(self._run_daily_eod_load, CronTrigger(
             day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
-        ), id="daily_journal", name="일일 시장 저널 적재")
+        ), id="daily_eod_load", name="EOD 데이터 적재")
+
+        # 15:40 — 저녁 회고 (어시스턴트 모델 Phase 6)
+        # daily_report(15:40)과 동일 분 — 별개 잡
+        s.add_job(self._run_evening_review, CronTrigger(
+            day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"
+        ), id="evening_review", name="저녁 회고 (어시스턴트)")
 
         # 장 마감 후 배치: 리포트팀
         s.add_job(self._run_report, CronTrigger(
@@ -250,20 +271,23 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Seoul"
         ), id="research_daily", name="연구소 일일 분석")
 
+        # ⚠️ DEPRECATED (2026-05-12) — 어시스턴트 모델로 대체. 코드 보존, 스케줄만 제거.
+        # 16:05 매매일지 / 16:15 일일 복기 / 16:25 파라미터 튜닝은
+        # 어시스턴트 모델의 evening_review(15:40)로 통합 대체됨.
         # 매매 일지 생성 — docs/trading_journal/journal.md (16:05)
-        s.add_job(self._run_trading_journal, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=5, timezone="Asia/Seoul"
-        ), id="trading_journal", name="매매 일지 생성")
+        # s.add_job(self._run_trading_journal, CronTrigger(
+        #     day_of_week="mon-fri", hour=16, minute=5, timezone="Asia/Seoul"
+        # ), id="trading_journal", name="매매 일지 생성")
 
         # 일일 복기 — 오늘 매매 분석 + 개선점 도출 + Telegram 리포트 (16:15)
-        s.add_job(self._run_daily_review, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=15, timezone="Asia/Seoul"
-        ), id="daily_review_debrief", name="일일 매매 복기")
+        # s.add_job(self._run_daily_review, CronTrigger(
+        #     day_of_week="mon-fri", hour=16, minute=15, timezone="Asia/Seoul"
+        # ), id="daily_review_debrief", name="일일 매매 복기")
 
         # 자동 파라미터 튜닝 — 복기 결과 기반 수치 자동 조정 (16:25)
-        s.add_job(self._run_param_tuning, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=25, timezone="Asia/Seoul"
-        ), id="param_tuning", name="자동 파라미터 튜닝")
+        # s.add_job(self._run_param_tuning, CronTrigger(
+        #     day_of_week="mon-fri", hour=16, minute=25, timezone="Asia/Seoul"
+        # ), id="param_tuning", name="자동 파라미터 튜닝")
 
         # 16:30 — 내일 매수 종목 저녁 선점 (방향 1 전략, auto_shutdown 전에 실행)
         s.add_job(self._run_evening_selection, CronTrigger(
@@ -551,6 +575,40 @@ class DQTScheduler:
             run_morning_pick()
         except Exception as e:
             logger.error(f"아침 선정 오류: {e}", exc_info=True)
+
+    # ──────────────────────────────────────────
+    # 어시스턴트 모델 콜백 (Phase 4~6)
+    # ──────────────────────────────────────────
+
+    def _run_morning_brief(self) -> None:
+        """08:45 — 아침 시황 브리핑."""
+        if not is_trading_day():
+            return
+        try:
+            from src.teams.research.morning_brief import run_morning_brief
+            run_morning_brief()
+        except Exception as e:
+            logger.error(f"아침 브리핑 오류: {e}", exc_info=True)
+
+    def _run_daily_eod_load(self) -> None:
+        """15:35 — EOD 데이터 적재 (TOP 100 + 미국 + KOSDAQ + 테마)."""
+        if not is_trading_day():
+            return
+        try:
+            from src.teams.research.daily_eod_loader import run_daily_eod_load
+            run_daily_eod_load()
+        except Exception as e:
+            logger.error(f"EOD 적재 오류: {e}", exc_info=True)
+
+    def _run_evening_review(self) -> None:
+        """15:40 — 저녁 회고 (오늘 결과 + 학습 도출)."""
+        if not is_trading_day():
+            return
+        try:
+            from src.teams.research.evening_review import run_evening_review
+            run_evening_review()
+        except Exception as e:
+            logger.error(f"저녁 회고 오류: {e}", exc_info=True)
 
     def _purge_sentiment_cache(self) -> None:
         """자정 — 감성 캐시 만료 정리."""

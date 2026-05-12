@@ -1,4 +1,7 @@
-"""
+"""⚠️ DEPRECATED (2026-05-12) — 자동 매매 모델에서 사용. 어시스턴트 모델 전환으로 호출되지 않음.
+대체: src/teams/research/evening_review.py (15:40 회고).
+
+[원본 docstring]
 evening_selector.py — 전일 저녁 내일 매수 후보 5종목 선정 (방향 1 전략)
 
 매일 장 마감 후 16:30에 실행.

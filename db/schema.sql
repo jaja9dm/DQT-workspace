@@ -430,3 +430,164 @@ CREATE TABLE IF NOT EXISTS daily_market_journal (
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS idx_daily_market_journal_date ON daily_market_journal(date DESC);
+
+-- ════════════════════════════════════════════════════════════════════
+-- 어시스턴트 모델 전환 (2026-05-12) — Phase 2 신규 테이블
+-- ════════════════════════════════════════════════════════════════════
+
+-- ① 일일 거래대금 TOP N 스냅샷 (매일 15:35 적재)
+CREATE TABLE IF NOT EXISTS daily_top_value (
+    date              DATE NOT NULL,
+    rank              INTEGER NOT NULL,
+    ticker            TEXT NOT NULL,
+    name              TEXT,
+    sector            TEXT,
+    -- 시세
+    open_price        REAL,
+    high_price        REAL,
+    low_price         REAL,
+    close_price       REAL,
+    prev_close        REAL,
+    chg_pct           REAL,
+    volume            INTEGER,
+    trading_value     REAL,
+    market_cap        REAL,
+    listed_shares     INTEGER,
+    high_52w          REAL,
+    low_52w           REAL,
+    per               REAL,
+    pbr               REAL,
+    eps               REAL,
+    bps               REAL,
+    -- 수급
+    indiv_net_buy     REAL,
+    foreign_net_buy   REAL,
+    foreign_hold_pct  REAL,
+    inst_net_buy      REAL,
+    program_net_buy   REAL,
+    margin_balance    REAL,
+    -- 공매도
+    short_volume      INTEGER,
+    short_value       REAL,
+    short_ratio       REAL,
+    -- 기술지표 (분봉/일봉 기반, 시스템 자체 계산)
+    rsi_14            REAL,
+    macd_signal       TEXT,  -- 'bull' | 'bear' | 'neutral'
+    atr_pct           REAL,
+    bb_width_ratio    REAL,
+    -- 메타
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (date, ticker)
+);
+CREATE INDEX IF NOT EXISTS idx_daily_top_value_date   ON daily_top_value(date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_top_value_ticker ON daily_top_value(ticker, date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_top_value_sector ON daily_top_value(sector, date DESC);
+
+-- ② 종목 테마 태깅
+CREATE TABLE IF NOT EXISTS ticker_themes (
+    ticker      TEXT NOT NULL,
+    theme       TEXT NOT NULL,
+    weight      REAL DEFAULT 1.0,
+    source      TEXT NOT NULL,  -- 'krx' | 'news' | 'manual' | 'naver'
+    updated_at  DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (ticker, theme, source)
+);
+CREATE INDEX IF NOT EXISTS idx_ticker_themes_theme ON ticker_themes(theme);
+
+-- ③ 미국 시장 일일 스냅샷
+CREATE TABLE IF NOT EXISTS us_market_daily (
+    date              DATE PRIMARY KEY,           -- 한국시간 기준 (전일 미국장 마감)
+    sp500_close       REAL,
+    sp500_chg_pct     REAL,
+    nasdaq_close      REAL,
+    nasdaq_chg_pct    REAL,
+    dow_close         REAL,
+    dow_chg_pct       REAL,
+    vix               REAL,
+    vix_chg           REAL,
+    us10y_yield       REAL,
+    -- 주요 ETF
+    soxx              REAL,  -- 반도체
+    soxx_chg_pct      REAL,
+    lit               REAL,  -- 리튬/2차전지
+    lit_chg_pct       REAL,
+    -- 거래량 상위 (JSON: [{ticker, name_kr, volume, chg_pct},...])
+    top_volume_tickers TEXT,
+    -- 주요 종목 (NVDA, TSM, AAPL, MSFT, GOOGL, TSLA, AMD, META)
+    key_stocks         TEXT, -- JSON
+    created_at         DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ④ 아침 브리핑 (08:45 발송)
+CREATE TABLE IF NOT EXISTS morning_briefing (
+    date            DATE PRIMARY KEY,
+    overnight_us    TEXT,  -- JSON: us_market_daily 요약
+    macro           TEXT,  -- JSON: 환율/금리/유가
+    kr_context      TEXT,  -- JSON: 어제 KOSPI/KOSDAQ + 외인/기관 수급
+    market_regime   TEXT,  -- 'strong'|'sideways'|'weak'|'reversal'|'volatile'
+    sectors_hot     TEXT,  -- JSON: [{sector, score, reason}]
+    sectors_watch   TEXT,  -- JSON
+    sectors_cold    TEXT,  -- JSON
+    sectors_avoid   TEXT,  -- JSON
+    picks           TEXT,  -- JSON: [{rank, ticker, name, reason, confidence, entry, stop_loss, take_profit, themes, risk}]
+    avoids          TEXT,  -- JSON: [{ticker, name, reason}]
+    lessons_applied TEXT,  -- JSON: 적용된 learnings ID 리스트
+    strategy_tone   TEXT,  -- 오늘 전략 톤 텍스트
+    headline        TEXT,  -- 한 줄 요약
+    full_message    TEXT,  -- 텔레그램으로 보낸 전체 메시지 원문
+    sent_at         DATETIME
+);
+
+-- ⑤ 저녁 회고 (15:40 발송)
+CREATE TABLE IF NOT EXISTS evening_review (
+    date              DATE PRIMARY KEY,
+    market_summary    TEXT,  -- JSON: KOSPI/KOSDAQ 종가/거래대금/수급
+    sectors_strong    TEXT,  -- JSON: 오늘 강세 섹터 TOP 5
+    sectors_weak      TEXT,  -- JSON: 오늘 약세 섹터 TOP 5
+    top10_volume      TEXT,  -- JSON: 거래대금 TOP 10 + 어제 대비 순위 변화
+    picks_result      TEXT,  -- JSON: 아침 추천 결과 [{ticker, predicted, actual, hit/miss}]
+    avoids_result     TEXT,  -- JSON: 회피 종목 결과
+    accuracy_pct      REAL,  -- 적중률
+    accuracy_avoid_pct REAL, -- 회피 적중률
+    new_lessons       TEXT,  -- JSON: 오늘 도출 새 교훈
+    lessons_validated TEXT,  -- JSON: 검증된 기존 교훈 ID
+    lessons_failed    TEXT,  -- JSON: 실패한 기존 교훈 ID
+    tomorrow_outlook  TEXT,  -- 내일 전망
+    headline          TEXT,  -- 한 줄 요약
+    full_message      TEXT,  -- 텔레그램 메시지 원문
+    sent_at           DATETIME,
+    FOREIGN KEY (date) REFERENCES morning_briefing(date)
+);
+
+-- ⑥ 누적 학습 (자기 개선 핵심)
+CREATE TABLE IF NOT EXISTS learnings (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    discovered_at     DATE NOT NULL,
+    category          TEXT NOT NULL,  -- 'pattern' | 'sector' | 'macro' | 'avoid' | 'entry_timing' | 'risk'
+    content           TEXT NOT NULL,
+    evidence          TEXT,  -- JSON: [{date, observation, outcome}]
+    confidence        REAL DEFAULT 0.5,  -- 0.0 ~ 1.0
+    times_validated   INTEGER DEFAULT 0,
+    times_failed      INTEGER DEFAULT 0,
+    last_used         DATE,
+    last_validated    DATE,
+    status            TEXT DEFAULT 'active',  -- 'active' | 'deprecated' | 'experimental'
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_learnings_category ON learnings(category, status);
+CREATE INDEX IF NOT EXISTS idx_learnings_confidence ON learnings(confidence DESC, status);
+
+-- ⑦ KOSDAQ 시황 보강 (market_condition은 KOSPI 중심) — 별도 테이블로 분리
+CREATE TABLE IF NOT EXISTS kosdaq_condition (
+    date              DATE PRIMARY KEY,
+    close             REAL,
+    chg_pct           REAL,
+    volume            REAL,        -- 거래량 (만주)
+    trading_value     REAL,        -- 거래대금 (억원)
+    foreign_net_buy   REAL,
+    inst_net_buy      REAL,
+    indiv_net_buy     REAL,
+    program_net_buy   REAL,
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+);
