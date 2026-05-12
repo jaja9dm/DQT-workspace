@@ -385,21 +385,24 @@ class DQTScheduler:
                 self._domestic_market = DomesticMarketEngine()
                 self._domestic_market.start(morning_summary=True)
 
+            # 어시스턴트 모드 (2026-05-12) — 매매 안 하므로 risk/position_monitor/intraday_macd 모두 비활성화.
+            # 데이터 수집용 domestic_stock만 가동 (hot_list 적재).
             self._domestic_stock = DomesticStockEngine()
-            self._risk = RiskEngine()
-            self._position_monitor = PositionMonitorEngine()
-            # self._trading = TradingEngine()  # 자동 매매 일시 중단 (사용자 결정 2026-05-12)
-            self._intraday_macd = IntradayMACDEngine()
+            # self._risk = RiskEngine()                       # 어시스턴트 모드 비활성
+            # self._position_monitor = PositionMonitorEngine() # 어시스턴트 모드 비활성 (보유 종목 없음)
+            # self._trading = TradingEngine()                  # 자동 매매 비활성
+            # self._intraday_macd = IntradayMACDEngine()       # 어시스턴트 모드 비활성
 
             self._domestic_stock.start()
-            self._risk.start()
-            self._position_monitor.start()
-            # self._trading.start()  # 자동 매매 일시 중단
-            self._intraday_macd.start()
-            logger.warning("⚠️ 자동 매매팀(TradingEngine) 비활성화 상태 — 신규 매수 X, 분석/모니터링/EOD만 작동")
+            # self._risk.start()
+            # self._position_monitor.start()
+            # self._trading.start()
+            # self._intraday_macd.start()
+            logger.warning("⚠️ 어시스턴트 모드 — 매매팀/리스크/포지션감시/MACD 모니터 비활성. 데이터 수집(domestic_stock)만 작동")
 
-            logger.info("전체 실시간 엔진 기동 완료")
-            notify("📈 <b>장 시작</b> — 전체 엔진 활성화")
+            logger.info("실시간 엔진 기동 완료 (어시스턴트 모드)")
+            # 장 시작 알림 — 매매 안 하므로 발송 X (불필요한 텔레그램 노이즈 제거)
+            # notify("📈 <b>장 시작</b> — 전체 엔진 활성화")
         except Exception as e:
             logger.error(f"실시간 엔진 기동 오류: {e}", exc_info=True)
 
@@ -426,7 +429,7 @@ class DQTScheduler:
             # 헬스체크 리포트 — 시스템 상태 텔레그램 요약
             _send_morning_healthcheck(self)
 
-            notify("🔄 <b>[09:10 재점검]</b> Hot List 재스캔 + 매수 재개")
+            # notify("🔄 <b>[09:10 재점검]</b> Hot List 재스캔 + 매수 재개")  # 어시스턴트 모드: 매매 X, 알림 불필요
         except Exception as e:
             logger.error(f"09:10 재점검 오류: {e}", exc_info=True)
 
@@ -460,7 +463,7 @@ class DQTScheduler:
         self._risk = self._position_monitor = self._trading = self._intraday_macd = None
 
         if notify_market_close:
-            notify("📉 <b>장 마감</b> — 실시간 엔진 정지")
+            # notify("📉 <b>장 마감</b> — 실시간 엔진 정지")  # 어시스턴트 모드: evening_review가 15:40에 회고 발송하므로 중복 알림 제거
 
     def _run_report(self) -> None:
         """15:40 — 일일 리포트 생성."""
