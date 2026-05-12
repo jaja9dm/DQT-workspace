@@ -201,7 +201,7 @@ class DQTScheduler:
 
         # 08:35 — 글로벌·국내 시황 엔진 선기동 (오버나이트 요약)
         s.add_job(self._start_market_engines, CronTrigger(
-            day_of_week="mon-fri", hour=8, minute=35, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=7, minute=15, timezone="Asia/Seoul"
         ), id="start_market_engines", name="시황 엔진 선기동 (오버나이트 요약)")
 
         # 장 전 준비 (평일만)
@@ -219,7 +219,7 @@ class DQTScheduler:
 
         # 08:45 — 아침 시황 브리핑 (어시스턴트 모델 Phase 5)
         s.add_job(self._run_morning_brief, CronTrigger(
-            day_of_week="mon-fri", hour=8, minute=45, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=7, minute=30, timezone="Asia/Seoul"
         ), id="morning_brief", name="아침 시황 브리핑")
 
         # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)

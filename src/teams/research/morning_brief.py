@@ -183,7 +183,9 @@ def _aggregate_recent_tickers(rows: list[dict], days: int = 5) -> list[dict]:
     cutoff = (date.today() - timedelta(days=days * 2)).isoformat()
     counter: dict[str, dict] = {}
     for r in rows:
-        if r["date"] < cutoff:
+        # r["date"]가 date 객체 또는 string일 수 있음 — string으로 통일
+        r_date = r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"])
+        if r_date < cutoff:
             continue
         tk = r["ticker"]
         if not tk:
