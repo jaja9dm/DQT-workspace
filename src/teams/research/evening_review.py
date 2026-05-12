@@ -225,13 +225,34 @@ def _evaluate_avoids(avoids: list[dict], today_top: list[dict]) -> tuple[list[di
 
 # ── 시장 종합 ────────────────────────────────────────────────
 
+_INVALID_SECTORS = {"", "nan", "none", "None", "NaN", "NULL", "null"}
+# 시장 소속부는 진짜 업종이 아니므로 섹터 분석에서 제외
+_SOSOK_SECTORS = {
+    "우량기업부", "중견기업부", "벤처기업부", "기술성장기업부", "일반기업부",
+    "관리종목(소속부없음)", "SPAC(소속부없음)", "투자주의환기종목(소속부없음)",
+    "외국기업(소속부없음)",
+}
+_MIN_STOCKS_PER_SECTOR = 3  # 종목 수 ≥ 3인 섹터만 강·약세 분석
+
+
 def _sector_strength(today_top: list[dict]) -> tuple[list[dict], list[dict]]:
     """오늘 거래대금 TOP 100 기반 섹터별 평균 등락률.
+
+    개선:
+      1. 'nan'/'None'/빈 문자열/시장 소속부(우량/중견/기술성장…) 섹터는 제외
+      2. 종목 수 ≥ 3인 섹터만 분석 (단일 종목은 섹터 평균이라 부르기 부적절)
+      3. 강세 = 평균 > 0 (양수만), 약세 = 평균 < 0 (음수만) — 중복 X
+
     Returns: (strong_top5, weak_top5)
     """
     by_sector: dict[str, list[float]] = defaultdict(list)
     for r in today_top:
-        sec = r.get("sector") or "기타"
+        sec_raw = r.get("sector")
+        sec = (sec_raw or "").strip()
+        if not sec or sec in _INVALID_SECTORS or sec in _SOSOK_SECTORS:
+            continue
+        if sec == "기타":   # 명시적 '기타'도 노이즈
+            continue
         chg = r.get("chg_pct")
         if chg is None:
             continue
@@ -239,17 +260,45 @@ def _sector_strength(today_top: list[dict]) -> tuple[list[dict], list[dict]]:
 
     summary = []
     for sec, chgs in by_sector.items():
-        if not chgs:
+        if len(chgs) < _MIN_STOCKS_PER_SECTOR:
             continue
         summary.append({
             "sector": sec,
             "avg_chg_pct": round(sum(chgs) / len(chgs), 2),
             "stock_count": len(chgs),
         })
-    summary.sort(key=lambda x: x["avg_chg_pct"], reverse=True)
-    strong = summary[:5]
-    weak = list(reversed(summary[-5:])) if len(summary) >= 5 else summary[::-1]
+
+    # 양수만 강세, 내림차순 / 음수만 약세, 오름차순
+    strong = sorted(
+        [s for s in summary if s["avg_chg_pct"] > 0],
+        key=lambda x: x["avg_chg_pct"], reverse=True,
+    )[:5]
+    weak = sorted(
+        [s for s in summary if s["avg_chg_pct"] < 0],
+        key=lambda x: x["avg_chg_pct"],
+    )[:5]
     return strong, weak
+
+
+_KOSDAQ_TICKER_CACHE: set[str] | None = None
+
+
+def _is_kosdaq(ticker: str) -> bool:
+    """ticker가 KOSDAQ 종목인지 — FDR StockListing('KOSDAQ') 캐시 사용.
+
+    호출 시 1회 캐시. 실패 시 False(=KOSPI 가정).
+    """
+    global _KOSDAQ_TICKER_CACHE
+    if _KOSDAQ_TICKER_CACHE is None:
+        try:
+            import FinanceDataReader as fdr  # noqa: WPS433
+            df = fdr.StockListing("KOSDAQ")
+            codes = df["Code"].astype(str).str.zfill(6).tolist() if df is not None and not df.empty else []
+            _KOSDAQ_TICKER_CACHE = set(codes)
+        except Exception as e:
+            logger.debug(f"KOSDAQ 캐시 로드 실패: {e}")
+            _KOSDAQ_TICKER_CACHE = set()
+    return ticker in _KOSDAQ_TICKER_CACHE
 
 
 def _top10_with_rank_delta(
@@ -274,6 +323,7 @@ def _top10_with_rank_delta(
             "name":      r.get("name") or tk,
             "chg_pct":   r.get("chg_pct"),
             "trading_value": r.get("trading_value"),
+            "market":    "KOSDAQ" if _is_kosdaq(tk) else "KOSPI",
             "prev_rank": prev,
             "delta":     delta,
         })
@@ -545,6 +595,27 @@ def _update_learnings(
 
 # ── 메시지 작성 ──────────────────────────────────────────────
 
+def _fmt_lessons_ids(ids: list[int], learnings_map: dict[int, dict]) -> list[str]:
+    """ID 리스트 → "#9 \"앞 35자 미리보기...\"" 형식 문자열 리스트."""
+    out: list[str] = []
+    for i in ids[:10]:
+        try:
+            iid = int(i)
+        except (TypeError, ValueError):
+            continue
+        ent = learnings_map.get(iid)
+        preview = ""
+        if ent:
+            content = (ent.get("content") or "").replace("\n", " ").strip()
+            if content:
+                preview = content[:38] + ("…" if len(content) > 38 else "")
+        if preview:
+            out.append(f"#{iid} \"{preview}\"")
+        else:
+            out.append(f"#{iid}")
+    return out
+
+
 def _format_message(
     today: str,
     review: dict,
@@ -557,6 +628,7 @@ def _format_message(
     top10: list[dict],
     market_row: dict | None,
     kosdaq_row: dict | None,
+    learnings: list[dict] | None = None,
 ) -> str:
     lines: list[str] = []
     lines.append(f"🌆 <b>저녁 회고 — {today}</b>")
@@ -589,10 +661,11 @@ def _format_message(
                 f"(score {_fmt(market_row.get('market_score'), '.2f')})"
             )
         if kosdaq_row:
-            lines.append(
-                f"  KOSDAQ 외인 {_fmt(kosdaq_row.get('foreign_net_buy'), '+.0f')}억 | "
-                f"기관 {_fmt(kosdaq_row.get('inst_net_buy'), '+.0f')}억"
-            )
+            f_v = kosdaq_row.get('foreign_net_buy')
+            i_v = kosdaq_row.get('inst_net_buy')
+            f_s = f"{float(f_v):+.0f}억" if (f_v is not None and float(f_v) != 0) else "데이터 없음"
+            i_s = f"{float(i_v):+.0f}억" if (i_v is not None and float(i_v) != 0) else "데이터 없음"
+            lines.append(f"  KOSDAQ 외인 {f_s} | 기관 {i_s}")
         lines.append("")
 
     # 추천 결과
@@ -641,7 +714,8 @@ def _format_message(
     # 거래대금 TOP 10
     if top10:
         lines.append("💰 <b>거래대금 TOP 10</b>")
-        for t in top10[:10]:
+        lines.append("  <i>(범례: 🆕 어제 미진입 / ▲n n계단↑ / ▼n n계단↓ / －변동없음)</i>")
+        for i, t in enumerate(top10[:10], 1):
             delta = t.get("delta")
             if delta is None:
                 delta_s = "🆕"
@@ -653,8 +727,11 @@ def _format_message(
                 delta_s = "－"
             chg = t.get("chg_pct")
             chg_s = f"{chg:+.2f}%" if chg is not None else "N/A"
+            mkt = t.get("market") or ""
+            mkt_s = f" [{mkt}]" if mkt else ""
+            # 표시 순번은 1..10 — DB rank가 듬성하더라도 사용자에겐 1부터 보임
             lines.append(
-                f"  {t['rank']:2d}. {t['name']}({t['ticker']}) {chg_s} {delta_s}"
+                f"  {i:2d}. {t['name']}({t['ticker']}){mkt_s} {chg_s} {delta_s}"
             )
         lines.append("")
 
@@ -668,14 +745,24 @@ def _format_message(
             lines.append(f"  • [{cat}] {content[:140]}")
         lines.append("")
 
-    # validated / failed
+    # validated / failed — ID 옆에 content 미리보기
     v_ids = review.get("lessons_validated_ids") or []
     f_ids = review.get("lessons_failed_ids") or []
     if v_ids or f_ids:
+        learnings_map: dict[int, dict] = {}
+        for l in (learnings or []):
+            try:
+                learnings_map[int(l["id"])] = l
+            except (KeyError, TypeError, ValueError):
+                continue
         if v_ids:
-            lines.append(f"✅ 검증: {', '.join('#' + str(i) for i in v_ids[:10])}")
+            lines.append("✅ <b>검증된 교훈</b>")
+            for s in _fmt_lessons_ids(v_ids, learnings_map):
+                lines.append(f"  • {s}")
         if f_ids:
-            lines.append(f"⚠️ 실패: {', '.join('#' + str(i) for i in f_ids[:10])}")
+            lines.append("⚠️ <b>실패한 교훈</b>")
+            for s in _fmt_lessons_ids(f_ids, learnings_map):
+                lines.append(f"  • {s}")
         lines.append("")
 
     # 내일 전망
@@ -707,6 +794,23 @@ def _save_review(
     full_message: str,
     sent: bool,
 ) -> None:
+    # FK 보호: evening_review.date는 morning_briefing.date를 참조한다.
+    # 아침 브리핑이 없는 날(휴장 직후 / 첫 운영일)에는 placeholder row 선삽입.
+    try:
+        mb_exists = fetch_one(
+            "SELECT 1 FROM morning_briefing WHERE date = ?", (today,)
+        )
+        if not mb_exists:
+            execute(
+                """
+                INSERT OR IGNORE INTO morning_briefing (date, headline, full_message)
+                VALUES (?, ?, ?)
+                """,
+                (today, "(아침 브리핑 미실행 — 회고만 진행)", ""),
+            )
+    except Exception as e:
+        logger.debug(f"[evening_review] morning_briefing placeholder 삽입 스킵: {e}")
+
     try:
         execute(
             """
@@ -829,6 +933,7 @@ def run_evening_review() -> dict:
         accuracy, accuracy_avoid,
         sector_strong, sector_weak, top10,
         market_row, kosdaq_row,
+        learnings=learnings,
     )
 
     sent = notify(msg)

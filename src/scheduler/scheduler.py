@@ -23,13 +23,13 @@ main.py는 스케줄러만 시작하면 된다.
   - 포지션 감시:   90초 주기 (자체 루프)
   - 매매팀:        5분 주기  (자체 루프)
 
-  [장 마감]
+  [장 마감 — 어시스턴트 모드 2026-05-12]
   - 15:35  실시간 엔진 정지
   - 15:40  리포트팀 실행
   - 16:00  연구소 일일 분석 실행
-  - 16:30  일일 매매 복기
-  - 16:45  매매일지 마크다운 파일 저장 (docs/trading_journal/YYYY-MM-DD.md)
-  - 17:00  자동 파라미터 튜닝
+  - 16:30  EOD 데이터 적재 (TOP 100 + 미국 + KOSDAQ + 테마)
+  - 16:40  저녁 회고 발송 (어시스턴트)
+  - 17:00  자동 종료 (launchd 다음날 08:30 재시작)
   - 일요일 16:30  연구소 심층 백테스트 (deep=True)
 """
 
@@ -251,16 +251,16 @@ class DQTScheduler:
         #     day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
         # ), id="daily_journal", name="일일 시장 저널 적재")
 
-        # 15:35 — EOD 데이터 적재 (어시스턴트 모델 Phase 4)
-        # stop_engines(15:35)와 동일 분이지만 별개 잡 — APScheduler가 동시 실행
+        # 16:30 — EOD 데이터 적재 (어시스턴트 모델 Phase 4)
+        # 장 마감 후 1시간 — KIS/FDR 데이터 안정화 시간 확보 (2026-05-12 조정)
         s.add_job(self._run_daily_eod_load, CronTrigger(
-            day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         ), id="daily_eod_load", name="EOD 데이터 적재")
 
-        # 15:40 — 저녁 회고 (어시스턴트 모델 Phase 6)
-        # daily_report(15:40)과 동일 분 — 별개 잡
+        # 16:40 — 저녁 회고 (어시스턴트 모델 Phase 6)
+        # daily_eod_load(16:30) 후 10분 — EOD 데이터 활용 (2026-05-12 조정)
         s.add_job(self._run_evening_review, CronTrigger(
-            day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Seoul"
         ), id="evening_review", name="저녁 회고 (어시스턴트)")
 
         # 장 마감 후 배치: 리포트팀
@@ -296,11 +296,11 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         ), id="evening_selection", name="저녁 종목 선점")
 
-        # 자동 종료 비활성화 — launchd 재시작 불안정으로 인해 24/7 가동.
-        # 16:45 EOD 배치는 그대로 작동, 프로세스만 살려둠.
-        # s.add_job(self._auto_shutdown, CronTrigger(
-        #     day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Seoul"
-        # ), id="auto_shutdown", name="자동 종료")
+        # 자동 종료 — 평일 17:00 (어시스턴트 모드: EOD/회고 완료 후 시스템 종료)
+        # launchd가 다음날 평일 08:30에 자동 시작 (StartCalendarInterval)
+        s.add_job(self._auto_shutdown, CronTrigger(
+            day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
+        ), id="auto_shutdown", name="자동 종료")
 
         # 연구소 심층 백테스트 (일요일 주 1회)
         s.add_job(self._run_research_deep, CronTrigger(
@@ -495,9 +495,13 @@ class DQTScheduler:
             logger.error(f"매매 일지 생성 오류: {e}", exc_info=True)
 
     def _auto_shutdown(self) -> None:
-        """16:45 — 장 마감 후 자동 프로세스 종료."""
-        logger.info("자동 종료 시작 (16:45 스케줄)")
+        """17:00 — 장 마감 후 자동 프로세스 종료. launchd가 다음날 08:30 재시작."""
+        logger.info("자동 종료 시작 (17:00 스케줄)")
         self.stop()
+        # sys.exit(0) — 정상 종료, launchd는 RunAtLoad/KeepAlive 없으면 자동 재시작 X
+        # 다음날 평일 08:30 StartCalendarInterval로 시작
+        import os
+        os._exit(0)
 
     def _run_param_tuning(self) -> None:
         """17:00 — 자동 파라미터 튜닝 (복기 결과 기반)."""

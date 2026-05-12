@@ -86,6 +86,8 @@ def run_daily_eod_load() -> dict:
         row = save_kosdaq_condition()
         # pykrx로 거래대금 보강 시도 (현재 KIS에서 값 0)
         _augment_kosdaq_with_pykrx(today)
+        # 외인/기관 net buy가 NULL이면 daily_top_value(KOSDAQ 종목들) 합계로 폴백
+        _augment_kosdaq_flow_from_top_value(today)
         result["kosdaq_loaded"] = True
         logger.info(f"[EOD] kosdaq_condition 적재 완료 ({row['close']:,.2f})")
     except Exception as e:
@@ -136,8 +138,14 @@ def _load_top_value_snapshot() -> int:
         seen.add(tk)
         combined.append(item)
 
+    # KIS 순위 API가 두 시장 모두 실패한 경우 FDR로 폴백 (정확한 거래대금 TOP)
     if not combined:
-        logger.warning("[EOD] 거래대금 순위 데이터 없음 — 폴백: hot_list 사용")
+        logger.warning("[EOD] KIS 거래대금 순위 데이터 없음 — 폴백: FDR StockListing")
+        combined = _fallback_top_from_fdr()
+
+    # 그래도 비면 마지막 폴백: hot_list
+    if not combined:
+        logger.warning("[EOD] FDR 폴백도 실패 — hot_list 사용")
         combined = _fallback_top_from_hot_list()
 
     # 거래대금 내림차순 → TOP N
@@ -170,6 +178,51 @@ def _load_top_value_snapshot() -> int:
         time.sleep(_INTER_CALL_SLEEP)
 
     return saved
+
+
+def _fallback_top_from_fdr() -> list[dict]:
+    """FDR StockListing(KOSPI/KOSDAQ)에서 거래대금 TOP 100.
+
+    KIS 거래대금 순위 API가 막혔을 때 사용. Amount/Close/ChagesRatio 즉시 제공되므로
+    종목별 KIS get_price 호출 실패해도 seed 값으로 시세 채우기 가능.
+    """
+    try:
+        import FinanceDataReader as fdr  # noqa: WPS433 (지연 import)
+        items: list[dict] = []
+        for market in ("KOSPI", "KOSDAQ"):
+            try:
+                df = fdr.StockListing(market)
+                if df is None or df.empty:
+                    continue
+                if "Amount" not in df.columns:
+                    continue
+                df = df.dropna(subset=["Code"])
+                df = df.sort_values("Amount", ascending=False, na_position="last")
+                top = df.head(80)
+                for _, r in top.iterrows():
+                    try:
+                        tk = str(r.get("Code") or "").zfill(6)
+                        if not tk or len(tk) != 6:
+                            continue
+                        items.append({
+                            "ticker":        tk,
+                            "name":          str(r.get("Name") or ""),
+                            "trading_value": int(r.get("Amount") or 0),
+                            "change_pct":    float(r.get("ChagesRatio") or 0),
+                            "price":         float(r.get("Close") or 0),
+                            "volume":        int(r.get("Volume") or 0),
+                            "frgn_net_buy":  0,
+                            "inst_net_buy":  0,
+                            "market":        market,  # KOSPI / KOSDAQ
+                        })
+                    except Exception:
+                        continue
+            except Exception as e:
+                logger.warning(f"[EOD] FDR 폴백 — {market} 조회 실패: {e}")
+        return items
+    except Exception as e:
+        logger.warning(f"[EOD] FDR 폴백 전체 실패: {e}")
+        return []
 
 
 def _fallback_top_from_hot_list() -> list[dict]:
@@ -484,6 +537,82 @@ def _augment_kosdaq_with_pykrx(today: str) -> None:
         )
     except Exception as e:
         logger.debug(f"[EOD] Naver KOSDAQ 보강 스킵: {e}")
+
+
+# ── 4. KOSDAQ 외인/기관 폴백 ──────────────────────────────────
+
+def _augment_kosdaq_flow_from_top_value(today: str) -> None:
+    """KOSDAQ 외인/기관 순매수가 NULL인 경우 daily_top_value 합계로 폴백.
+
+    daily_top_value에 적재된 KOSDAQ 종목들의 foreign_net_buy/inst_net_buy를 합산.
+    완전한 시장 전체 수치는 아니지만 거래대금 TOP 종목 합계라 방향성·규모 가늠 가능.
+
+    원래 데이터가 있으면 건드리지 않음.
+    """
+    try:
+        row = fetch_one(
+            "SELECT foreign_net_buy, inst_net_buy FROM kosdaq_condition WHERE date = ?",
+            (today,),
+        )
+        if not row:
+            return
+        f_val = row["foreign_net_buy"]
+        i_val = row["inst_net_buy"]
+        # 둘 다 이미 NULL 아니고 정상값이면 그대로 둠
+        if f_val is not None and i_val is not None and (f_val != 0 or i_val != 0):
+            return
+
+        # KOSDAQ 종목 ticker 셋 구해서 daily_top_value 합산
+        import FinanceDataReader as fdr  # noqa: WPS433
+        try:
+            df_q = fdr.StockListing("KOSDAQ")
+            kosdaq_set = set(df_q["Code"].astype(str).str.zfill(6).tolist())
+        except Exception:
+            kosdaq_set = set()
+        if not kosdaq_set:
+            return
+
+        rows = fetch_all(
+            """
+            SELECT ticker, foreign_net_buy, inst_net_buy
+            FROM daily_top_value
+            WHERE date = ?
+            """,
+            (today,),
+        )
+        f_sum = 0.0
+        i_sum = 0.0
+        n = 0
+        for r in rows:
+            tk = (r["ticker"] or "").zfill(6)
+            if tk not in kosdaq_set:
+                continue
+            f_sum += float(r["foreign_net_buy"] or 0)
+            i_sum += float(r["inst_net_buy"] or 0)
+            n += 1
+        if n == 0:
+            return
+
+        # 단위: 단일 종목 row는 백만원 단위(daily_eod_loader._build_snapshot_row에서
+        # _bn으로 변환됨) — 억원으로 다시 환산: ÷100
+        f_eok = round(f_sum / 100.0, 1)
+        i_eok = round(i_sum / 100.0, 1)
+        # 데이터가 충분히 모이지 않은 경우 (rows < 5)는 그래도 표기 — 가치보다 부재가 더 안 좋음
+        execute(
+            """
+            UPDATE kosdaq_condition
+            SET foreign_net_buy = COALESCE(foreign_net_buy, ?),
+                inst_net_buy    = COALESCE(inst_net_buy, ?)
+            WHERE date = ?
+            """,
+            (f_eok, i_eok, today),
+        )
+        logger.info(
+            f"[EOD] kosdaq_condition flow 폴백 (top_value {n}종목 합계) — "
+            f"외인 {f_eok:+.0f}억 | 기관 {i_eok:+.0f}억"
+        )
+    except Exception as e:
+        logger.debug(f"[EOD] kosdaq flow 폴백 실패: {e}")
 
 
 # ── CLI 진입점 ────────────────────────────────────────────────

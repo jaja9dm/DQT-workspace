@@ -27,6 +27,66 @@ from src.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
+# ── KSIC 세부 업종 → 투자자 관점의 큰 섹터 매핑 ──────────────────
+# fdr.StockListing('KRX-DESC').Industry는 통계청 KSIC 기준이라 매우 세분화.
+# 같은 업종이라도 표현이 달라 group_by 시 종목 수 1~2개 단위로 흩어진다.
+# 투자자 관점에서 의미 있는 큰 섹터(반도체/자동차/2차전지/바이오 등)로 모은다.
+
+_BROAD_SECTOR_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # (broad_sector, keyword_tuples) — Industry 문자열에 키워드 중 하나라도 포함되면 매칭
+    ("반도체",         ("반도체",)),
+    ("디스플레이",     ("디스플레이",)),
+    ("전자/IT부품",    ("전자부품", "통신 및 방송 장비", "광전송 장치", "광학", "측정",
+                       "전동기, 발전기 및 전기 변환", "절연선 및 케이블", "전구",
+                       "축전지", "1차전지", "전기 공급")),
+    ("자동차",         ("자동차",)),
+    ("2차전지",        ("2차전지", "이차전지", "축전지 제조", "전지 제조")),
+    ("조선/해운",      ("선박", "해상 운송")),
+    ("기계/설비",      ("일반 목적용 기계", "특수 목적용 기계", "기계장비",
+                       "기계 제조", "공작기계")),
+    ("철강/금속",      ("철강", "1차 비철금속", "금속 가공")),
+    ("화학/소재",      ("화학", "플라스틱", "합성수지", "고무")),
+    ("바이오/제약",    ("의약품", "기초 의약물질", "의료용품", "의료용 기기",
+                       "자연과학 및 공학 연구개발")),
+    ("소프트웨어/플랫폼", ("소프트웨어", "컴퓨터 프로그래밍", "포털 및 기타",
+                          "온라인 정보", "데이터 처리", "정보서비스")),
+    ("게임/콘텐츠",    ("게임 소프트웨어", "영화, 비디오", "방송", "오디오물",
+                       "출판")),
+    ("통신서비스",     ("전기통신", "이동 통신")),
+    ("건설/건자재",    ("건설업", "건물 건설", "토목 건설", "전문직별 공사",
+                       "시멘트", "벽돌", "유리")),
+    ("음식료",         ("식품 제조", "음료 제조", "도축", "수산물", "곡물")),
+    ("유통/소매",      ("도매", "소매", "백화점")),
+    ("운송/물류",      ("육상 운송", "항공 운송", "보관 및 창고")),
+    ("금융",           ("은행", "보험", "기타 금융", "금융 지원", "신용",
+                       "투자", "자산운용")),
+    ("부동산/리츠",    ("부동산",)),
+    ("섬유/의류",      ("봉제의복", "섬유", "신발")),
+    ("미디어/엔터",    ("연예", "기획")),
+    ("에너지/유틸",    ("석유", "가스", "전기업", "발전업", "원유")),
+    ("교육/서비스",    ("교육", "사업시설 관리", "사업 지원")),
+    ("환경/리사이클",  ("폐기물", "환경 정화")),
+)
+
+
+def _industry_to_broad_sector(industry: str) -> str:
+    """KSIC 세부 업종 문자열 → 투자자 관점의 큰 섹터.
+
+    매칭 안 되면 KSIC 그대로 (단, 너무 긴 경우 30자로 절단). '기타'는 별도로 처리.
+    """
+    if not industry:
+        return "기타"
+    s = industry.strip()
+    if not s or s.lower() == "nan":
+        return "기타"
+    for broad, keywords in _BROAD_SECTOR_RULES:
+        for kw in keywords:
+            if kw in s:
+                return broad
+    # 매칭 실패 시 원본 사용 (단 한도 30자) — 후속에서 _BROAD_SECTOR_RULES 보강할 단서
+    return s if len(s) <= 30 else s[:27] + "..."
+
+
 class SectorRotationCache:
     """섹터 로테이션 & 상대강도 싱글턴 캐시."""
 
@@ -189,31 +249,55 @@ class SectorRotationCache:
             logger.warning(f"KOSPI 로드 실패: {e}")
 
     def _fetch_sector_map(self) -> None:
-        """KRX 전종목 업종 정보 로드 (FDR StockListing)."""
+        """KRX 전종목 업종 정보 로드.
+
+        2026-05-12 수정: fdr.StockListing('KRX')는 'Sector/Industry' 미제공이고
+        'Dept'(소속부)만 있어 "우량기업부/중견기업부" 같은 값이 적재됐다.
+        진짜 업종은 fdr.StockListing('KRX-DESC')의 'Industry' 컬럼에 존재.
+        세부 KSIC 업종을 투자자 관점의 큰 섹터로 매핑하여 적재한다.
+        """
         try:
             import FinanceDataReader as fdr
-            df = fdr.StockListing("KRX")
+            df = fdr.StockListing("KRX-DESC")
             if df is None or df.empty:
+                logger.warning("KRX-DESC 응답 비어있음 — 섹터 매핑 스킵")
                 return
 
-            # FDR StockListing 컬럼: Code/Symbol, Name, Sector, Industry 등 버전마다 다름
-            code_col   = next((c for c in ["Code", "Symbol", "ISU_SRT_CD"] if c in df.columns), None)
-            sector_col = next((c for c in ["Sector", "업종명", "Industry", "sector", "Dept"] if c in df.columns), None)
-
-            if code_col is None or sector_col is None:
+            # KRX-DESC 컬럼: Code, Name, Market, Sector(소속부, 대부분 NaN), Industry(KSIC), Products...
+            code_col = next((c for c in ["Code", "Symbol", "ISU_SRT_CD"] if c in df.columns), None)
+            if code_col is None or "Industry" not in df.columns:
                 logger.warning(f"섹터 매핑 컬럼 없음. 사용 가능 컬럼: {list(df.columns)}")
                 return
 
             new_map: dict[str, str] = {}
+            unmapped_industries: dict[str, int] = {}
             for _, row in df.iterrows():
                 ticker = str(row[code_col]).zfill(6)
-                sector = str(row[sector_col]).strip() or "기타"
+                raw = row.get("Industry")
+                # NaN / None / 빈 문자열 → '기타'
+                if raw is None:
+                    sector = "기타"
+                else:
+                    s = str(raw).strip()
+                    sector = "기타" if (not s or s.lower() == "nan") else _industry_to_broad_sector(s)
+                if sector == "기타" and raw is not None:
+                    s = str(raw).strip()
+                    if s and s.lower() != "nan":
+                        unmapped_industries[s] = unmapped_industries.get(s, 0) + 1
                 new_map[ticker] = sector
 
             with self._data_lock:
                 self._sector_map = new_map
 
-            logger.info(f"섹터 매핑 로드 완료: {len(new_map)}종목")
+            mapped = sum(1 for v in new_map.values() if v != "기타")
+            logger.info(
+                f"섹터 매핑 로드 완료: 총 {len(new_map)}종목 / 분류 {mapped}종목"
+            )
+            if unmapped_industries:
+                top_unmap = sorted(
+                    unmapped_industries.items(), key=lambda x: x[1], reverse=True
+                )[:5]
+                logger.debug(f"섹터 매핑 누락 KSIC 상위: {top_unmap}")
         except Exception as e:
             logger.warning(f"섹터 매핑 로드 실패: {e}")
 

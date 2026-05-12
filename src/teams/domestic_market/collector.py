@@ -374,16 +374,26 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
         # 지수가격 × 지수거래량은 의미 없으므로 0 처리 — Phase 4에서 KRX 거래대금으로 대체
         trading_value_bn = 0.0
 
+    # KIS 투자자 매매동향이 0/실패면 NULL로 저장 — "수집 실패"를 정확히 표기 가능하게 함.
+    # (실제 0이 아닌 데이터 부재인 케이스를 구분)
+    def _nb(v: float) -> float | None:
+        # KIS가 데이터 없을 때 0.0을 반환 — None으로 변환
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return None
+        return f if f != 0.0 else None
+
     row = {
         "date":             today,
         "close":            data.kosdaq.current,
         "chg_pct":          data.kosdaq.change_pct,
         "volume":           volume_man,
         "trading_value":    trading_value_bn,
-        "foreign_net_buy":  data.kosdaq_flow.foreign_net,
-        "inst_net_buy":     data.kosdaq_flow.institutional_net,
-        "indiv_net_buy":    data.kosdaq_flow.individual_net,
-        "program_net_buy":  0.0,  # KIS API 직접 미지원 — Phase 4에서 보강
+        "foreign_net_buy":  _nb(data.kosdaq_flow.foreign_net),
+        "inst_net_buy":     _nb(data.kosdaq_flow.institutional_net),
+        "indiv_net_buy":    _nb(data.kosdaq_flow.individual_net),
+        "program_net_buy":  None,  # KIS API 직접 미지원
     }
 
     try:
@@ -399,11 +409,13 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
             """,
             tuple(row.values()),
         )
+        def _fnb(v):
+            return f"{float(v):+.0f}억" if v is not None else "N/A"
         logger.info(
             f"kosdaq_condition 저장 — {today} | "
             f"종가 {row['close']:,.2f} ({row['chg_pct']:+.2f}%) | "
-            f"외인 {row['foreign_net_buy']:+.0f}억 | "
-            f"기관 {row['inst_net_buy']:+.0f}억"
+            f"외인 {_fnb(row['foreign_net_buy'])} | "
+            f"기관 {_fnb(row['inst_net_buy'])}"
         )
     except Exception as e:
         logger.error(f"kosdaq_condition 저장 실패: {e}", exc_info=True)
