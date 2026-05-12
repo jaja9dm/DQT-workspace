@@ -462,8 +462,10 @@ class DQTScheduler:
         self._global_market = self._domestic_market = self._domestic_stock = None
         self._risk = self._position_monitor = self._trading = self._intraday_macd = None
 
-        if notify_market_close:
-            # notify("📉 <b>장 마감</b> — 실시간 엔진 정지")  # 어시스턴트 모드: evening_review가 15:40에 회고 발송하므로 중복 알림 제거
+        # 어시스턴트 모드: 장 마감 알림 제거 (evening_review가 15:40에 회고 발송하므로 중복)
+        # if notify_market_close:
+        #     notify("📉 <b>장 마감</b> — 실시간 엔진 정지")
+        pass
 
     def _run_report(self) -> None:
         """15:40 — 일일 리포트 생성."""
