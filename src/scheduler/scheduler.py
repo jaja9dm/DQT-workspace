@@ -135,7 +135,8 @@ class DQTScheduler:
         self._register_jobs()
         self._scheduler.start()
         logger.info("DQT 스케줄러 시작 완료")
-        notify("🚀 <b>DQT 시스템 시작</b>\n스케줄러 기동 완료")
+        # 시작 알림 제거 — 재시작 잦으면 도배 (사용자 결정 2026-05-12)
+        # notify("🚀 <b>DQT 시스템 시작</b>\n스케줄러 기동 완료")
 
         # 장중/장전 재시작 감지 — 이미 시황 엔진 시간(08:35~15:35)이면 즉시 기동
         import pytz
@@ -172,7 +173,8 @@ class DQTScheduler:
         except Exception:
             pass
         logger.info("DQT 스케줄러 종료")
-        notify("🛑 <b>DQT 시스템 종료</b>")
+        # 종료 알림 제거 — 재시작 잦으면 도배
+        # notify("🛑 <b>DQT 시스템 종료</b>")
 
     def run_forever(self) -> None:
         """메인 스레드 블로킹 (Ctrl+C 시 종료)."""
@@ -338,7 +340,8 @@ class DQTScheduler:
             _sector_prefetch()
             logger.info("섹터 로테이션 캐시 프리페치 시작 (백그라운드)")
 
-            notify(f"🌅 <b>장 전 준비 완료</b>\n유니버스 {count}종목 | 감성 캐시 {deleted}건 정리")
+            # 장 전 준비 알림 제거 — morning_brief(08:45)에 통합됨
+            # notify(f"🌅 <b>장 전 준비 완료</b>\n유니버스 {count}종목 | 감성 캐시 {deleted}건 정리")
         except Exception as e:
             logger.error(f"장 전 준비 오류: {e}", exc_info=True)
 
