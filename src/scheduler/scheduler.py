@@ -364,14 +364,15 @@ class DQTScheduler:
             self._domestic_stock = DomesticStockEngine()
             self._risk = RiskEngine()
             self._position_monitor = PositionMonitorEngine()
-            self._trading = TradingEngine()
+            # self._trading = TradingEngine()  # 자동 매매 일시 중단 (사용자 결정 2026-05-12)
             self._intraday_macd = IntradayMACDEngine()
 
             self._domestic_stock.start()
             self._risk.start()
             self._position_monitor.start()
-            self._trading.start()
+            # self._trading.start()  # 자동 매매 일시 중단
             self._intraday_macd.start()
+            logger.warning("⚠️ 자동 매매팀(TradingEngine) 비활성화 상태 — 신규 매수 X, 분석/모니터링/EOD만 작동")
 
             logger.info("전체 실시간 엔진 기동 완료")
             notify("📈 <b>장 시작</b> — 전체 엔진 활성화")
