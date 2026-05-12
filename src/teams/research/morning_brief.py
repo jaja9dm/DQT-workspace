@@ -133,7 +133,9 @@ def _fetch_recent_top_value(days: int = 7) -> list[dict]:
     """최근 N거래일 daily_top_value 시계열."""
     rows = fetch_all(
         """
-        SELECT date, ticker, name, sector, rank, chg_pct, trading_value
+        SELECT date, ticker, name, sector, rank, chg_pct, trading_value,
+               close_price, prev_close, open_price, high_price, low_price,
+               foreign_net_buy, inst_net_buy, rsi_14
         FROM daily_top_value
         WHERE date >= date('now', '-' || ? || ' days', 'localtime')
         ORDER BY date DESC, rank ASC
@@ -304,7 +306,11 @@ def _ask_claude(
     daily_lines = []
     for d in sorted(by_date.keys(), reverse=True)[:5]:
         rows = by_date[d][:10]
-        names = ", ".join(f"{x['name'] or x['ticker']}({x['chg_pct']:+.1f}%)" for x in rows)
+        # 가격 정보 포함 — Claude가 추정 진입가 정확히 산출하도록
+        names = ", ".join(
+            f"{x['name'] or x['ticker']}({x['ticker']},{x['chg_pct']:+.1f}%,{_fmt(x.get('close_price'), ',.0f')}원)"
+            for x in rows
+        )
         daily_lines.append(f"[{d}] TOP10: {names}")
     daily_block = "\n".join(daily_lines) if daily_lines else "(데이터 없음)"
 
