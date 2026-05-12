@@ -51,6 +51,14 @@ except Exception:
 _SYSTEM_PROMPT = """당신은 한국 주식시장에서 단타·스윙 매매를 보조하는 AI 어시스턴트입니다.
 사용자는 사람이 직접 매매하며, 당신은 매일 아침 시장 컨텍스트를 정리해 추천 종목과 회피 종목을 제시합니다.
 
+## 🔴 최우선 규칙 — 절대 위반 금지
+
+1. **수치 정보 추정 절대 금지**: 가격(entry/close_price), 거래량, 거래대금, 수급(외인/기관 순매수) 등 모든 숫자는 입력으로 받은 값만 사용한다. 임의 추정 금지.
+2. **entry는 반드시 입력의 close_price 기준으로 산출**. close_price ±2% 이내 권장. 사이즈가 다르면 시스템이 자동 교체한다.
+3. **입력에 없는 데이터는 절대 추측하지 말 것**. null / "데이터 없음" / 0 으로 명시.
+4. **종목 이름·코드 매핑도 입력 그대로 사용**. 입력에 없는 종목 임의로 추천 금지.
+5. **모름은 "모름", 예상은 "예상" 명시**. 특히 가격은 사실만.
+
 ## 입력 데이터
 - 오버나이트 미국 마감 (S&P/NASDAQ/Dow, VIX, US10Y, 주요 ETF, 핵심 종목 8개)
 - 어제 한국 시장 (KOSPI/KOSDAQ 종가·등락률, 외인·기관 순매수)
@@ -110,6 +118,85 @@ _SYSTEM_PROMPT = """당신은 한국 주식시장에서 단타·스윙 매매를
 _MAX_PICKS = 5
 _MAX_AVOIDS = 5
 _TELEGRAM_LIMIT = 4000      # 안전 마진
+
+_WEEKDAY_KR = ['월', '화', '수', '목', '금', '토', '일']
+
+
+def _today_with_weekday() -> str:
+    """2026-05-13 (수) 형식."""
+    t = date.today()
+    return f"{t.isoformat()} ({_WEEKDAY_KR[t.weekday()]})"
+
+
+def _validate_picks(picks: list[dict], recent_top: list[dict]) -> tuple[list[dict], list[str]]:
+    """Claude picks의 entry/ref_price 가 DB의 실제 close_price와 일치하는지 검증.
+
+    Returns: (검증 통과/수정된 picks, 경고 메시지 리스트)
+    """
+    # recent_top에서 ticker별 가장 최신 close_price 매핑 (date DESC 정렬되어 있음 가정)
+    latest_close: dict[str, float] = {}
+    for r in recent_top:
+        tk = r.get("ticker")
+        if tk and tk not in latest_close and r.get("close_price"):
+            latest_close[tk] = r["close_price"]
+
+    warnings: list[str] = []
+    fixed: list[dict] = []
+    for p in picks:
+        ticker = p.get("ticker")
+        entry = p.get("entry")
+        db_price = latest_close.get(ticker)
+
+        if not db_price:
+            # DB에 가격 없음 → entry None
+            warnings.append(
+                f"{p.get('name', ticker)}({ticker}): DB에 가격 없음 — entry 미표시"
+            )
+            p["entry"] = None
+            p["_note"] = "최신 가격 데이터 없음"
+            fixed.append(p)
+            continue
+
+        if entry is None or not isinstance(entry, (int, float)) or entry <= 0:
+            p["entry"] = db_price
+            p["_entry_note"] = "(어제 종가)"
+            fixed.append(p)
+            continue
+
+        diff_pct = abs(entry - db_price) / db_price * 100
+        if diff_pct > 3.0:
+            warnings.append(
+                f"{p.get('name', ticker)}({ticker}): Claude entry={int(entry):,}원이 "
+                f"DB={int(db_price):,}원과 {diff_pct:.1f}% 차이 — DB 값으로 교체"
+            )
+            p["entry"] = db_price
+            p["_entry_corrected"] = True
+
+        fixed.append(p)
+
+    return fixed, warnings
+
+
+def _explain_low_picks(picks_count: int, days_in_db: int, regime: str, lessons_count: int) -> str:
+    """picks ≤2 일 때 사유 메시지 자동 생성."""
+    if picks_count >= 3:
+        return ""
+    reasons = []
+    if days_in_db < 3:
+        reasons.append(f"시계열 {days_in_db}일치만 누적 → 트렌드 분석 부족")
+    if regime in ('weak', 'reversal', 'volatile'):
+        reasons.append(f"시장 국면 '{regime}' → 보수적 추천")
+    if lessons_count >= 10:
+        reasons.append(f"누적 학습 {lessons_count}건의 '진입 자제' 규칙 강하게 작동")
+    if not reasons:
+        reasons.append("현재 데이터로 신뢰도 높은 추천 종목 부족")
+    return "  ⚠️ <i>추천이 적은 이유:</i>\n" + "\n".join(f"     • {r}" for r in reasons)
+
+
+def _count_days_in_db() -> int:
+    """daily_top_value 누적 일수."""
+    row = fetch_one("SELECT COUNT(DISTINCT date) AS n FROM daily_top_value")
+    return int(row["n"]) if row else 0
 
 
 # ── JSON 추출 ────────────────────────────────────────────────
@@ -404,7 +491,15 @@ def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
     }.get(brief.get("market_regime", "sideways"), "")
 
     lines: list[str] = []
-    lines.append(f"🌅 <b>아침 시황 브리핑 — {today}</b>")
+    # 헤더에 요일 포함 (today가 'YYYY-MM-DD' 형식이면 요일 추가)
+    header_today = today
+    try:
+        if len(today) == 10 and today[4] == '-':
+            t_obj = date.fromisoformat(today)
+            header_today = f"{today} ({_WEEKDAY_KR[t_obj.weekday()]})"
+    except Exception:
+        pass
+    lines.append(f"🌅 <b>아침 시황 브리핑 — {header_today}</b>")
     headline = brief.get("headline") or ""
     if headline:
         lines.append(f"💬 <i>{headline}</i>")
@@ -468,8 +563,12 @@ def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
 
     # 추천 종목 5개 (디테일)
     picks = brief.get("picks") or []
+    lines.append(f"⭐ <b>추천 종목 ({len(picks)})</b>")
+    # picks ≤2면 사유 표시
+    low_reason = brief.get("_low_picks_reason", "")
+    if low_reason:
+        lines.append(low_reason)
     if picks:
-        lines.append(f"⭐ <b>추천 종목 ({len(picks)})</b>")
         for p in picks[:_MAX_PICKS]:
             rk = p.get("rank") or "?"
             tk = p.get("ticker") or ""
@@ -482,12 +581,22 @@ def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
             themes = p.get("themes") or []
             risk = p.get("risk") or ""
             reason = (p.get("reason") or "").replace("\n", " ")
+            entry_note = p.get("_entry_note", "")
+            entry_corrected = p.get("_entry_corrected", False)
+            pick_note = p.get("_note", "")
             lines.append(f"  <b>{rk}. {nm}({tk})</b>  {stars}")
             if reason:
                 lines.append(f"     {reason[:200]}")
             range_parts = []
             if entry:
-                range_parts.append(f"진입 {int(entry):,}원")
+                entry_str = f"진입 {int(entry):,}원"
+                if entry_corrected:
+                    entry_str += " ⚠️DB교체"
+                elif entry_note:
+                    entry_str += f" {entry_note}"
+                range_parts.append(entry_str)
+            elif pick_note:
+                range_parts.append(f"진입 {pick_note}")
             if sl is not None:
                 range_parts.append(f"손절 {sl:+.1f}%")
             if tp is not None:
@@ -520,6 +629,10 @@ def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
     tone = brief.get("strategy_tone") or ""
     if tone:
         lines.append(f"🎯 전략 톤: <b>{tone}</b>")
+
+    # 데이터 출처 범례
+    lines.append("")
+    lines.append("📌 <i>[DB] KIS 시세 / [Claude] AI 분석 / [yfinance] 미국 — 가격은 어제 종가 기준, 추정 X</i>")
 
     # 컷
     msg = "\n".join(lines)
@@ -639,6 +752,23 @@ def run_morning_brief() -> dict:
         _save_briefing(today, {}, us_snap, market_row, fallback, sent)
         return {"date": today, "picks_count": 0, "avoids_count": 0, "sent": sent}
 
+    # 🔴 자기 검증 — picks의 entry가 DB close_price와 일치하는지
+    raw_picks = brief.get("picks") or []
+    validated_picks, warnings = _validate_picks(raw_picks, recent_top)
+    brief["picks"] = validated_picks
+    if warnings:
+        for w in warnings:
+            logger.warning(f"[morning_brief 검증] {w}")
+
+    # picks ≤2 시 사유 자동 생성
+    picks_n = len(validated_picks)
+    if picks_n <= 2:
+        days_in_db = _count_days_in_db()
+        regime = brief.get("market_regime", "")
+        brief["_low_picks_reason"] = _explain_low_picks(
+            picks_n, days_in_db, regime, len(learnings)
+        )
+
     # 메시지 작성 + 발송
     msg = _format_message(today, brief, us_snap)
     sent = notify(msg)
@@ -647,10 +777,9 @@ def run_morning_brief() -> dict:
 
     _save_briefing(today, brief, us_snap, market_row, msg, sent)
 
-    picks_n  = len(brief.get("picks") or [])
     avoids_n = len(brief.get("avoids") or [])
     logger.info(
-        f"[morning_brief] 완료 — picks={picks_n} avoids={avoids_n} sent={sent}"
+        f"[morning_brief] 완료 — picks={picks_n} avoids={avoids_n} sent={sent} 검증경고={len(warnings)}"
     )
     return {"date": today, "picks_count": picks_n, "avoids_count": avoids_n, "sent": sent}
 

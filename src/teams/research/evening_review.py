@@ -631,7 +631,16 @@ def _format_message(
     learnings: list[dict] | None = None,
 ) -> str:
     lines: list[str] = []
-    lines.append(f"🌆 <b>저녁 회고 — {today}</b>")
+    # 헤더에 요일 포함
+    _wk = ['월', '화', '수', '목', '금', '토', '일']
+    header_today = today
+    try:
+        if len(today) == 10 and today[4] == '-':
+            from datetime import date as _date
+            header_today = f"{today} ({_wk[_date.fromisoformat(today).weekday()]})"
+    except Exception:
+        pass
+    lines.append(f"🌆 <b>저녁 회고 — {header_today}</b>")
     headline = review.get("headline") or ""
     if headline:
         lines.append(f"💬 <i>{headline}</i>")
