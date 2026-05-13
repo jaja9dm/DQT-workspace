@@ -429,8 +429,8 @@ class DQTScheduler:
                 self._trading.run_once()
                 logger.info("09:10 매매팀 재실행 완료")
 
-            # 헬스체크 리포트 — 시스템 상태 텔레그램 요약
-            _send_morning_healthcheck(self)
+            # 헬스체크 리포트 비활성 — 어시스턴트 모드 노이즈 (사용자 결정 2026-05-13)
+            # _send_morning_healthcheck(self)
 
             # notify("🔄 <b>[09:10 재점검]</b> Hot List 재스캔 + 매수 재개")  # 어시스턴트 모드: 매매 X, 알림 불필요
         except Exception as e:
