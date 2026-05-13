@@ -433,7 +433,7 @@ def _classify_chunk(chunk: list[dict]) -> list[dict]:
             model=settings.CLAUDE_MODEL_FAST,
             max_tokens=8000,
             temperature=0,
-            timeout=45.0,
+            timeout=120.0,
             system=[
                 {
                     "type": "text",
@@ -471,9 +471,9 @@ def classify_and_translate(raw_news: list[dict]) -> list[dict]:
     if len(raw_news) > 80:
         raw_news = raw_news[:80]
 
-    # ① 청크 크기 15 → 50 — max_tokens 8000으로 늘려서 출력 안전
+    # ① 청크 크기 15 → 35 — 50은 timeout 발생, 35가 안정 (timeout 120초)
     results: list[dict] = []
-    CHUNK = 50
+    CHUNK = 35
 
     for chunk in _chunk(raw_news, CHUNK):
         parsed = _classify_chunk(chunk)
