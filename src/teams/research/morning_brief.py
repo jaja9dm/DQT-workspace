@@ -848,19 +848,21 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
     if tone:
         lines.append(f"🎯 전략 톤: <b>{tone}</b>")
 
-    # 데이터 출처 범례
-    lines.append("")
-    lines.append("📌 <i>데이터 출처</i>")
-    lines.append("  <i>[KIS] 한국투자증권 시세·KOSPI 수급 (정확)</i>")
-    lines.append("  <i>[KIS-한계] KOSDAQ 시장 전체 매매동향은 KIS API 미지원 — 신뢰도 낮음, 0억 표기는 수집 실패 가능성 포함</i>")
-    lines.append("  <i>[yfinance] 미국 시장 지표 (정확)</i>")
-    lines.append("  <i>[Claude] AI 분석 — 사실 기반, 수치 추정 X</i>")
+    # 데이터 출처 범례 — 한 줄 컴팩트. 항상 메시지 끝에 보장(truncate 시 본문을 자름).
+    legend = (
+        "\n\n📌 <i>출처: [KIS] 한국투자증권 시세·KOSPI 수급 / "
+        "[KIS-한계] KOSDAQ 매매동향은 KIS 미지원·신뢰도 낮음 / "
+        "[yfinance] 미국 지표 / [Claude] AI 분석(사실 기반·수치 추정 X)</i>"
+    )
 
     # 컷 — 한글 후처리 (Claude가 영어 단어 남긴 경우 자동 치환)
     msg = "\n".join(lines)
     msg = _kr_postprocess(msg)
-    if len(msg) > _TELEGRAM_LIMIT:
-        msg = msg[:_TELEGRAM_LIMIT] + "\n...[truncated]"
+    # legend는 항상 끝에 부착. 한도 초과 시 본문을 잘라 legend 공간 확보.
+    body_limit = _TELEGRAM_LIMIT - len(legend) - 20
+    if len(msg) > body_limit:
+        msg = msg[:body_limit] + "\n...[중략]"
+    msg += legend
     return msg
 
 
