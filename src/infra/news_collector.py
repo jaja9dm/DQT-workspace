@@ -414,12 +414,13 @@ def _classify_chunk(chunk: list[dict]) -> list[dict]:
     # 입력 콤팩트 직렬화
     payload = []
     for i, item in enumerate(chunk):
+        # 비용 절감 (2026-05-13): raw_summary 300→80자 축약. 헤드라인 위주로 분류.
         payload.append({
             "index":       i,
             "market":      item.get("market"),
             "source":      item.get("source"),
-            "headline":    (item.get("headline_orig") or item.get("headline") or "")[:300],
-            "raw_summary": (item.get("raw_summary") or "")[:300],
+            "headline":    (item.get("headline_orig") or item.get("headline") or "")[:200],
+            "raw_summary": (item.get("raw_summary") or "")[:80],
         })
 
     user_content = (
@@ -430,7 +431,7 @@ def _classify_chunk(chunk: list[dict]) -> list[dict]:
     try:
         response = _client.messages.create(
             model=settings.CLAUDE_MODEL_FAST,
-            max_tokens=4000,
+            max_tokens=8000,
             temperature=0,
             timeout=45.0,
             system=[
@@ -465,9 +466,14 @@ def classify_and_translate(raw_news: list[dict]) -> list[dict]:
     if not raw_news:
         return []
 
-    # 청크 크기 15 — Claude max_tokens 안에서 JSON이 잘리지 않도록 안전 마진
+    # 비용 절감 (2026-05-13):
+    # ② 수집 양 max 80건으로 제한 (importance 보존: published_at 최신순 우선)
+    if len(raw_news) > 80:
+        raw_news = raw_news[:80]
+
+    # ① 청크 크기 15 → 50 — max_tokens 8000으로 늘려서 출력 안전
     results: list[dict] = []
-    CHUNK = 15
+    CHUNK = 50
 
     for chunk in _chunk(raw_news, CHUNK):
         parsed = _classify_chunk(chunk)
