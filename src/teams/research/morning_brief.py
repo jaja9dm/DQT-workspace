@@ -78,6 +78,37 @@ _SYSTEM_PROMPT = """당신은 한국 주식시장에서 단타·스윙 매매를
 4. **종목 이름·코드 매핑도 입력 그대로 사용**. 입력에 없는 종목 임의로 추천 금지.
 5. **모름은 "모름", 예상은 "예상" 명시**. 특히 가격은 사실만.
 
+## 🟢 한글 우선 — 영어 단어 최소화 (절대 위반 금지)
+
+사용자 가독성을 위해 사용자에게 보이는 모든 텍스트(macro_view, headline, reason, risk, 등)는
+**한국어로만** 작성. 영어 단어 사용은 다음 예외에만 허용:
+  - 고유명사: KOSPI, KOSDAQ, NASDAQ, S&P500, Dow, VIX, SOXX, LIT, SPY, AI, EV, ETF, USD, KRW, TSMC, NVDA 등
+  - 종목명 영어 일부 (예: SK하이닉스)
+  - 약어: RSI, MACD, PER, PBR, ROE, EPS, GDP, FOMC, CPI, PPI 등
+
+**금지 영어 단어** — 반드시 한글로 치환:
+  - regime → "국면" (사용 금지: "regime이 reversal로 전환됐다" X / "국면이 반등으로 전환됐다" O)
+  - reversal → "반등 국면" / "추세 반전"
+  - weak → "약세 국면"
+  - strong → "강세 국면"
+  - sideways → "횡보"
+  - volatile → "변동성 큼"
+  - bullish → "상승" / "강세"
+  - bearish → "하락" / "약세"
+  - neutral → "중립"
+  - strategy_tone → "전략 톤"
+  - confidence → "신뢰도"
+  - pullback_rebound → "조정 후 반등 신호"
+  - opening_plunge_rebound → "장 시작 급락 후 반등"
+  - breakout → "돌파"
+  - momentum → "모멘텀(추세)"
+  - FOMO → "추격 매수 심리"
+  - 그 외 일반 영어 단어는 모두 한글로
+
+JSON의 enum 필드(market_regime, strategy_tone)는 영문값 유지(파이프라인 호환).
+하지만 macro_view·headline·reason·risk 등 사용자 노출 텍스트에는 enum 단어를 한글로 풀어쓸 것.
+예: "regime이 reversal로 전환" (X) → "국면이 반등으로 전환" (O)
+
 ## 입력 데이터
 - 오버나이트 미국 마감 (S&P/NASDAQ/Dow, VIX, US10Y, 주요 ETF, 핵심 종목 8개)
 - 어제 한국 시장 (KOSPI/KOSDAQ 종가·등락률, 외인·기관 순매수)
@@ -147,6 +178,72 @@ _TELEGRAM_LIMIT = 4000      # 안전 마진
 _WEEKDAY_KR = ['월', '화', '수', '목', '금', '토', '일']
 
 
+# ── 영어 → 한글 후처리 (Claude가 잊고 영어 쓴 경우 대비) ─────
+# 단어 경계(\b)로 매칭해 다른 단어 일부는 건들지 않음.
+# 고유명사(KOSPI/SOXX/NVDA 등)와 약어(RSI/MACD)는 매핑에서 제외.
+_EN_TO_KR: dict[str, str] = {
+    # 시장 국면
+    "reversal":               "반등 국면",
+    "sideways":               "횡보",
+    "volatile":               "변동성 큼",
+    "regime":                 "국면",
+    # 강·약세 (단어 단독일 때만 — 한글 풀어쓰기)
+    "bullish":                "강세",
+    "bearish":                "약세",
+    "neutral":                "중립",
+    # 신호 이름
+    "pullback_rebound":       "조정 후 반등 신호",
+    "opening_plunge_rebound": "장 시작 급락 후 반등",
+    "breakout":               "돌파",
+    "momentum":               "모멘텀(추세)",
+    # 기타
+    "strategy_tone":          "전략 톤",
+    "confidence":             "신뢰도",
+    "FOMO":                   "추격 매수 심리",
+}
+
+# 'weak'/'strong'는 다른 한글 단어 안에 영문 약자처럼 들어가는 경우는 거의 없지만,
+# 영문 그대로 노출되면 한글로 풀어 변환 (단어 경계).
+_EN_TO_KR_WORD_BOUNDARY: dict[str, str] = {
+    "weak":   "약세 국면",
+    "strong": "강세 국면",
+}
+
+
+def _kr_postprocess(text: str) -> str:
+    """Claude 출력이 영어 단어를 그대로 두면 후처리로 한글 치환.
+
+    - 영문/숫자/언더스코어 사이의 경계만 매칭 (한글 옆에 붙은 영어 단어도 잡힘)
+    - Python의 \\b는 한글을 단어 문자로 인식하므로 사용하지 않고 lookbehind/lookahead 사용
+    - 대소문자 구분 X
+    - 긴 키부터 치환해서 부분 매칭 충돌 방지
+    """
+    if not text:
+        return text
+    out = text
+    # 영문 단어 경계: 영문/숫자/_ 가 인접하지 않을 때만 매칭
+    boundary_l = r"(?<![A-Za-z0-9_])"
+    boundary_r = r"(?![A-Za-z0-9_])"
+    # 더 긴 키부터 치환 (opening_plunge_rebound가 rebound/breakout 부분 매칭에 안 깨지게)
+    items = list(_EN_TO_KR.items()) + list(_EN_TO_KR_WORD_BOUNDARY.items())
+    for en, kr in sorted(items, key=lambda x: -len(x[0])):
+        out = re.sub(
+            rf"{boundary_l}{re.escape(en)}{boundary_r}",
+            kr, out, flags=re.IGNORECASE,
+        )
+    return out
+
+
+# enum → 한글 라벨 (사용자 노출용 — JSON에는 영문값 유지)
+_REGIME_LABEL = {
+    "strong":   "강세 국면",
+    "sideways": "횡보",
+    "weak":     "약세 국면",
+    "reversal": "반등 국면",
+    "volatile": "변동성 큼",
+}
+
+
 def _today_with_weekday() -> str:
     """2026-05-13 (수) 형식."""
     t = date.today()
@@ -210,7 +307,7 @@ def _explain_low_picks(picks_count: int, days_in_db: int, regime: str, lessons_c
     if days_in_db < 3:
         reasons.append(f"시계열 {days_in_db}일치만 누적 → 트렌드 분석 부족")
     if regime in ('weak', 'reversal', 'volatile'):
-        reasons.append(f"시장 국면 '{regime}' → 보수적 추천")
+        reasons.append(f"시장 국면 '{_REGIME_LABEL.get(regime, regime)}' → 보수적 추천")
     if lessons_count >= 10:
         reasons.append(f"누적 학습 {lessons_count}건의 '진입 자제' 규칙 강하게 작동")
     if not reasons:
@@ -429,12 +526,31 @@ def _ask_claude(
                 return format(float(v), spec)
             except (TypeError, ValueError):
                 return default
+
+        # KOSDAQ 시장 전체 매매동향은 KIS API가 신뢰도 낮음 — Claude에게 명시
+        def _fmt_flow_note(v):
+            if v is None:
+                return "수집 실패(NULL)"
+            try:
+                fv = float(v)
+            except (TypeError, ValueError):
+                return "수집 실패"
+            if abs(fv) < 1.0:
+                # KIS API 한계로 거의 0 (실제 0이 아닐 가능성 매우 높음)
+                return f"{fv:+.1f}억 (KIS API 한계 — 신뢰도 낮음)"
+            return f"{fv:+,.0f}억"
+
         kr_lines.append(
             f"KOSDAQ 종합: 종가={_fmt(kosdaq_row.get('close'), ',.2f')} "
             f"등락={_fmt(kosdaq_row.get('chg_pct'), '+.2f')}% | "
             f"거래대금={_fmt(kosdaq_row.get('trading_value'), ',.0f')}억 | "
-            f"외인={_fmt(kosdaq_row.get('foreign_net_buy'), '+.0f')}억 | "
-            f"기관={_fmt(kosdaq_row.get('inst_net_buy'), '+.0f')}억"
+            f"외인={_fmt_flow_note(kosdaq_row.get('foreign_net_buy'))} | "
+            f"기관={_fmt_flow_note(kosdaq_row.get('inst_net_buy'))}"
+        )
+        kr_lines.append(
+            "  ⚠️ 주의: KOSDAQ 시장 전체 외인·기관 매매동향은 KIS API 미지원으로 "
+            "절대값이 매우 작거나 NULL인 경우가 많음. 수치 자체는 신뢰도 낮으니 "
+            "macro_view에서 KOSDAQ 수급 단정 금지."
         )
     kr_block = "\n".join(kr_lines) if kr_lines else "(데이터 없음)"
 
@@ -734,10 +850,15 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
 
     # 데이터 출처 범례
     lines.append("")
-    lines.append("📌 <i>[DB] KIS 시세 / [Claude] AI 분석 / [yfinance] 미국 — 가격은 어제 종가 기준, 추정 X</i>")
+    lines.append("📌 <i>데이터 출처</i>")
+    lines.append("  <i>[KIS] 한국투자증권 시세·KOSPI 수급 (정확)</i>")
+    lines.append("  <i>[KIS-한계] KOSDAQ 시장 전체 매매동향은 KIS API 미지원 — 신뢰도 낮음, 0억 표기는 수집 실패 가능성 포함</i>")
+    lines.append("  <i>[yfinance] 미국 시장 지표 (정확)</i>")
+    lines.append("  <i>[Claude] AI 분석 — 사실 기반, 수치 추정 X</i>")
 
-    # 컷
+    # 컷 — 한글 후처리 (Claude가 영어 단어 남긴 경우 자동 치환)
     msg = "\n".join(lines)
+    msg = _kr_postprocess(msg)
     if len(msg) > _TELEGRAM_LIMIT:
         msg = msg[:_TELEGRAM_LIMIT] + "\n...[truncated]"
     return msg
