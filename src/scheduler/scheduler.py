@@ -222,26 +222,27 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=7, minute=30, timezone="Asia/Seoul"
         ), id="morning_brief", name="아침 시황 브리핑")
 
-        # 09:01 — 전일 저녁 선점 종목 시초가 매수 (방향 1 전략)
-        # 09:00에 _start_realtime_engines가 먼저 TradingEngine을 생성해야 하므로 1분 후 실행
-        s.add_job(self._run_open_trade, CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=1, timezone="Asia/Seoul"
-        ), id="open_trade", name="시초가 선점 매수")
+        # 어시스턴트 모드 (2026-05-13) — 매매 관련 잡 모두 비활성. 코드 보존.
+        # 시초가 매수 / 장 시작 재점검 / 장 마감 정지는 매매 컨텍스트라 어시스턴트 무관.
+        # 실시간 엔진은 17:00 _auto_shutdown에서 일괄 정지됨.
 
-        # 장 시작 — 거래 엔진 기동 (시황 엔진은 08:35에 이미 기동됨)
+        # s.add_job(self._run_open_trade, CronTrigger(
+        #     day_of_week="mon-fri", hour=9, minute=1, timezone="Asia/Seoul"
+        # ), id="open_trade", name="시초가 선점 매수")
+
+        # 장 시작 — 거래 엔진 기동 (시황 엔진은 07:15에 이미 기동됨)
+        # 어시스턴트 모드: domestic_stock만 가동 (hot_list 적재용, daily_eod_loader 폴백 지원)
         s.add_job(self._start_realtime_engines, CronTrigger(
             day_of_week="mon-fri", hour=9, minute=0, timezone="Asia/Seoul"
-        ), id="start_engines", name="실시간 엔진 기동")
+        ), id="start_engines", name="실시간 엔진 기동 (어시스턴트: domestic_stock만)")
 
-        # 9:10 — 장 시작 10분 재점검 (Hot List 강제 트리거 + 매매 재개)
-        s.add_job(self._market_open_recheck, CronTrigger(
-            day_of_week="mon-fri", hour=9, minute=10, timezone="Asia/Seoul"
-        ), id="open_recheck", name="9:10 장 시작 재점검")
+        # s.add_job(self._market_open_recheck, CronTrigger(
+        #     day_of_week="mon-fri", hour=9, minute=10, timezone="Asia/Seoul"
+        # ), id="open_recheck", name="9:10 장 시작 재점검")
 
-        # 장 마감 — 실시간 엔진 정지
-        s.add_job(self._stop_realtime_engines, CronTrigger(
-            day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
-        ), id="stop_engines", name="실시간 엔진 정지")
+        # s.add_job(self._stop_realtime_engines, CronTrigger(
+        #     day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
+        # ), id="stop_engines", name="실시간 엔진 정지")
 
         # ⚠️ DEPRECATED (2026-05-12) — 자동 매매 모델 비활성화로 daily_journal 호출 중단.
         # 어시스턴트 모델 전환: 15:35 daily_eod_loader.py로 대체 (Phase 4 적용 완료).
@@ -263,15 +264,14 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Seoul"
         ), id="evening_review", name="저녁 회고 (어시스턴트)")
 
-        # 장 마감 후 배치: 리포트팀
-        s.add_job(self._run_report, CronTrigger(
-            day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"
-        ), id="daily_report", name="일일 리포트 생성")
+        # 어시스턴트 모드: 일일 리포트/연구소 분석은 evening_review(16:40)로 대체. 비활성.
+        # s.add_job(self._run_report, CronTrigger(
+        #     day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"
+        # ), id="daily_report", name="일일 리포트 생성")
 
-        # 장 마감 후 배치: 연구소 일일 분석
-        s.add_job(self._run_research_daily, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Seoul"
-        ), id="research_daily", name="연구소 일일 분석")
+        # s.add_job(self._run_research_daily, CronTrigger(
+        #     day_of_week="mon-fri", hour=16, minute=0, timezone="Asia/Seoul"
+        # ), id="research_daily", name="연구소 일일 분석")
 
         # ⚠️ DEPRECATED (2026-05-12) — 어시스턴트 모델로 대체. 코드 보존, 스케줄만 제거.
         # 16:05 매매일지 / 16:15 일일 복기 / 16:25 파라미터 튜닝은
@@ -291,10 +291,10 @@ class DQTScheduler:
         #     day_of_week="mon-fri", hour=16, minute=25, timezone="Asia/Seoul"
         # ), id="param_tuning", name="자동 파라미터 튜닝")
 
-        # 16:30 — 내일 매수 종목 저녁 선점 (방향 1 전략, auto_shutdown 전에 실행)
-        s.add_job(self._run_evening_selection, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
-        ), id="evening_selection", name="저녁 종목 선점")
+        # 어시스턴트 모드: 저녁 선점은 morning_brief(다음날 07:30)로 대체. 비활성.
+        # s.add_job(self._run_evening_selection, CronTrigger(
+        #     day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
+        # ), id="evening_selection", name="저녁 종목 선점")
 
         # 자동 종료 — 평일 17:00 (어시스턴트 모드: EOD/회고 완료 후 시스템 종료)
         # launchd가 다음날 평일 08:30에 자동 시작 (StartCalendarInterval)
@@ -302,10 +302,10 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
         ), id="auto_shutdown", name="자동 종료")
 
-        # 연구소 심층 백테스트 (일요일 주 1회)
-        s.add_job(self._run_research_deep, CronTrigger(
-            day_of_week="sun", hour=16, minute=30, timezone="Asia/Seoul"
-        ), id="research_deep", name="연구소 심층 백테스트")
+        # 어시스턴트 모드: 연구소 심층 백테스트는 매매 룰 튜닝용 — 비활성
+        # s.add_job(self._run_research_deep, CronTrigger(
+        #     day_of_week="sun", hour=16, minute=30, timezone="Asia/Seoul"
+        # ), id="research_deep", name="연구소 심층 백테스트")
 
         # 매일 자정: 감성 캐시 만료 정리
         s.add_job(self._purge_sentiment_cache, CronTrigger(
