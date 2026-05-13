@@ -591,3 +591,28 @@ CREATE TABLE IF NOT EXISTS kosdaq_condition (
     program_net_buy   REAL,
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- ════════════════════════════════════════════════════════════════════
+-- 일일 주요 뉴스 (2026-05-13) — morning_brief / evening_review 통합
+-- 태그 기반 영구 보관. 4분류 (macro/sector/company/risk)
+-- ════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS daily_news (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    date            DATE NOT NULL,
+    market          TEXT NOT NULL,           -- 'kr' | 'us' | 'global'
+    source          TEXT,                    -- '네이버' / 'Yahoo' / 'Reuters' / ...
+    headline        TEXT NOT NULL,           -- 한글 (해외도 번역)
+    headline_orig   TEXT,                    -- 원문 (해외인 경우)
+    summary         TEXT,                    -- Claude 1~2줄 요약
+    category        TEXT NOT NULL,           -- 'macro' | 'sector' | 'company' | 'risk'
+    tags            TEXT,                    -- JSON: ["반도체", "FOMC", "엔비디아"]
+    related_tickers TEXT,                    -- JSON: ["005380","000660"]
+    importance      INTEGER DEFAULT 3,       -- 1~5 (Claude 평가)
+    url             TEXT,
+    published_at    DATETIME,
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_daily_news_date     ON daily_news(date DESC, importance DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_news_category ON daily_news(category, date DESC);
+CREATE INDEX IF NOT EXISTS idx_daily_news_market   ON daily_news(market, date DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_news_url_uniq ON daily_news(url) WHERE url IS NOT NULL;

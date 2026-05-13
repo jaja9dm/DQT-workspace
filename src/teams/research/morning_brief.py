@@ -32,6 +32,15 @@ from src.infra.us_market import get_latest_us_snapshot
 from src.utils.logger import get_logger
 from src.utils.notifier import check_claude_error, notify
 
+try:
+    from src.infra.news_collector import (
+        collect_and_save as _collect_and_save_news,
+        get_news_for_brief as _get_news_for_brief,
+    )
+except Exception as _e:    # 네트워크/라이브러리 미설치 등 — 뉴스 섹션 비활성화
+    _collect_and_save_news = None
+    _get_news_for_brief = None
+
 logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -480,7 +489,43 @@ def _ask_claude(
 
 # ── 메시지 작성 ──────────────────────────────────────────────
 
-def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
+_NEWS_CAT_META = [
+    ("macro",   "🌐 거시/정책"),
+    ("sector",  "🏭 섹터"),
+    ("company", "🏢 개별 기업"),
+    ("risk",    "⚠️ 리스크"),
+]
+
+
+def _format_news_section(news: dict | None) -> list[str]:
+    """뉴스 섹션 텔레그램 라인 작성. 항목 없으면 빈 리스트 반환."""
+    if not news:
+        return []
+    total = sum(len(news.get(k) or []) for k, _ in _NEWS_CAT_META)
+    if total == 0:
+        return []
+    lines: list[str] = ["📰 <b>주요 뉴스</b>"]
+    for cat, label in _NEWS_CAT_META:
+        items = news.get(cat) or []
+        if not items:
+            continue
+        lines.append(f"  {label}")
+        for n in items:
+            imp = int(n.get("importance") or 3)
+            stars = "★" * imp
+            headline = (n.get("headline") or "").replace("\n", " ").strip()
+            if not headline:
+                continue
+            # 한 줄 길이 컷 (텔레그램 줄바꿈 최소화)
+            if len(headline) > 90:
+                headline = headline[:87] + "…"
+            lines.append(f"    {stars} {headline}")
+    lines.append("")
+    return lines
+
+
+def _format_message(today: str, brief: dict, us_snap: dict | None,
+                    news: dict | None = None) -> str:
     """텔레그램 HTML 메시지 작성 (4096자 이내)."""
     regime_emoji = {
         "strong":   "📈",
@@ -543,6 +588,11 @@ def _format_message(today: str, brief: dict, us_snap: dict | None) -> str:
         # 텔레그램 4096자 한도 — 시황은 600자로 컷
         lines.append(f"  {macro_view[:600]}")
         lines.append("")
+
+    # 주요 뉴스 (4분류)
+    news_lines = _format_news_section(news)
+    if news_lines:
+        lines.extend(news_lines)
 
     # 섹터 4분류
     sectors = brief.get("sectors") or {}
@@ -710,6 +760,19 @@ def run_morning_brief() -> dict:
 
     logger.info(f"[morning_brief] 시작 — {today}")
 
+    # 뉴스 수집/분류/저장 (어제 한국 마감 + 오버나이트 미국, 최근 18시간)
+    news_for_msg: dict | None = None
+    if _collect_and_save_news and _get_news_for_brief:
+        try:
+            _collect_and_save_news(hours=18)
+        except Exception as e:
+            logger.warning(f"[morning_brief] 뉴스 수집 실패 — 브리핑은 계속: {e}")
+        try:
+            news_for_msg = _get_news_for_brief(today)
+        except Exception as e:
+            logger.warning(f"[morning_brief] 뉴스 조회 실패: {e}")
+            news_for_msg = None
+
     # 데이터 수집
     us_snap        = get_latest_us_snapshot()
     market_row     = _fetch_last_market_condition()
@@ -770,7 +833,7 @@ def run_morning_brief() -> dict:
         )
 
     # 메시지 작성 + 발송
-    msg = _format_message(today, brief, us_snap)
+    msg = _format_message(today, brief, us_snap, news=news_for_msg)
     sent = notify(msg)
     if not sent:
         logger.warning("[morning_brief] 텔레그램 발송 실패 — DB 저장은 진행")

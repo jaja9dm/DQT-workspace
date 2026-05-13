@@ -29,6 +29,15 @@ from src.infra.database import execute, fetch_all, fetch_one
 from src.utils.logger import get_logger
 from src.utils.notifier import check_claude_error, notify
 
+try:
+    from src.infra.news_collector import (
+        collect_and_save as _collect_and_save_news,
+        get_news_for_brief as _get_news_for_brief,
+    )
+except Exception:
+    _collect_and_save_news = None
+    _get_news_for_brief = None
+
 logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -616,6 +625,40 @@ def _fmt_lessons_ids(ids: list[int], learnings_map: dict[int, dict]) -> list[str
     return out
 
 
+_NEWS_CAT_META = [
+    ("macro",   "🌐 거시/정책"),
+    ("sector",  "🏭 섹터"),
+    ("company", "🏢 개별 기업"),
+    ("risk",    "⚠️ 리스크"),
+]
+
+
+def _format_news_section(news: dict | None) -> list[str]:
+    """뉴스 섹션 텔레그램 라인 작성. 항목 없으면 빈 리스트 반환."""
+    if not news:
+        return []
+    total = sum(len(news.get(k) or []) for k, _ in _NEWS_CAT_META)
+    if total == 0:
+        return []
+    lines: list[str] = ["📰 <b>오늘 주요 뉴스</b>"]
+    for cat, label in _NEWS_CAT_META:
+        items = news.get(cat) or []
+        if not items:
+            continue
+        lines.append(f"  {label}")
+        for n in items:
+            imp = int(n.get("importance") or 3)
+            stars = "★" * imp
+            headline = (n.get("headline") or "").replace("\n", " ").strip()
+            if not headline:
+                continue
+            if len(headline) > 90:
+                headline = headline[:87] + "…"
+            lines.append(f"    {stars} {headline}")
+    lines.append("")
+    return lines
+
+
 def _format_message(
     today: str,
     review: dict,
@@ -629,6 +672,7 @@ def _format_message(
     market_row: dict | None,
     kosdaq_row: dict | None,
     learnings: list[dict] | None = None,
+    news: dict | None = None,
 ) -> str:
     lines: list[str] = []
     # 헤더에 요일 포함
@@ -676,6 +720,11 @@ def _format_message(
             i_s = f"{float(i_v):+.0f}억" if (i_v is not None and float(i_v) != 0) else "데이터 없음"
             lines.append(f"  KOSDAQ 외인 {f_s} | 기관 {i_s}")
         lines.append("")
+
+    # 주요 뉴스 (4분류)
+    news_lines = _format_news_section(news)
+    if news_lines:
+        lines.extend(news_lines)
 
     # 추천 결과
     if picks_results:
@@ -871,6 +920,19 @@ def run_evening_review() -> dict:
 
     logger.info(f"[evening_review] 시작 — {today}")
 
+    # 뉴스 수집/분류/저장 (오늘 한국 장중 + 오늘 아침 미국, 최근 18시간)
+    news_for_msg: dict | None = None
+    if _collect_and_save_news and _get_news_for_brief:
+        try:
+            _collect_and_save_news(hours=18)
+        except Exception as e:
+            logger.warning(f"[evening_review] 뉴스 수집 실패 — 회고는 계속: {e}")
+        try:
+            news_for_msg = _get_news_for_brief(today)
+        except Exception as e:
+            logger.warning(f"[evening_review] 뉴스 조회 실패: {e}")
+            news_for_msg = None
+
     # 데이터 수집
     briefing       = _fetch_today_briefing(today)
     today_top      = _fetch_today_top_value(today)
@@ -943,6 +1005,7 @@ def run_evening_review() -> dict:
         sector_strong, sector_weak, top10,
         market_row, kosdaq_row,
         learnings=learnings,
+        news=news_for_msg,
     )
 
     sent = notify(msg)
