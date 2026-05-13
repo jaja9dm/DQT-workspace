@@ -1,5 +1,5 @@
 """
-news_collector.py — 주요 뉴스 수집/분류/저장 (2026-05-13)
+news_collector.py — 주요 뉴스 수집/분류/저장 (2026-05-13 최적화)
 
 역할:
   매일 morning_brief(07:30) / evening_review(16:40) 직전에 호출되어
@@ -18,6 +18,14 @@ news_collector.py — 주요 뉴스 수집/분류/저장 (2026-05-13)
   classify_and_translate(raw)   → list[dict]  (Claude Haiku + cache_control)
   save_news(news_list)          → int  (신규 INSERT 건수)
   get_news_for_brief(date_str)  → dict {'macro':[…], 'sector':[…], 'company':[…], 'risk':[…]}
+
+비용 최적화 (2026-05-13):
+  - summary 필드 제거 (출력 토큰 30~40% ↓): raw_summary 그대로 저장 (영어는 번역만)
+  - related_tickers 로컬 매칭 (Claude 응답에서 제거): 사전 기반 100% 정확
+  - 응답 필드 최소화: {index, headline_kr, category, tags, importance}
+  - 시스템 프롬프트 압축 + importance 엄격화 (5점 인플레 차단)
+  - 룰 기반 카테고리 힌트 (payload에 추가, Claude 빠르게 확신)
+  - jaccard 기반 강화 dedup (소스 우선순위)
 """
 
 from __future__ import annotations
@@ -53,6 +61,14 @@ _VALID_CATEGORIES = {"macro", "sector", "company", "risk"}
 
 # 분류별 기본 슬롯 (총 max 10개)
 _DEFAULT_QUOTA = {"macro": 3, "sector": 4, "company": 3, "risk": 2}
+
+# 소스 신뢰도 우선순위 (dedup 시 더 신뢰성 높은 source 유지)
+_SOURCE_PRIORITY = {
+    "한국경제": 100, "한국경제-증권": 100,
+    "매일경제": 90, "매일경제-경제": 90,
+    "네이버금융": 60,
+    "CNBC": 100, "MarketWatch": 90, "Yahoo Finance": 80, "Investing": 70,
+}
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -114,6 +130,7 @@ def _filter_recent(items: list[dict], hours: int) -> list[dict]:
 
 
 def _dedup_headlines(items: list[dict]) -> list[dict]:
+    """기본 dedup — 헤드라인 SHA1 hash 기반 (정확 일치)."""
     seen = set()
     out = []
     for it in items:
@@ -123,6 +140,87 @@ def _dedup_headlines(items: list[dict]) -> list[dict]:
         seen.add(h)
         out.append(it)
     return out
+
+
+# ── 강화 dedup (jaccard 토큰 유사도) ────────────────────────────────
+
+_NORM_PATTERN = re.compile(r"[\s\W_]+")  # 공백/구두점/특수문자
+
+
+def _normalize_for_dedup(text: str) -> set[str]:
+    """헤드라인 토큰화: 2-gram 문자 + 4자 이상 단어."""
+    if not text:
+        return set()
+    t = (text or "").lower().strip()
+    # 1) 공백/구두점 제거 후 2-gram char shingle (한글 강건)
+    cleaned = _NORM_PATTERN.sub("", t)
+    shingles: set[str] = set()
+    if len(cleaned) >= 2:
+        for i in range(len(cleaned) - 1):
+            shingles.add(cleaned[i:i + 2])
+    # 2) 단어 토큰 (영어/숫자 매칭 보강)
+    for w in re.findall(r"[a-z0-9가-힣]{3,}", t):
+        shingles.add(w)
+    return shingles
+
+
+def _jaccard(a: set, b: set) -> float:
+    if not a or not b:
+        return 0.0
+    inter = len(a & b)
+    if inter == 0:
+        return 0.0
+    return inter / len(a | b)
+
+
+def _dedup_advanced(items: list[dict], threshold: float = 0.5) -> list[dict]:
+    """강화 dedup — jaccard 유사도 0.5+ 이면 중복 (한경/매경 동일 사건 차단).
+
+    중복 발견 시: source 우선순위 높은 항목 유지, 더 짧은 헤드라인 우선 (대체로 본문 깔끔).
+    """
+    if not items:
+        return []
+    # 먼저 hash 기반 정확 일치 제거
+    base = _dedup_headlines(items)
+
+    # 토큰 사전 계산 (시장별로 분리해서 cross-market 매칭 줄임)
+    enriched = []
+    for it in base:
+        text = it.get("headline_orig") or it.get("headline") or ""
+        enriched.append({
+            "item": it,
+            "tokens": _normalize_for_dedup(text),
+            "len": len(text),
+            "priority": _SOURCE_PRIORITY.get(it.get("source") or "", 50),
+            "market": it.get("market"),
+        })
+
+    kept: list[dict] = []
+    for cur in enriched:
+        dup_idx = -1
+        for ki, ke in enumerate(kept):
+            # 같은 시장끼리만 jaccard 비교 (kr-us 우연 매칭 차단)
+            if ke["market"] != cur["market"]:
+                continue
+            if _jaccard(ke["tokens"], cur["tokens"]) >= threshold:
+                dup_idx = ki
+                break
+        if dup_idx < 0:
+            kept.append(cur)
+            continue
+        # 중복 — 우선순위 비교
+        existing = kept[dup_idx]
+        replace = False
+        if cur["priority"] > existing["priority"]:
+            replace = True
+        elif cur["priority"] == existing["priority"]:
+            # 동일 우선순위 — 짧은 헤드라인 우선 (보통 본문 깔끔)
+            if cur["len"] < existing["len"]:
+                replace = True
+        if replace:
+            kept[dup_idx] = cur
+
+    return [k["item"] for k in kept]
 
 
 def _safe_get(url: str) -> str | None:
@@ -237,8 +335,12 @@ def collect_korean_news(hours: int = 18) -> list[dict]:
     try:
         rss = _collect_kr_rss(hours)
         naver = _collect_naver_finance_headlines()
-        merged = _dedup_headlines(rss + naver)
-        logger.info(f"[news_collector] 한국 뉴스 수집: rss={len(rss)}, naver={len(naver)}, dedup={len(merged)}")
+        # 1차: hash 정확 dedup → 2차: jaccard 강화 dedup
+        merged = _dedup_advanced(rss + naver)
+        logger.info(
+            f"[news_collector] 한국 뉴스 수집: rss={len(rss)}, naver={len(naver)}, "
+            f"dedup={len(merged)}"
+        )
         return merged
     except Exception as e:
         logger.error(f"[news_collector] 한국 뉴스 수집 실패: {e}", exc_info=True)
@@ -289,9 +391,12 @@ def collect_us_news(hours: int = 18) -> list[dict]:
                     "url":           link or None,
                     "published_at":  pub,
                 })
-        merged = _dedup_headlines(out)
+        merged = _dedup_advanced(out)
         filtered = _filter_recent(merged, hours)
-        logger.info(f"[news_collector] 미국 뉴스 수집: raw={len(out)}, dedup={len(merged)}, recent={len(filtered)}")
+        logger.info(
+            f"[news_collector] 미국 뉴스 수집: raw={len(out)}, dedup={len(merged)}, "
+            f"recent={len(filtered)}"
+        )
         return filtered
     except Exception as e:
         logger.error(f"[news_collector] 미국 뉴스 수집 실패: {e}", exc_info=True)
@@ -299,46 +404,277 @@ def collect_us_news(hours: int = 18) -> list[dict]:
 
 
 # ════════════════════════════════════════════════════════════════════
-# Claude 분류·번역
+# 종목 매칭 — 로컬 사전 기반 (Claude 호출 안 함)
 # ════════════════════════════════════════════════════════════════════
 
-_CLASSIFY_SYSTEM_PROMPT = """당신은 한국 주식시장 매매 어시스턴트의 뉴스 분류기입니다.
-절대 추정 금지 — 원문 헤드라인에 없는 정보를 추가하지 마세요.
+# 별칭 사전 (사용자 흔한 줄임말)
+_TICKER_ALIASES: dict[str, str] = {
+    "SK하닉": "000660", "하닉": "000660", "sk하닉": "000660",
+    "삼전": "005930", "삼성전": "005930",
+    "현대차": "005380", "기아차": "000270",
+    "엘지엔솔": "373220", "LG엔솔": "373220", "엘지에너지솔루션": "373220",
+    "삼바": "207940", "삼성바이오": "207940",
+    "셀트": "068270",
+    "에코프로비엠": "247540",
+    "한미반": "042700",
+    "한화에어로": "012450", "한화에어로스페이스": "012450",
+    "두산에너빌": "034020",
+}
 
-작업 (각 뉴스 항목마다):
-1. headline_ko: 한글 헤드라인. 영문이면 자연스럽고 정확하게 번역. 한글이면 그대로 또는 가벼운 정리.
-2. summary: 1~2줄 한국어 요약. 원문(headline + raw_summary) 기반. 영향 추측·예측 금지.
-3. category: 'macro' | 'sector' | 'company' | 'risk' 중 하나.
-   - macro:   금리/환율/유가/통화정책/거시지표/지정학 (예: FOMC, 미·중 협상, USD/KRW)
-   - sector:  업종 전체에 영향 (예: 반도체 업황, 조선 수주, AI 테마)
-   - company: 특정 기업 단일 이슈 (예: 삼성전자 실적, 엔비디아 신제품)
-   - risk:    급락/사고/파산/규제/제재 등 명확한 부정적 리스크
-4. tags: 원문에 명시된 키워드만. 예: ["반도체", "FOMC", "엔비디아"]. 최대 5개.
-5. related_tickers: 헤드라인/요약에 명시된 한국 종목코드(6자리)만. 추정 X. 없으면 빈 배열 [].
-   허용 예시: 삼성전자=005930, SK하이닉스=000660, 현대차=005380, 기아=000270, 네이버=035420, 카카오=035720, 셀트리온=068270, HMM=011200, 한화에어로=012450, LIG넥스원=079550, 한미반도체=042700.
-6. importance: 1~5 정수. 5=KOSPI 1%↑ 영향 가능, 4=섹터 강한 영향, 3=일반, 2=정보성, 1=루머/약영향.
-7. dedup_key: headline_ko를 정규화한 짧은 키 (중복 후처리용).
+# 종목명 사전: 캐시되어 자주 호출되도록 lazy load
+_TICKER_NAME_DICT: dict[str, str] | None = None  # {name -> ticker}
+_TICKER_NAME_DICT_VERSION = 0  # 캐시 무효화용
 
-응답: STRICT JSON 배열 (객체 하나가 입력 항목 하나에 대응. 입력 순서 유지).
+
+def _build_ticker_name_dict() -> dict[str, str]:
+    """종목명 → 6자리 코드 사전 빌드.
+
+    소스: universe + daily_top_value + hot_list (모두 UNION, 최신 우선).
+    """
+    out: dict[str, str] = {}
+    try:
+        rows = fetch_all(
+            """
+            SELECT DISTINCT ticker, name
+            FROM (
+                SELECT ticker, name, added_at as ts FROM universe WHERE name IS NOT NULL AND length(ticker)=6
+                UNION ALL
+                SELECT ticker, name, created_at as ts FROM daily_top_value WHERE name IS NOT NULL AND length(ticker)=6
+                UNION ALL
+                SELECT ticker, name, created_at as ts FROM hot_list WHERE name IS NOT NULL AND length(ticker)=6
+            )
+            ORDER BY ts DESC
+            """
+        )
+        for r in (rows or []):
+            d = dict(r)
+            name = (d.get("name") or "").strip()
+            ticker = (d.get("ticker") or "").strip()
+            if not name or not ticker or len(ticker) != 6 or not ticker.isdigit():
+                continue
+            # 우선주(우) 제외
+            if name.endswith("우") and len(name) >= 2:
+                # 그래도 추가는 하되 정확한 단어경계 매칭에만
+                pass
+            if name not in out:
+                out[name] = ticker
+    except Exception as e:
+        logger.warning(f"[news_collector] 종목명 사전 빌드 실패: {e}")
+    # 별칭 추가
+    for alias, tk in _TICKER_ALIASES.items():
+        out.setdefault(alias, tk)
+    return out
+
+
+def _get_ticker_dict() -> dict[str, str]:
+    global _TICKER_NAME_DICT
+    if _TICKER_NAME_DICT is None:
+        _TICKER_NAME_DICT = _build_ticker_name_dict()
+        logger.info(f"[news_collector] 종목명 사전 로드: {len(_TICKER_NAME_DICT)}건")
+    return _TICKER_NAME_DICT
+
+
+def reset_ticker_dict() -> None:
+    """테스트/일중 갱신용 — 사전 캐시 무효화."""
+    global _TICKER_NAME_DICT
+    _TICKER_NAME_DICT = None
+
+
+# 한글 단어 경계 후속 글자 (조사/접미사) — '삼성전자가/는/와/도' 등 매칭 위해
+_KR_WORD_BOUNDARY_AFTER = set("는은이가을를의에서와과로으도만한도부터까지나며")
+# 일반 명사 충돌 방지 — 너무 짧고 흔한 단어 (단독 사용 시 무시, '신라호텔' 등 부분일치 케이스도 위험)
+_AMBIGUOUS_SHORT_NAMES = {
+    "대상", "한화", "두산", "현대", "동방", "동원", "보령", "신라", "삼양", "동서",
+}
+# 영문 약자 — 매우 흔한 단어와 충돌해서 단어경계로도 막기 어려운 것만.
+# (대부분의 영문 약자는 word boundary 검사로 충분히 안전)
+_EN_SHORT_NAMES_BLACKLIST: set[str] = set()
+
+
+def _is_kr_char(ch: str) -> bool:
+    return "가" <= ch <= "힣"
+
+
+def _is_en_or_digit(ch: str) -> bool:
+    return ch.isalnum() and ord(ch) < 128
+
+
+def _is_pure_ascii(s: str) -> bool:
+    return all(ord(c) < 128 for c in s)
+
+
+def _match_tickers_locally(headline: str, summary: str = "") -> list[str]:
+    """헤드라인+요약에서 종목명을 매칭하여 6자리 종목코드 추출.
+
+    매칭 규칙 (오매칭 차단 강화):
+      0. 6자리 숫자가 본문에 있으면 직접 추출 (예: "005930")
+      1. 한글 종목명 3자 이상: 부분일치 OK
+      2. 한글 종목명 2자: 한글 단어경계 검사 (조사/공백/구두점/문장끝)
+      3. 영문 종목명: 영문 단어경계 검사 (앞뒤가 영숫자면 거부) — "NC"가 "Incyte"에 매칭 차단
+      4. 흔한 짧은 단어 (대상/한화/NC 등): 단독 사용 무시
+    """
+    if not headline:
+        return []
+    text = (headline or "") + " " + (summary or "")
+    found: list[str] = []
+    seen: set[str] = set()
+
+    # 0) 6자리 종목코드 직접 추출
+    for m in re.finditer(r"(?<!\d)(\d{6})(?!\d)", text):
+        tk = m.group(1)
+        if tk not in seen:
+            seen.add(tk)
+            found.append(tk)
+
+    name_dict = _get_ticker_dict()
+
+    # 1) 종목명 길이 순으로 정렬 (긴 이름 우선)
+    by_len = sorted(name_dict.items(), key=lambda kv: -len(kv[0]))
+
+    matched_spans: list[tuple[int, int]] = []
+
+    def _is_in_span(start: int, end: int) -> bool:
+        for s, e in matched_spans:
+            if not (end <= s or start >= e):
+                return True
+        return False
+
+    for name, ticker in by_len:
+        if ticker in seen:
+            continue
+        nlen = len(name)
+        if nlen < 2:
+            continue
+        is_ascii = _is_pure_ascii(name)
+        # 짧고 흔한 한글 단어 — 단독 매칭 위험
+        if nlen <= 2 and not is_ascii and name in _AMBIGUOUS_SHORT_NAMES:
+            continue
+        # 짧은 영문 약자 — 다른 영문 단어에 부분매칭 위험
+        if is_ascii and nlen <= 3 and name in _EN_SHORT_NAMES_BLACKLIST:
+            continue
+
+        start = 0
+        while True:
+            idx = text.find(name, start)
+            if idx < 0:
+                break
+            end = idx + nlen
+            if _is_in_span(idx, end):
+                start = end
+                continue
+
+            ok = True
+            # 한글 종목명 2자 — 한글 단어경계 검사
+            if nlen <= 2 and not is_ascii:
+                if end < len(text):
+                    next_ch = text[end]
+                    if _is_kr_char(next_ch) and next_ch not in _KR_WORD_BOUNDARY_AFTER:
+                        ok = False
+                if ok and idx > 0:
+                    prev_ch = text[idx - 1]
+                    if _is_kr_char(prev_ch):
+                        ok = False
+
+            # 영문 종목명 — 영문 단어 경계 필수 (앞뒤가 영숫자면 다른 단어의 일부)
+            if ok and is_ascii:
+                if idx > 0 and _is_en_or_digit(text[idx - 1]):
+                    ok = False
+                if ok and end < len(text) and _is_en_or_digit(text[end]):
+                    ok = False
+
+            if not ok:
+                start = end
+                continue
+
+            seen.add(ticker)
+            found.append(ticker)
+            matched_spans.append((idx, end))
+            break
+
+        if len(found) >= 5:
+            break
+
+    return found[:5]
+
+
+# ════════════════════════════════════════════════════════════════════
+# 룰 기반 카테고리 힌트
+# ════════════════════════════════════════════════════════════════════
+
+_MACRO_KW = [
+    "FOMC", "기준금리", "금리인상", "금리인하", "환율", "달러", "원화", "위안",
+    "유가", "WTI", "브렌트", "인플레이션", "CPI", "PPI", "PCE", "고용지표",
+    "비농업", "실업률", "GDP", "FOMC", "연준", "Fed", "BOK", "한은", "한국은행",
+    "관세", "무역", "지정학", "전쟁", "중동", "이란", "러시아", "우크라",
+    "통화정책", "재정정책", "예산안", "ECB", "BOJ", "IMF",
+]
+_SECTOR_KW = [
+    "반도체", "메모리", "HBM", "파운드리", "DDR",
+    "2차전지", "이차전지", "배터리", "양극재", "음극재", "전해질",
+    "조선", "수주", "LNG", "원자력", "SMR",
+    "AI", "GPU", "데이터센터", "클라우드",
+    "바이오", "신약", "임상", "FDA",
+    "자동차", "전기차", "EV", "수소",
+    "철강", "정유", "화학", "통신", "금융",
+]
+_COMPANY_KW = ["실적", "분기", "공시", "신제품", "출시", "M&A", "인수", "합병", "유증", "감자", "공장"]
+_RISK_KW = [
+    "급락", "폭락", "파산", "디폴트", "부도", "회계부정", "사기", "스캔들",
+    "제재", "조사", "압수수색", "기소", "벌금", "리콜", "사고", "화재",
+    "해킹", "감독원", "고발",
+]
+
+
+def _category_hint(headline: str, summary: str = "") -> str | None:
+    """룰 기반 카테고리 힌트 — Claude는 참고만, 최종 결정은 Claude."""
+    text = (headline or "") + " " + (summary or "")
+    if any(k in text for k in _RISK_KW):
+        return "risk"
+    if any(k in text for k in _MACRO_KW):
+        return "macro"
+    if any(k in text for k in _SECTOR_KW):
+        return "sector"
+    if any(k in text for k in _COMPANY_KW):
+        return "company"
+    return None
+
+
+# ════════════════════════════════════════════════════════════════════
+# Claude 분류·번역 (최적화 — summary/tickers 제거, 응답 필드 최소화)
+# ════════════════════════════════════════════════════════════════════
+
+_CLASSIFY_SYSTEM_PROMPT = """한국 주식시장 뉴스 분류기. 절대 추정 금지 — 원문에 없는 정보 추가 X.
+
+각 뉴스 항목마다 다음을 결정:
+
+1. headline_ko: 한글 헤드라인.
+   - 영문이면 정확히 번역 (의역 X, 원문 의미만)
+   - 한글이면 원문 그대로 (수정 X)
+2. category: macro | sector | company | risk
+   - macro: 금리/환율/유가/통화정책/거시지표/지정학 (FOMC, 환율, 무역분쟁)
+   - sector: 업종 전체 영향 (반도체 업황, 조선 수주, AI 테마)
+   - company: 특정 기업 단일 이슈 (실적, 신제품, 공시)
+   - risk: 급락/파산/사고/규제/제재 등 명확한 부정 이벤트
+3. tags: 원문에 명시된 키워드만. 최대 3개. ["반도체", "FOMC"] 형식.
+4. importance: 1~5 정수. ⚠️ 엄격하게.
+   - 5: KOSPI/KOSDAQ 1% 이상 영향 확실 (FOMC 결정, 전쟁, 대형 거시). 하루 0~2건.
+   - 4: 특정 섹터 또는 대형주 영향 확실 (반도체 관세, 빅테크 실적). 하루 3~8건.
+   - 3: 개별 기업 또는 산업 일부 (실적, 공시, 신제품). 하루 10~25건.
+   - 2: 정보성, 단기 영향 약함. 하루 20~40건.
+   - 1: 단순 정보, 분석 가치 적음. 하루 10~30건.
+   - 5점 인플레 금지. 4점 이상은 전체 5% 이하 유지.
+
+응답: STRICT JSON 배열. 첫 글자 `[`, 마지막 글자 `]`. 코드 펜스/주석/설명 금지.
 [
-  {
-    "index": 0,
-    "headline_ko": "...",
-    "summary": "...",
-    "category": "macro",
-    "tags": ["..."],
-    "related_tickers": [],
-    "importance": 3
-  },
+  {"index":0,"headline_ko":"...","category":"macro","tags":["..."],"importance":3},
   ...
 ]
 
 규칙:
-- 응답은 첫 글자 `[` 마지막 글자 `]`. 그 외 문자 없음.
-- 코드 펜스/주석/설명문/trailing comma 금지.
-- 분류 불가 시 category='macro', importance=2.
-- 한 항목당 100자 내외 — 길게 풀어쓰지 말 것.
-"""
+- 입력 순서대로 응답. index 그대로 사용.
+- 분류 불가 시 category=macro, importance=2.
+- headline_ko 50자 내외 — 길게 늘리지 말 것.
+- 'hint' 필드는 룰 기반 추정 — 참고만, 최종은 본인이 결정."""
 
 
 def _extract_json_array(raw: str) -> str:
@@ -406,32 +742,50 @@ def _chunk(seq: list, size: int) -> Iterable[list]:
         yield seq[i: i + size]
 
 
+def _build_payload(chunk: list[dict]) -> list[dict]:
+    """Claude 입력 페이로드 빌드 — 시장별 최적화.
+
+    - 한국어 뉴스(market=kr): headline만 (번역 불필요)
+    - 영어 뉴스(market=us): headline + raw_summary 50자 (번역 컨텍스트)
+    - 모든 항목에 룰 기반 hint 추가 (토큰 거의 안 늘어남)
+    """
+    payload = []
+    for i, item in enumerate(chunk):
+        market = item.get("market") or "kr"
+        headline = (item.get("headline_orig") or item.get("headline") or "")[:200]
+        raw_sum = (item.get("raw_summary") or "")
+        hint = _category_hint(headline, raw_sum)
+        entry: dict = {
+            "index":    i,
+            "headline": headline,
+        }
+        if market == "us":
+            entry["market"] = "us"
+            # 영어 뉴스만 raw_summary 50자 — 번역 정확도 보강
+            if raw_sum:
+                entry["raw"] = raw_sum[:50]
+        # 한국어는 market 필드 생략 (토큰 절감 — Claude는 한글이면 kr 추정)
+        if hint:
+            entry["hint"] = hint
+        payload.append(entry)
+    return payload
+
+
 def _classify_chunk(chunk: list[dict]) -> list[dict]:
     """Claude Haiku로 청크 단위 분류·번역."""
     if not chunk:
         return []
 
-    # 입력 콤팩트 직렬화
-    payload = []
-    for i, item in enumerate(chunk):
-        # 비용 절감 (2026-05-13): raw_summary 300→80자 축약. 헤드라인 위주로 분류.
-        payload.append({
-            "index":       i,
-            "market":      item.get("market"),
-            "source":      item.get("source"),
-            "headline":    (item.get("headline_orig") or item.get("headline") or "")[:200],
-            "raw_summary": (item.get("raw_summary") or "")[:80],
-        })
-
+    payload = _build_payload(chunk)
     user_content = (
-        "다음 뉴스 항목 배열을 분류·번역하세요. 각 항목의 index를 응답에 그대로 사용하세요.\n\n"
-        + json.dumps(payload, ensure_ascii=False)
+        "다음 뉴스를 분류·번역. index 그대로 응답에 사용. (market 없으면 한국 뉴스, hint는 룰 기반 참고)\n\n"
+        + json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
     )
 
     try:
         response = _client.messages.create(
             model=settings.CLAUDE_MODEL_FAST,
-            max_tokens=8000,
+            max_tokens=6000,  # 응답 필드 줄여서 max 축소
             temperature=0,
             timeout=120.0,
             system=[
@@ -459,19 +813,18 @@ def _classify_chunk(chunk: list[dict]) -> list[dict]:
 
 
 def classify_and_translate(raw_news: list[dict]) -> list[dict]:
-    """Claude로 일괄 처리: 번역+분류+태그+종목매칭+중요도+요약.
+    """Claude로 일괄 처리: 번역+분류+태그+중요도. 종목매칭은 로컬 사전.
 
-    실패 시 — 번역/분류 없이 원문 + category='macro' + importance=2 폴백.
+    실패 시 — 번역/분류 없이 원문 + category 룰힌트 + importance=2 폴백.
     """
     if not raw_news:
         return []
 
-    # 비용 절감 (2026-05-13):
-    # ② 수집 양 max 80건으로 제한 (importance 보존: published_at 최신순 우선)
+    # 비용 절감: 수집 양 max 80건 (importance 보존: published_at 최신순 우선)
     if len(raw_news) > 80:
         raw_news = raw_news[:80]
 
-    # ① 청크 크기 15 → 35 — 50은 timeout 발생, 35가 안정 (timeout 120초)
+    # 청크 크기 35 — timeout 120초 안정
     results: list[dict] = []
     CHUNK = 35
 
@@ -481,39 +834,57 @@ def classify_and_translate(raw_news: list[dict]) -> list[dict]:
 
         for i, src_item in enumerate(chunk):
             cls = index_map.get(i)
+            market = src_item.get("market") or "kr"
+            raw_summary = (src_item.get("raw_summary") or "").strip()
+            original_headline = src_item.get("headline_orig") or src_item.get("headline") or ""
+
             if cls:
                 category = (cls.get("category") or "").strip().lower()
                 if category not in _VALID_CATEGORIES:
-                    category = "macro"
+                    category = _category_hint(original_headline, raw_summary) or "macro"
                 tags = cls.get("tags") or []
-                tickers = cls.get("related_tickers") or []
                 try:
                     importance = int(cls.get("importance") or 3)
                 except (TypeError, ValueError):
                     importance = 3
                 importance = max(1, min(5, importance))
                 headline_ko = (cls.get("headline_ko") or "").strip()
-                summary = (cls.get("summary") or "").strip()
                 if not headline_ko:
-                    headline_ko = src_item.get("headline") or src_item.get("headline_orig") or ""
+                    headline_ko = original_headline
             else:
-                # 폴백 — Claude 실패 시 원문 저장
-                category = "macro"
+                # 폴백 — Claude 실패 시
+                category = _category_hint(original_headline, raw_summary) or "macro"
                 tags = []
-                tickers = []
                 importance = 2
-                headline_ko = src_item.get("headline") or src_item.get("headline_orig") or ""
-                summary = (src_item.get("raw_summary") or "")[:160]
+                headline_ko = original_headline
+
+            # ── 종목 매칭 (로컬 사전, Claude 호출 X) ──
+            # 한국 뉴스: headline + raw_summary 둘 다 매칭
+            # 미국 뉴스: 한글 번역된 headline_ko + 원문 headline (Samsung -> 삼성전자 매칭)
+            if market == "kr":
+                tickers = _match_tickers_locally(headline_ko, raw_summary)
+            else:
+                # 영어 뉴스 — 번역본과 원문 둘 다 매칭 (Samsung→005930 매칭은 영어에도 적용)
+                tickers = _match_tickers_locally(headline_ko + " " + original_headline, raw_summary)
+
+            # ── summary 처리: Claude에게 받지 않고 raw_summary 그대로 ──
+            # 한국어: raw_summary 그대로 (번역 불필요)
+            # 영어: raw_summary는 원문이므로 사용 안 함 — headline_ko가 번역된 한 줄 요약 역할
+            if market == "kr":
+                summary_final = raw_summary[:200]
+            else:
+                # 영어 뉴스는 raw_summary가 영어. 메시지엔 headline만 쓰이므로 빈 값 OK
+                summary_final = ""
 
             results.append({
                 "market":          src_item.get("market"),
                 "source":          src_item.get("source"),
                 "headline":        headline_ko,
                 "headline_orig":   src_item.get("headline_orig"),
-                "summary":         summary,
+                "summary":         summary_final,
                 "category":        category,
                 "tags":            tags if isinstance(tags, list) else [],
-                "related_tickers": tickers if isinstance(tickers, list) else [],
+                "related_tickers": tickers,
                 "importance":      importance,
                 "url":             src_item.get("url"),
                 "published_at":    src_item.get("published_at"),
