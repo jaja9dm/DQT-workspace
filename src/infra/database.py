@@ -255,6 +255,14 @@ def init_db() -> None:
             )
         except Exception:
             pass
+        # 기존 DB 마이그레이션: learnings 시장 국면별 적용 컬럼 추가 (옵션 Q Phase 2-D)
+        # NULL=전체 국면 / JSON 배열 (예: ["strong","weak"]) — 활성 lessons 조회 시 매칭 우선
+        try:
+            conn.execute(
+                "ALTER TABLE learnings ADD COLUMN applicable_regime TEXT"
+            )
+        except Exception:
+            pass
     logger.info(f"DB 초기화 완료: {_DB_PATH}")
 
 

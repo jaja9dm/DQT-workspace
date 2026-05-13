@@ -1,10 +1,32 @@
 # DQT — Daily Quant Trading System
 
-국내 주식 단타 자동매매 시스템. Claude AI 기반 멀티팀 아키텍처.
+국내 주식 매매 보조 AI 어시스턴트. Claude AI 기반 멀티팀 아키텍처.
+
+> **운영 모드 전환 (2026-05-12~):** 자동매매 → **어시스턴트 모드**
+> 사람이 직접 매매하고, 시스템은 매일 아침 시황 브리핑·추천 종목 + 저녁 회고·학습을 제공한다.
+> 매매 관련 잡(매매팀·포지션 감시·리스크·MACD 모니터)은 비활성, 8개 잡만 가동.
+
+### 어시스턴트 모드 핵심 (옵션 Q — 월 약 9,500원)
+
+| 시각 | 작업 | 내용 |
+|------|------|------|
+| 07:30 | 시황 엔진 선기동 | 오버나이트 미국장 수집 |
+| 07:30 | 아침 시황 브리핑 | KOSPI/KOSDAQ·섹터·추천 5종·회피 5종 + **종목 심층 분석 TOP3** (유사 패턴/수급/동조성/뉴스) |
+| 08:50 | 유니버스 재구성 | KIS 거래대금 TOP + 디스클로저 워처 |
+| 09:00 | domestic_stock 가동 | 데이터 수집 전용 (매매 X) |
+| 16:30 | EOD 데이터 적재 | daily_top_value 100건 + us_market_daily + kosdaq_condition |
+| 16:40 | 저녁 회고 + 학습 | 적중률·강·약 섹터·새 lessons 도출 + 메타학습 + 국면별 lessons |
+| 17:00 | 자동 종료 | launchd 다음날 08:30 재시작 |
+
+심층 분석은 신뢰도 ≥3인 TOP3 종목에 대해 4가지 raw 데이터(B 유사 패턴 백테스트 / C 외인·기관 자금 흐름 / E 유관 섹터 동조성 / G 뉴스 매핑)를 추출 후
+Claude Sonnet에 통합 호출 → 진입 시점 권고 + 손익 시나리오 도출.
+
+자기 학습은 매일 evening_review에서 신규 lessons + applicable_regime 분류, 7일 윈도우 메타학습으로 카테고리 적중률 ≥70%이면 confidence boost,
+<50%이면 demote — `learnings.applicable_regime` 컬럼으로 시장 국면별 lessons 우선 적용.
 
 ---
 
-## 개요
+## 자동매매 시절 (참고용 — 비활성)
 
 KIS API + FinanceDataReader + Claude (Sonnet/Opus/Haiku)를 조합하여
 장 중 자동으로 종목을 스캔하고, Hot List를 선정하고, 매수·감시·청산까지 실행하는 퀀트 시스템.

@@ -572,6 +572,8 @@ CREATE TABLE IF NOT EXISTS learnings (
     last_used         DATE,
     last_validated    DATE,
     status            TEXT DEFAULT 'active',  -- 'active' | 'deprecated' | 'experimental'
+    -- 시장 국면별 적용 (옵션 Q Phase 2-D): NULL=전체 / JSON ["strong","weak","sideways","reversal","volatile"]
+    applicable_regime TEXT,
     created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at        DATETIME DEFAULT CURRENT_TIMESTAMP
 );

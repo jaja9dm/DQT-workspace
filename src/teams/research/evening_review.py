@@ -70,7 +70,8 @@ _SYSTEM_PROMPT = """당신은 한국 주식시장 매매 어시스턴트의 회�
     {
       "category": "pattern|sector|macro|avoid|entry_timing|risk",
       "content": "<구체 교훈 1~2줄 한국어>",
-      "evidence": "<오늘 어떤 케이스에서 도출됐는지>"
+      "evidence": "<오늘 어떤 케이스에서 도출됐는지>",
+      "applicable_regime": ["strong"|"sideways"|"weak"|"reversal"|"volatile"]
     }
   ],
   "lessons_validated_ids": [<int id>, ...],
@@ -81,7 +82,9 @@ _SYSTEM_PROMPT = """당신은 한국 주식시장 매매 어시스턴트의 회�
 
 규칙:
 - 첫 글자 `{` 마지막 글자 `}` — 그 외 문자 없음.
-- new_lessons 0~5개. validated/failed 0~10개 각각."""
+- new_lessons 0~5개. validated/failed 0~10개 각각.
+- applicable_regime: 어떤 시장 국면에만 적용되는 교훈인지 1~5개 배열로 표시.
+  특정 국면 없이 전체 적용이면 빈 배열 []. 예) 약세장 한정이면 ["weak","volatile"]."""
 
 
 _TELEGRAM_LIMIT = 4000
@@ -528,24 +531,34 @@ def _update_learnings(
     Returns: 새로 INSERT된 lesson 수.
     """
     inserted = 0
-    # 1) 신규 INSERT
+    # 1) 신규 INSERT — applicable_regime도 함께 저장 (옵션 Q Phase 2-D)
     for ls in new_lessons or []:
         cat = (ls.get("category") or "").strip()
         content = (ls.get("content") or "").strip()
         evidence = ls.get("evidence") or ""
         if not cat or not content:
             continue
+        regime_list = ls.get("applicable_regime") or []
+        regime_json: str | None = None
+        if isinstance(regime_list, list) and regime_list:
+            # 화이트리스트 검증
+            allowed = {"strong", "sideways", "weak", "reversal", "volatile"}
+            clean = [r for r in regime_list if isinstance(r, str) and r in allowed]
+            if clean:
+                regime_json = json.dumps(clean, ensure_ascii=False)
         try:
             execute(
                 """
                 INSERT INTO learnings (
                     discovered_at, category, content, evidence,
-                    confidence, times_validated, times_failed, status
-                ) VALUES (?, ?, ?, ?, 0.5, 0, 0, 'active')
+                    confidence, times_validated, times_failed, status,
+                    applicable_regime
+                ) VALUES (?, ?, ?, ?, 0.5, 0, 0, 'active', ?)
                 """,
                 (today, cat, content,
                  json.dumps([{"date": today, "observation": evidence}],
-                            ensure_ascii=False)),
+                            ensure_ascii=False),
+                 regime_json),
             )
             inserted += 1
         except Exception as e:
@@ -905,6 +918,144 @@ def _save_review(
         logger.error(f"[evening_review] evening_review 저장 오류: {e}", exc_info=True)
 
 
+# ── 메타 학습 (옵션 Q Phase 2-B) ────────────────────────────
+
+def _meta_learn(today: str) -> dict:
+    """최근 7일 evening_review 결과로 카테고리별 적중률 산출 + learnings 신뢰도 자동 조정.
+
+    동작:
+      1. 최근 7일 evening_review.picks_result 합산 — hit/miss 카운트
+      2. 각 카테고리(learning.category)별 적중률 추정:
+         - 동기 매핑은 어렵기에, 학습 자체의 times_validated/times_failed 누계 사용
+      3. 카테고리 평균 적중률 ≥70% → confidence boost +0.05 / <50% → -0.05
+      4. 결과를 learnings.evidence(JSON) 끝에 누적
+
+    Returns:
+      {
+        "category_accuracy": {cat: ratio, ...},
+        "boosted_ids":  [int, ...],
+        "demoted_ids":  [int, ...],
+        "days_in_window": int
+      }
+    """
+    # 최근 7일 회고 데이터 수집
+    rows = fetch_all(
+        """
+        SELECT date, accuracy_pct, picks_result
+        FROM evening_review
+        WHERE date >= date(?, '-7 days') AND date <= ?
+        ORDER BY date DESC
+        """,
+        (today, today),
+    )
+    if not rows:
+        return {
+            "category_accuracy": {},
+            "boosted_ids": [],
+            "demoted_ids": [],
+            "days_in_window": 0,
+        }
+
+    # 카테고리별 누적 — learnings 자체 통계 사용
+    cat_rows = fetch_all(
+        """
+        SELECT category, id, times_validated, times_failed, confidence, status
+        FROM learnings
+        WHERE status = 'active'
+        """
+    )
+    by_cat: dict[str, list[dict]] = defaultdict(list)
+    for r in cat_rows:
+        d = dict(r)
+        by_cat[d["category"]].append(d)
+
+    cat_acc: dict[str, float] = {}
+    boosted: list[int] = []
+    demoted: list[int] = []
+
+    for cat, items in by_cat.items():
+        total_v = sum(int(i.get("times_validated") or 0) for i in items)
+        total_f = sum(int(i.get("times_failed") or 0) for i in items)
+        total = total_v + total_f
+        if total < 3:   # 표본 부족
+            continue
+        ratio = total_v / total
+        cat_acc[cat] = round(ratio, 3)
+
+        # boost / demote
+        if ratio >= 0.70:
+            # 가장 confidence 낮은 항목부터 boost (위로 끌어올림 의미)
+            target = sorted(items, key=lambda x: float(x.get("confidence") or 0))[:1]
+            for t in target:
+                try:
+                    execute(
+                        """
+                        UPDATE learnings
+                        SET confidence = MIN(1.0, confidence + 0.05),
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (int(t["id"]),),
+                    )
+                    boosted.append(int(t["id"]))
+                except Exception as e:
+                    logger.warning(f"[meta_learn] boost 실패 #{t['id']}: {e}")
+        elif ratio < 0.50:
+            # 가장 confidence 높은 항목 demote (책임 큰 항목부터 신뢰도 차감)
+            target = sorted(items, key=lambda x: -float(x.get("confidence") or 0))[:1]
+            for t in target:
+                try:
+                    execute(
+                        """
+                        UPDATE learnings
+                        SET confidence = MAX(0.0, confidence - 0.05),
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (int(t["id"]),),
+                    )
+                    demoted.append(int(t["id"]))
+                except Exception as e:
+                    logger.warning(f"[meta_learn] demote 실패 #{t['id']}: {e}")
+
+    # evidence에 누적 기록
+    meta_entry = {
+        "date": today,
+        "type": "meta_learn",
+        "window_days": len(rows),
+        "category_accuracy": cat_acc,
+        "boosted": boosted,
+        "demoted": demoted,
+    }
+    for lid in boosted + demoted:
+        try:
+            row = fetch_one("SELECT evidence FROM learnings WHERE id = ?", (int(lid),))
+            ev_old = []
+            if row and row["evidence"]:
+                try:
+                    ev_old = json.loads(row["evidence"]) or []
+                except Exception:
+                    ev_old = []
+            ev_old.append(meta_entry)
+            execute(
+                "UPDATE learnings SET evidence = ? WHERE id = ?",
+                (json.dumps(ev_old, ensure_ascii=False), int(lid)),
+            )
+        except Exception as e:
+            logger.warning(f"[meta_learn] evidence 갱신 실패 #{lid}: {e}")
+
+    logger.info(
+        f"[meta_learn] window={len(rows)}일 — "
+        f"카테고리 적중={cat_acc} / boost={len(boosted)} / demote={len(demoted)}"
+    )
+    return {
+        "category_accuracy": cat_acc,
+        "boosted_ids": boosted,
+        "demoted_ids": demoted,
+        "days_in_window": len(rows),
+    }
+
+
 # ── 메인 진입점 ───────────────────────────────────────────────
 
 def run_evening_review() -> dict:
@@ -1021,15 +1172,25 @@ def run_evening_review() -> dict:
         msg, sent,
     )
 
+    # 메타 학습 (옵션 Q Phase 2-B) — 회고 저장 후 실행
+    meta = {}
+    try:
+        meta = _meta_learn(today)
+    except Exception as e:
+        logger.warning(f"[evening_review] meta_learn 실패: {e}")
+
     logger.info(
         f"[evening_review] 완료 — accuracy={accuracy:.1f}% "
-        f"new_lessons={new_lesson_count} sent={sent}"
+        f"new_lessons={new_lesson_count} sent={sent} "
+        f"meta_boost={len(meta.get('boosted_ids') or [])}"
+        f"/demote={len(meta.get('demoted_ids') or [])}"
     )
     return {
         "date": today,
         "accuracy": accuracy,
         "new_lessons": new_lesson_count,
         "sent": sent,
+        "meta_learn": meta,
     }
 
 
