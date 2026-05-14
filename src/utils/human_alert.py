@@ -110,17 +110,20 @@ def send_human_alert(
             logger.warning(f"[human_alert] dedup 체크 실패 — 강제 발송 계속: {e}")
 
     # 2) 메시지 작성
+    # 텔레그램 HTML 모드에서 <, >, & 가 escape 안 되면 'Bad Request: can't parse entities' 발생.
+    # title/body는 사용자 평문 텍스트라 escape 강제. 헤더의 <b>·<i>는 우리가 직접 작성하므로 안전.
+    import html as _html
     emoji = _SEVERITY_EMOJI[sev]
     label = _SEVERITY_LABEL[sev]
     now = datetime.now()
     weekday = ['월', '화', '수', '목', '금', '토', '일'][now.weekday()]
     header = f"{emoji} <b>[DQT {label}] {now.strftime('%Y-%m-%d')} ({weekday})</b>"
     separator = "─────────────────────"
-    # body 컷 (텔레그램 4096자 한도 대비 안전 마진)
-    body_clip = (body or "").strip()
-    if len(body_clip) > 3500:
-        body_clip = body_clip[:3500] + "\n…[중략]"
-    msg = f"{header}\n{separator}\n<b>{title}</b>\n\n{body_clip}\n\n<i>{now.strftime('%H:%M:%S')}</i>"
+    title_safe = _html.escape(title or "", quote=False)
+    body_safe = _html.escape((body or "").strip(), quote=False)
+    if len(body_safe) > 3500:
+        body_safe = body_safe[:3500] + "\n…[중략]"
+    msg = f"{header}\n{separator}\n<b>{title_safe}</b>\n\n{body_safe}\n\n<i>{now.strftime('%H:%M:%S')}</i>"
 
     # 3) 발송
     sent = False
@@ -245,7 +248,7 @@ def check_data_health() -> list[dict]:
                     f"테이블: {table}\n"
                     f"증상: 최근 {fails}거래일 동안 데이터가 임계값 미달.\n"
                     f"  - 기준: "
-                    + (f"row 수 < {min_rows}" if min_rows else
+                    + (f"row {min_rows}개 미만" if min_rows else
                        (f"{null_col} 전부 NULL" if null_col else "row 0개"))
                     + "\n\n"
                     f"권장 조치:\n"
