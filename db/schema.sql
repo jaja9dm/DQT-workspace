@@ -619,3 +619,19 @@ CREATE INDEX IF NOT EXISTS idx_daily_news_date     ON daily_news(date DESC, impo
 CREATE INDEX IF NOT EXISTS idx_daily_news_category ON daily_news(category, date DESC);
 CREATE INDEX IF NOT EXISTS idx_daily_news_market   ON daily_news(market, date DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_daily_news_url_uniq ON daily_news(url) WHERE url IS NOT NULL;
+
+-- ════════════════════════════════════════════════════════════════════
+-- 사람 개입 필요 알림 (2026-05-14) — 비정기 텔레그램 알림 로그
+-- 정기 메시지(07:30/17:00)와 구분되는 운영/검토 알림
+-- ════════════════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS system_alerts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    severity    TEXT NOT NULL,           -- 'URGENT' | 'INFO' | 'OPS'
+    category    TEXT NOT NULL,           -- 'self_contradiction' | 'data_failure' | 'ops'
+    title       TEXT NOT NULL,
+    body        TEXT,
+    dedup_key   TEXT,                    -- 같은 키로 같은 날 중복 발송 X
+    sent_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS idx_system_alerts_sent  ON system_alerts(sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_system_alerts_dedup ON system_alerts(dedup_key, sent_at DESC);

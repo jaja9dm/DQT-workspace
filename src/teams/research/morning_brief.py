@@ -32,6 +32,12 @@ from src.infra.us_market import get_latest_us_snapshot
 from src.utils.logger import get_logger
 from src.utils.notifier import check_claude_error, notify
 
+# 사람 개입 알림 — 데이터/운영 점검 (실패해도 본 잡은 계속 진행)
+try:
+    from src.utils.human_alert import run_health_checks as _run_health_checks
+except Exception:
+    _run_health_checks = None
+
 try:
     from src.infra.news_collector import (
         collect_and_save as _collect_and_save_news,
@@ -945,6 +951,13 @@ def run_morning_brief() -> dict:
         return {"date": today, "picks_count": 0, "avoids_count": 0, "sent": False}
 
     logger.info(f"[morning_brief] 시작 — {today}")
+
+    # 사람 개입 필요 점검 (데이터 + 운영) — 본 잡과 독립 실행
+    if _run_health_checks is not None:
+        try:
+            _run_health_checks()
+        except Exception as e:
+            logger.warning(f"[morning_brief] human_alert 점검 실패 — 브리핑은 계속: {e}")
 
     # 뉴스 수집/분류/저장 (어제 한국 마감 + 오버나이트 미국, 최근 18시간)
     news_for_msg: dict | None = None
