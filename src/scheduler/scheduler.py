@@ -23,13 +23,13 @@ main.py는 스케줄러만 시작하면 된다.
   - 포지션 감시:   90초 주기 (자체 루프)
   - 매매팀:        5분 주기  (자체 루프)
 
-  [장 마감 — 어시스턴트 모드 2026-05-12]
+  [장 마감 — 어시스턴트 모드 2026-05-14]
   - 15:35  실시간 엔진 정지
-  - 15:40  리포트팀 실행
-  - 16:00  연구소 일일 분석 실행
-  - 16:30  EOD 데이터 적재 (TOP 100 + 미국 + KOSDAQ + 테마)
-  - 16:40  저녁 회고 발송 (어시스턴트)
-  - 17:00  자동 종료 (launchd 다음날 08:30 재시작)
+  - 16:45  EOD 데이터 적재 (TOP 100 + 미국 + KOSDAQ + 테마)
+            ※ 16:30 → 16:45 늦춤 (KOSDAQ 매매동향 EOD 확정 시점 검증 — 5/12·5/13 실측에서 16:30 시점 매매동향 0/NULL 응답 확인. 15분 안전 마진)
+  - 17:00  저녁 회고 발송 (어시스턴트)
+            ※ 16:40 → 17:00 (EOD 적재 후 15분 — 검증 시간 + 데이터 안정성)
+  - 17:15  자동 종료 (launchd 다음날 07:00 재시작)
   - 일요일 16:30  연구소 심층 백테스트 (deep=True)
 """
 
@@ -252,16 +252,18 @@ class DQTScheduler:
         #     day_of_week="mon-fri", hour=15, minute=35, timezone="Asia/Seoul"
         # ), id="daily_journal", name="일일 시장 저널 적재")
 
-        # 16:30 — EOD 데이터 적재 (어시스턴트 모델 Phase 4)
-        # 장 마감 후 1시간 — KIS/FDR 데이터 안정화 시간 확보 (2026-05-12 조정)
+        # 16:45 — EOD 데이터 적재 (어시스턴트 모델 Phase 4)
+        # 장 마감 후 75분 — KOSDAQ 매매동향 EOD 확정 안전 마진 (2026-05-14 조정)
+        # 배경: 5/12·5/13 16:30 시점 Naver 매매동향 응답 0/NULL → EOD 확정 전.
+        # 16:45는 한국거래소 매매동향 확정 발표(보통 16:00~16:30 사이) 이후 안전.
         s.add_job(self._run_daily_eod_load, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=16, minute=45, timezone="Asia/Seoul"
         ), id="daily_eod_load", name="EOD 데이터 적재")
 
-        # 16:40 — 저녁 회고 (어시스턴트 모델 Phase 6)
-        # daily_eod_load(16:30) 후 10분 — EOD 데이터 활용 (2026-05-12 조정)
+        # 17:00 — 저녁 회고 (어시스턴트 모델 Phase 6)
+        # daily_eod_load(16:45) 후 15분 — EOD 데이터 검증 + 안정화 (2026-05-14 조정)
         s.add_job(self._run_evening_review, CronTrigger(
-            day_of_week="mon-fri", hour=16, minute=40, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
         ), id="evening_review", name="저녁 회고 (어시스턴트)")
 
         # 어시스턴트 모드: 일일 리포트/연구소 분석은 evening_review(16:40)로 대체. 비활성.
@@ -296,10 +298,11 @@ class DQTScheduler:
         #     day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         # ), id="evening_selection", name="저녁 종목 선점")
 
-        # 자동 종료 — 평일 17:00 (어시스턴트 모드: EOD/회고 완료 후 시스템 종료)
-        # launchd가 다음날 평일 08:30에 자동 시작 (StartCalendarInterval)
+        # 자동 종료 — 평일 17:15 (어시스턴트 모드: EOD 16:45 + 회고 17:00 완료 후 종료)
+        # launchd가 다음날 평일 07:00에 자동 시작 (StartCalendarInterval)
+        # 2026-05-14: evening_review 17:00 시작 후 ~1분 소요 — 17:15 안전 마진
         s.add_job(self._auto_shutdown, CronTrigger(
-            day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
+            day_of_week="mon-fri", hour=17, minute=15, timezone="Asia/Seoul"
         ), id="auto_shutdown", name="자동 종료")
 
         # 어시스턴트 모드: 연구소 심층 백테스트는 매매 룰 튜닝용 — 비활성

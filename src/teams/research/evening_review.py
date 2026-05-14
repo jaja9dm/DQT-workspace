@@ -1045,19 +1045,23 @@ def _format_message(
         lines.append("🔮 <b>내일 전망</b>")
         lines.append(f"  {outlook[:400]}")
 
-    # 데이터 출처 범례 — 항상 끝에 보장 (truncate 시 본문을 자름)
-    legend = (
-        "\n\n📌 <i>출처: [KIS] 한국투자증권 시세·KOSPI 수급 / "
-        "[네이버] KOSDAQ 매매동향 (모바일 통합 API) / "
-        "[yfinance] 미국 지표 / [Claude] AI 분석(사실 기반·수치 추정 X)</i>"
-    )
+    # 데이터 출처 범례 — 한 줄 컴팩트 (2026-05-14 압축). truncate 시에도 보존.
+    legend = "\n\n📌 <i>데이터 KIS·yfinance·네이버 / 분석 Claude (추정 X)</i>"
 
     # 한글 후처리 + 컷
     msg = "\n".join(lines)
     msg = _kr_postprocess(msg)
     body_limit = _TELEGRAM_LIMIT - len(legend) - 20
-    if len(msg) > body_limit:
+    orig_len = len(msg)
+    if orig_len > body_limit:
         msg = msg[:body_limit] + "\n...[중략]"
+        logger.warning(
+            f"[evening_review] 메시지 truncate — 본문 {orig_len}자 > 한도 {body_limit}자"
+        )
+    elif orig_len > body_limit - 200:
+        logger.info(
+            f"[evening_review] 메시지 길이 {orig_len}/{body_limit}자 (한도 근접)"
+        )
     msg += legend
     return msg
 

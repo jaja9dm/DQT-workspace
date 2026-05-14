@@ -258,9 +258,8 @@ def _fetch_feed(url: str) -> list:
 # ════════════════════════════════════════════════════════════════════
 
 _KR_RSS_FEEDS = [
-    # 한경 — 증권/금융
+    # 한경 — 금융 (2026-05-14: /feed/stock 404로 제거)
     ("한국경제", "https://www.hankyung.com/feed/finance"),
-    ("한국경제-증권", "https://www.hankyung.com/feed/stock"),
     # 매일경제 — 증권
     ("매일경제", "https://www.mk.co.kr/rss/50200011/"),
     # 매일경제 — 경제

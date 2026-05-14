@@ -180,14 +180,17 @@ def _fetch_investor_flow(market: str) -> InvestorFlow:
     market: 'KOSPI' | 'KOSDAQ'
 
     KOSPI: FHKST01010900 + FID_COND_MRKT_DIV_CODE=J
-    KOSDAQ: FHKST01010900 + FID_COND_MRKT_DIV_CODE=Q  (어시스턴트 모델 전환 2026-05-12 추가)
-            KIS 일부 구현에서 INVALID FID 응답 시 빈 InvestorFlow 반환.
+    KOSDAQ: KIS 미지원 — 2026-05-14 호출 스킵 (INVALID FID 노이즈 제거).
+            KOSDAQ 매매동향은 src/infra/kosdaq_flow_collector.py(Naver)에서 수집됨.
     """
     gw = KISGateway()
     if market == "KOSPI":
         mktdiv = "J"
     elif market == "KOSDAQ":
-        mktdiv = "Q"
+        # KIS는 KOSDAQ 시장 전체 매매동향 미지원 — INVALID FID 응답.
+        # kosdaq_flow_collector(Naver)가 정확한 값을 가져오므로 KIS 호출 자체 스킵.
+        # 빈 InvestorFlow 반환 → save_kosdaq_condition에서 Naver 폴백 작동.
+        return InvestorFlow()
     else:
         return InvestorFlow()
 

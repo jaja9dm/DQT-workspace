@@ -88,6 +88,44 @@ def run_daily_eod_load() -> dict:
         _augment_kosdaq_with_pykrx(today)
         # 외인/기관 net buy가 NULL이면 daily_top_value(KOSDAQ 종목들) 합계로 폴백
         _augment_kosdaq_flow_from_top_value(today)
+
+        # ── 안전망: 매매동향이 NULL/0이면 60초 대기 후 1회 재시도 (2026-05-14) ──
+        # 5/12·5/13 16:30 적재 시 Naver 매매동향이 NULL/0 응답 → EOD 확정 직후 갱신 지연
+        # 호출 시각 16:45로 늦췄지만 추가 안전망: 검증 후 미완료 시 1회 재시도
+        try:
+            chk = fetch_one(
+                "SELECT foreign_net_buy, inst_net_buy, source FROM kosdaq_condition WHERE date = ?",
+                (today,),
+            )
+            if chk:
+                f = chk["foreign_net_buy"]
+                i = chk["inst_net_buy"]
+                src = chk["source"] if "source" in chk.keys() else None
+                # NULL이거나 둘 다 0인 경우 = 미확정
+                needs_retry = (
+                    (f is None and i is None)
+                    or (src not in ("naver", "pykrx"))
+                    or (f == 0 and i == 0)
+                )
+                if needs_retry:
+                    logger.warning(
+                        f"[EOD] KOSDAQ 매매동향 미확정 (f={f} i={i} src={src}) — 60초 후 재시도"
+                    )
+                    time.sleep(60)
+                    save_kosdaq_condition()    # 재호출 — Naver 갱신 가능성
+                    _augment_kosdaq_flow_from_top_value(today)
+                    chk2 = fetch_one(
+                        "SELECT foreign_net_buy, inst_net_buy, source FROM kosdaq_condition WHERE date = ?",
+                        (today,),
+                    )
+                    if chk2:
+                        logger.info(
+                            f"[EOD] 재시도 결과 — 외인={chk2['foreign_net_buy']} "
+                            f"기관={chk2['inst_net_buy']} src={chk2['source'] if 'source' in chk2.keys() else None}"
+                        )
+        except Exception as e:
+            logger.debug(f"[EOD] KOSDAQ 매매동향 검증 스킵: {e}")
+
         result["kosdaq_loaded"] = True
         logger.info(f"[EOD] kosdaq_condition 적재 완료 ({row['close']:,.2f})")
     except Exception as e:
