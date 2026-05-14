@@ -527,16 +527,22 @@ def _ask_claude(
             except (TypeError, ValueError):
                 return default
 
-        # KOSDAQ 시장 전체 매매동향은 KIS API가 신뢰도 낮음 — Claude에게 명시
-        def _fmt_flow_note(v):
+        # KOSDAQ 시장 전체 매매동향 — Naver 통합 API 우선, KIS 폴백.
+        # 신뢰도는 source 컬럼으로 구분 (naver/pykrx = 신뢰 / kis = 한계)
+        kd_source = (kosdaq_row.get("source") or "").lower()
+
+        def _fmt_flow_note(v, src=kd_source):
             if v is None:
                 return "수집 실패(NULL)"
             try:
                 fv = float(v)
             except (TypeError, ValueError):
                 return "수집 실패"
+            if src in ("naver", "pykrx"):
+                label = "[네이버]" if src == "naver" else "[KRX]"
+                return f"{fv:+,.0f}억 {label}"
+            # KIS 폴백 또는 source 미상 — KIS는 KOSDAQ 미지원이라 거의 0
             if abs(fv) < 1.0:
-                # KIS API 한계로 거의 0 (실제 0이 아닐 가능성 매우 높음)
                 return f"{fv:+.1f}억 (KIS API 한계 — 신뢰도 낮음)"
             return f"{fv:+,.0f}억"
 
@@ -851,7 +857,7 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
     # 데이터 출처 범례 — 한 줄 컴팩트. 항상 메시지 끝에 보장(truncate 시 본문을 자름).
     legend = (
         "\n\n📌 <i>출처: [KIS] 한국투자증권 시세·KOSPI 수급 / "
-        "[KIS-한계] KOSDAQ 매매동향은 KIS 미지원·신뢰도 낮음 / "
+        "[네이버] KOSDAQ 매매동향 (모바일 통합 API) / "
         "[yfinance] 미국 지표 / [Claude] AI 분석(사실 기반·수치 추정 X)</i>"
     )
 

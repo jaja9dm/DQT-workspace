@@ -353,6 +353,12 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
     """
     KOSDAQ 시황 데이터를 kosdaq_condition 테이블에 INSERT OR REPLACE.
 
+    수급(외인/기관/개인/프로그램)은 다음 우선순위로 수집:
+      1) Naver 모바일 통합 API (정확·실시간 — 장 마감 후 EOD 확정값)
+      2) pykrx 폴백 (현재 KRX 스키마 변경으로 동작 안 함, 복구 시 자동 사용)
+      3) KIS API 응답 (KOSDAQ 시장은 미지원이라 거의 0이지만 마지막 폴백)
+    어느 단계에서 가져왔는지 `source` 컬럼에 기록.
+
     Args:
         data: 이미 collect() 결과가 있으면 재사용. None이면 자체 호출.
 
@@ -370,19 +376,38 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
 
     # 거래대금: 종가 × 거래량 추정 (억원 단위). 정확한 값은 Phase 4에서 KRX/PYKRX로 대체.
     trading_value_bn = 0.0
-    if data.kosdaq.current > 0 and data.kosdaq.volume > 0:
-        # 지수가격 × 지수거래량은 의미 없으므로 0 처리 — Phase 4에서 KRX 거래대금으로 대체
-        trading_value_bn = 0.0
 
-    # KIS 투자자 매매동향이 0/실패면 NULL로 저장 — "수집 실패"를 정확히 표기 가능하게 함.
-    # (실제 0이 아닌 데이터 부재인 케이스를 구분)
-    def _nb(v: float) -> float | None:
-        # KIS가 데이터 없을 때 0.0을 반환 — None으로 변환
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            return None
-        return f if f != 0.0 else None
+    # ── KOSDAQ 수급 (Naver 통합 API 우선) ─────────────────────
+    foreign_nb: float | None = None
+    inst_nb: float | None = None
+    indiv_nb: float | None = None
+    program_nb: float | None = None
+    source: str | None = None
+    try:
+        from src.infra.kosdaq_flow_collector import fetch_kosdaq_flow
+        flow = fetch_kosdaq_flow(date.today())
+        if flow.get("reliable"):
+            foreign_nb = flow.get("foreign_net_buy")
+            inst_nb = flow.get("inst_net_buy")
+            indiv_nb = flow.get("indiv_net_buy")
+            program_nb = flow.get("program_net_buy")
+            source = flow.get("source")
+    except Exception as e:
+        logger.warning(f"kosdaq_flow_collector 호출 실패: {e}")
+
+    # 외부 소스 실패 시 KIS 응답을 최후 폴백(거의 0)으로 채움
+    if foreign_nb is None and inst_nb is None and indiv_nb is None:
+        def _nb(v: float) -> float | None:
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                return None
+            return f if f != 0.0 else None
+        foreign_nb = _nb(data.kosdaq_flow.foreign_net)
+        inst_nb = _nb(data.kosdaq_flow.institutional_net)
+        indiv_nb = _nb(data.kosdaq_flow.individual_net)
+        if any(v is not None for v in (foreign_nb, inst_nb, indiv_nb)):
+            source = "kis"
 
     row = {
         "date":             today,
@@ -390,10 +415,11 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
         "chg_pct":          data.kosdaq.change_pct,
         "volume":           volume_man,
         "trading_value":    trading_value_bn,
-        "foreign_net_buy":  _nb(data.kosdaq_flow.foreign_net),
-        "inst_net_buy":     _nb(data.kosdaq_flow.institutional_net),
-        "indiv_net_buy":    _nb(data.kosdaq_flow.individual_net),
-        "program_net_buy":  None,  # KIS API 직접 미지원
+        "foreign_net_buy":  foreign_nb,
+        "inst_net_buy":     inst_nb,
+        "indiv_net_buy":    indiv_nb,
+        "program_net_buy":  program_nb,
+        "source":           source,
     }
 
     try:
@@ -401,10 +427,12 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
             """
             INSERT OR REPLACE INTO kosdaq_condition (
                 date, close, chg_pct, volume, trading_value,
-                foreign_net_buy, inst_net_buy, indiv_net_buy, program_net_buy
+                foreign_net_buy, inst_net_buy, indiv_net_buy, program_net_buy,
+                source
             ) VALUES (
                 :date, :close, :chg_pct, :volume, :trading_value,
-                :foreign_net_buy, :inst_net_buy, :indiv_net_buy, :program_net_buy
+                :foreign_net_buy, :inst_net_buy, :indiv_net_buy, :program_net_buy,
+                :source
             )
             """,
             tuple(row.values()),
@@ -415,7 +443,8 @@ def save_kosdaq_condition(data: DomesticMarketData | None = None) -> dict:
             f"kosdaq_condition 저장 — {today} | "
             f"종가 {row['close']:,.2f} ({row['chg_pct']:+.2f}%) | "
             f"외인 {_fnb(row['foreign_net_buy'])} | "
-            f"기관 {_fnb(row['inst_net_buy'])}"
+            f"기관 {_fnb(row['inst_net_buy'])} | "
+            f"source={source or 'none'}"
         )
     except Exception as e:
         logger.error(f"kosdaq_condition 저장 실패: {e}", exc_info=True)

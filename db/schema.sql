@@ -591,7 +591,8 @@ CREATE TABLE IF NOT EXISTS kosdaq_condition (
     inst_net_buy      REAL,
     indiv_net_buy     REAL,
     program_net_buy   REAL,
-    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP
+    created_at        DATETIME DEFAULT CURRENT_TIMESTAMP,
+    source            TEXT         -- 'naver' | 'pykrx' | 'kis' | NULL (수급 데이터 출처)
 );
 
 -- ════════════════════════════════════════════════════════════════════

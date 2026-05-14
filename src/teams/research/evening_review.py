@@ -897,18 +897,22 @@ def _format_message(
                 f"(점수 {_fmt(market_row.get('market_score'), '.2f')})"
             )
         if kosdaq_row:
-            def _fmt_flow(v):
-                """수급 금액 표기 — KIS API 한계 반영.
-                  - None  → "수집 실패 (KIS API 한계)"
-                  - |v|<1 → "0억 (KIS API 한계 — 신뢰도 낮음)"
-                  - 그 외 → "+1,234억"
+            kd_source = (kosdaq_row.get("source") or "").lower()
+
+            def _fmt_flow(v, src=kd_source):
+                """수급 금액 표기 — 데이터 출처 라벨 부착.
+                  - naver/pykrx: 신뢰값 + 출처 라벨
+                  - kis/미상: KIS 한계 경고
                 """
                 if v is None:
-                    return "❓ 수집 실패 (KIS API 한계)"
+                    return "❓ 수집 실패"
                 try:
                     fv = float(v)
                 except (TypeError, ValueError):
                     return "❓ 수집 실패"
+                if src in ("naver", "pykrx"):
+                    label = "[네이버]" if src == "naver" else "[KRX]"
+                    return f"<b>{fv:+,.0f}억</b> {label}"
                 if abs(fv) < 1.0:
                     return f"{fv:+.1f}억 ⚠️ KIS API 한계 (신뢰도 낮음)"
                 return f"{fv:+,.0f}억"
@@ -1044,7 +1048,7 @@ def _format_message(
     # 데이터 출처 범례 — 항상 끝에 보장 (truncate 시 본문을 자름)
     legend = (
         "\n\n📌 <i>출처: [KIS] 한국투자증권 시세·KOSPI 수급 / "
-        "[KIS-한계] KOSDAQ 매매동향은 KIS 미지원·신뢰도 낮음 / "
+        "[네이버] KOSDAQ 매매동향 (모바일 통합 API) / "
         "[yfinance] 미국 지표 / [Claude] AI 분석(사실 기반·수치 추정 X)</i>"
     )
 

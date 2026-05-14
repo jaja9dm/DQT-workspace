@@ -551,10 +551,14 @@ def _augment_kosdaq_flow_from_top_value(today: str) -> None:
     """
     try:
         row = fetch_one(
-            "SELECT foreign_net_buy, inst_net_buy FROM kosdaq_condition WHERE date = ?",
+            "SELECT foreign_net_buy, inst_net_buy, source FROM kosdaq_condition WHERE date = ?",
             (today,),
         )
         if not row:
+            return
+        # 신뢰 소스(naver/pykrx)에서 이미 적재됐으면 폴백 불필요
+        src = row["source"] if "source" in row.keys() else None
+        if src in ("naver", "pykrx"):
             return
         f_val = row["foreign_net_buy"]
         i_val = row["inst_net_buy"]
