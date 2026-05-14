@@ -977,6 +977,25 @@ def run_morning_brief() -> dict:
     market_row     = _fetch_last_market_condition()
     kosdaq_row     = _fetch_last_kosdaq()
     recent_top     = _fetch_recent_top_value(days=7)
+
+    # 데이터 부족 시 자동 EOD 적재 (회사 노트북 죽어있어 며칠치 누락된 경우 등)
+    # daily_top_value 또는 us_market_daily 비어있으면 즉시 재적재 시도.
+    if not recent_top or not us_snap:
+        logger.warning(
+            f"[morning_brief] 데이터 부족 (top={len(recent_top)}건, us={'O' if us_snap else 'X'}) "
+            f"→ daily_eod_load 자동 실행"
+        )
+        try:
+            from src.teams.research.daily_eod_loader import run_daily_eod_load
+            eod_result = run_daily_eod_load()
+            logger.info(f"[morning_brief] EOD 자동 적재 완료 — {eod_result}")
+            us_snap     = get_latest_us_snapshot()
+            market_row  = _fetch_last_market_condition()
+            kosdaq_row  = _fetch_last_kosdaq()
+            recent_top  = _fetch_recent_top_value(days=7)
+        except Exception as e:
+            logger.error(f"[morning_brief] EOD 자동 적재 실패 — 기존 데이터로 계속: {e}", exc_info=True)
+
     cumulative     = _aggregate_recent_tickers(recent_top, days=5)
     yesterday_rev  = _fetch_yesterday_review()
     learnings      = _fetch_active_learnings(limit=20)
@@ -985,7 +1004,7 @@ def run_morning_brief() -> dict:
         msg = (
             f"⚠️ <b>[아침 브리핑]</b> {today}\n"
             f"데이터 부족 — us_market/market_condition/daily_top_value 모두 비어 있습니다.\n"
-            f"운영 초기에는 며칠간 데이터를 누적해야 정상 브리핑이 가능합니다."
+            f"EOD 자동 적재도 실패했습니다. 네트워크/KIS 토큰/외부 API 키를 확인하세요."
         )
         notify(msg)
         _save_briefing(today, {}, None, None, msg, sent=True)
