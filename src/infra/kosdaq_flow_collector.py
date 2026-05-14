@@ -148,8 +148,10 @@ def fetch_kosdaq_flow_naver(target_date: date | None = None) -> dict | None:
 def fetch_kosdaq_flow_pykrx(target_date: date | None = None) -> dict | None:
     """pykrx 시장 투자자별 매매대금 조회.
 
-    주의: 1.0.51 기준 KRX 응답 스키마 변경으로 KeyError("거래대금") 발생 — 현재
-    실패하지만, 향후 패키지가 복구되면 자동 활용되도록 보존.
+    주의: 1.0.51 / 1.0.45 / 1.0.30 모두 KRX 응답 스키마 변경으로 KeyError("거래대금")
+    또는 JSONDecodeError 발생 (2026-05-14 재검증). 다운그레이드도 해결 불가 —
+    KRX 페이지(data.krx.co.kr)가 변경된 것이라 pykrx 패키지 업데이트 대기 중.
+    현재는 항상 None 반환 (try/except로 무해하게 폴백). 향후 패키지 복구 시 자동 활용.
 
     Returns:
         dict | None

@@ -266,6 +266,13 @@ class DQTScheduler:
             day_of_week="mon-fri", hour=17, minute=0, timezone="Asia/Seoul"
         ), id="evening_review", name="저녁 회고 (어시스턴트)")
 
+        # 17:05 — 누적 학습 자동 정리 (2026-05-14)
+        # evening_review 발송 직후 — 유사 교훈 통합 + 저신뢰도 archive
+        # Haiku 호출 평균 1~5건, 비용 미미
+        s.add_job(self._run_learnings_consolidate, CronTrigger(
+            day_of_week="mon-fri", hour=17, minute=5, timezone="Asia/Seoul"
+        ), id="learnings_consolidate", name="누적 학습 자동 정리")
+
         # 어시스턴트 모드: 일일 리포트/연구소 분석은 evening_review(16:40)로 대체. 비활성.
         # s.add_job(self._run_report, CronTrigger(
         #     day_of_week="mon-fri", hour=15, minute=40, timezone="Asia/Seoul"
@@ -624,6 +631,22 @@ class DQTScheduler:
             run_evening_review()
         except Exception as e:
             logger.error(f"저녁 회고 오류: {e}", exc_info=True)
+
+    def _run_learnings_consolidate(self) -> None:
+        """17:05 — 누적 학습 자동 정리 (유사 통합 + 저신뢰도 archive)."""
+        if not is_trading_day():
+            return
+        try:
+            from src.teams.research.learnings_consolidator import consolidate_learnings
+            r = consolidate_learnings()
+            logger.info(
+                f"[scheduler] learnings_consolidate 완료 — "
+                f"merged={r['merged']} archived_pairs={r['archived_pairs']} "
+                f"archived_low_conf={r['archived_low_conf']} "
+                f"{r['total_active_before']}→{r['total_active_after']}"
+            )
+        except Exception as e:
+            logger.error(f"누적 학습 정리 오류: {e}", exc_info=True)
 
     def _purge_sentiment_cache(self) -> None:
         """자정 — 감성 캐시 만료 정리."""

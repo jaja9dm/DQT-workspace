@@ -13,6 +13,12 @@ pandas>=2.2
 # pandas-ta: Python 3.10+ 필요. 미설치 시 수동 계산 폴백 자동 적용
 # pandas-ta>=0.3
 # pykrx: KRX 거래대금/지수 거래량 보강 (daily_eod_loader가 KOSDAQ 종합 보강에 사용)
+# 2026-05-14: 1.0.51(현재) / 1.0.45 / 1.0.30 모두 KRX 페이지 스키마 변경으로 호출 실패
+#   - get_market_trading_value_by_investor: KeyError("거래대금")
+#   - get_index_ohlcv_by_date:              KeyError("지수명") / JSONDecodeError
+# KRX data.krx.co.kr 페이지 변경 이슈로 라이브러리 다운그레이드도 해결 X.
+# 현재 정책: Naver Finance 스크래핑(kosdaq_flow_collector)을 primary로 사용,
+# pykrx는 try/except로 폴백 보존 — 향후 패키지 복구 시 자동 활성화.
 pykrx>=1.0
 
 # ── 글로벌 데이터 ─────────────────────────────────
