@@ -305,12 +305,12 @@ class DQTScheduler:
         #     day_of_week="mon-fri", hour=16, minute=30, timezone="Asia/Seoul"
         # ), id="evening_selection", name="저녁 종목 선점")
 
-        # 자동 종료 — 평일 17:15 (어시스턴트 모드: EOD 16:45 + 회고 17:00 완료 후 종료)
-        # launchd가 다음날 평일 07:00에 자동 시작 (StartCalendarInterval)
-        # 2026-05-14: evening_review 17:00 시작 후 ~1분 소요 — 17:15 안전 마진
-        s.add_job(self._auto_shutdown, CronTrigger(
-            day_of_week="mon-fri", hour=17, minute=15, timezone="Asia/Seoul"
-        ), id="auto_shutdown", name="자동 종료")
+        # 자동 종료 비활성 (2026-05-18) — launchd EX_CONFIG / cron Operation not permitted
+        # 둘 다 실패. 5/15~5/18 4일간 시스템 끊김 발생.
+        # 24/7 영구 가동으로 전환 (caffeinate가 sleep 방지). 매일 정시 잡만 자동 실행.
+        # s.add_job(self._auto_shutdown, CronTrigger(
+        #     day_of_week="mon-fri", hour=17, minute=15, timezone="Asia/Seoul"
+        # ), id="auto_shutdown", name="자동 종료")
 
         # 어시스턴트 모드: 연구소 심층 백테스트는 매매 룰 튜닝용 — 비활성
         # s.add_job(self._run_research_deep, CronTrigger(
