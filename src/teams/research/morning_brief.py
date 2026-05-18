@@ -57,6 +57,17 @@ except Exception:
     _deep_analyze_picks = None
     _format_deep_analysis_lines = None
 
+# 정량 점수화 + 시장 국면 자동 분류 (2026-05-18)
+try:
+    from src.teams.research.pick_scorer import score_pick as _score_pick
+except Exception:
+    _score_pick = None
+
+try:
+    from src.teams.research.market_regime import classify_regime as _classify_regime
+except Exception:
+    _classify_regime = None
+
 logger = get_logger(__name__)
 
 _client = anthropic.Anthropic(api_key=settings.ANTHROPIC_API_KEY)
@@ -420,6 +431,65 @@ def _validate_picks(picks: list[dict], recent_top: list[dict]) -> tuple[list[dic
                 f"{p.get('name', tk)}({tk}): TA 분석 실패 → ATR 폴백 {rec_sl}/{rec_tp}"
             )
 
+    # 🎯 정량 점수화 (2026-05-18) — Claude confidence를 시스템 점수로 교체.
+    # 4개 요소 (거래대금 / 외인기관 수급 / 기술적 신호 / 섹터 동조성) 0~100점.
+    if _score_pick is not None:
+        for p in fixed:
+            tk = p.get("ticker")
+            if not tk:
+                continue
+            meta = latest_meta.get(tk, {})
+            current_price = p.get("entry") or meta.get("close_price") or 0
+            ta_result_for_score = None
+            # TA 결과 재활용 — 위에서 analyze_ticker 호출 시 dict로 저장하지 않았으므로
+            # _ta_meta로부터 최소 정보 복원
+            ta_meta = p.get("_ta_meta") or {}
+            if ta_meta:
+                ta_result_for_score = {
+                    "rsi_14": ta_meta.get("rsi_14"),
+                    "ma": {
+                        "ma5":  None,         # ma5는 _ta_meta에 없음 — None이면 정배열 점수 0
+                        "ma20": ta_meta.get("ma20"),
+                        "ma60": None,
+                    },
+                    "macd": {"hist": None},   # MACD는 _ta_meta에 없음
+                    "atr_pct": ta_meta.get("atr_pct"),
+                }
+            # 더 정확한 점수를 위해 analyze_ticker 재호출 (이미 호출했어도 비용 미미)
+            if analyze_ticker is not None and current_price > 0:
+                try:
+                    ta_full = analyze_ticker(tk, float(current_price))
+                    if ta_full:
+                        ta_result_for_score = ta_full
+                except Exception:
+                    pass
+
+            try:
+                score_result = _score_pick(
+                    ticker=tk,
+                    current_price=float(current_price) if current_price else 0.0,
+                    recent_top=recent_top,
+                    sector_peers=recent_top,
+                    market_regime=p.get("_market_regime", "sideways"),
+                    ta_result=ta_result_for_score,
+                )
+                claude_conf = p.get("confidence")
+                p["_claude_confidence"] = claude_conf
+                p["confidence"] = score_result["confidence"]
+                p["score"] = score_result["score"]
+                p["score_components"] = score_result["components"]
+                p["score_rationale"] = score_result["rationale"]
+                warnings.append(
+                    f"{p.get('name', tk)}({tk}): 정량 점수 {score_result['score']}점 "
+                    f"(거래대금 {score_result['components']['volume_momentum']} + "
+                    f"수급 {score_result['components']['capital_flow']} + "
+                    f"기술 {score_result['components']['technical']} + "
+                    f"섹터 {score_result['components']['sector_sync']}) → "
+                    f"confidence {claude_conf} → {score_result['confidence']}"
+                )
+            except Exception as e:
+                logger.warning(f"[morning_brief] {tk} 정량 점수화 실패: {e}")
+
     return fixed, warnings
 
 
@@ -581,6 +651,36 @@ def _aggregate_recent_tickers(rows: list[dict], days: int = 5) -> list[dict]:
 
 # ── Claude 호출 ──────────────────────────────────────────────
 
+def _format_auto_regime(auto_regime: dict | None) -> str:
+    """시스템 자동 분류 결과를 Claude 입력용 텍스트로."""
+    if not auto_regime:
+        return "(시스템 자동 분류 실패 — Claude가 단독 판단)"
+    regime = auto_regime.get("regime") or "sideways"
+    ind = auto_regime.get("indicators") or {}
+    rationale = auto_regime.get("rationale") or ""
+    label = _REGIME_LABEL.get(regime, regime)
+    lines = [
+        f"자동 분류 결과: {regime} ({label})",
+        f"근거: {rationale}",
+        "지표 요약:",
+    ]
+    if ind.get("kospi_ma20_dev_pct") is not None:
+        lines.append(f"  - KOSPI 20일선 이격: {ind['kospi_ma20_dev_pct']:+.2f}%")
+    if ind.get("kospi_yesterday_chg") is not None:
+        lines.append(f"  - KOSPI 어제 등락: {ind['kospi_yesterday_chg']:+.2f}%")
+    if ind.get("kospi_std_5d_pct") is not None:
+        lines.append(f"  - KOSPI 5일 표준편차: {ind['kospi_std_5d_pct']:.2f}%")
+    if ind.get("vix"):
+        lines.append(f"  - VIX: {ind['vix']:.2f} ({ind.get('vix_chg', 0):+.2f}pt)")
+    lines.append(f"  - 외인 5일 누적: {ind.get('foreign_5d_eok', 0):+,.0f}억")
+    lines.append(f"  - TOP100 거래대금 5일 대비: {ind.get('volume_ratio', 1.0):.2f}배")
+    lines.append(
+        "📌 최종 market_regime은 시스템 분류값을 우선 사용. "
+        "Claude는 자동 분류와 다른 견해가 있을 때만 macro_view에 사유 명시."
+    )
+    return "\n".join(lines)
+
+
 def _ask_claude(
     *,
     us_snap: dict | None,
@@ -590,6 +690,7 @@ def _ask_claude(
     cumulative: list[dict],
     yesterday_rev: dict | None,
     learnings: list[dict],
+    auto_regime: dict | None = None,
 ) -> dict:
     """Claude(main) 호출 → 브리핑 JSON."""
 
@@ -747,6 +848,9 @@ def _ask_claude(
 ## 활성 누적 학습 (반드시 적용·참조)
 {lr_block}
 
+## 시스템 자동 분류 — 시장 국면 (참고 + 검증용)
+{_format_auto_regime(auto_regime)}
+
 시스템 프롬프트 규칙에 따라 STRICT JSON으로만 응답하세요."""
 
     try:
@@ -814,7 +918,8 @@ def _format_news_section(news: dict | None) -> list[str]:
 
 
 def _build_picks_lines(picks: list, low_reason: str, reason_cut: int = 200,
-                       show_themes: bool = True, show_risk: bool = True) -> list[str]:
+                       show_themes: bool = True, show_risk: bool = True,
+                       show_score_breakdown: bool = True) -> list[str]:
     """추천 종목 섹션 라인 빌더 (재호출 가능 — 동적 컷 조절)."""
     lines: list[str] = [f"⭐ <b>추천 종목 ({len(picks)})</b>"]
     if low_reason:
@@ -837,7 +942,22 @@ def _build_picks_lines(picks: list, low_reason: str, reason_cut: int = 200,
         entry_note = p.get("_entry_note", "")
         entry_corrected = p.get("_entry_corrected", False)
         pick_note = p.get("_note", "")
-        lines.append(f"  <b>{rk}. {nm}({tk})</b>  {stars}")
+        # 정량 점수 표시 (2026-05-18)
+        score = p.get("score")
+        comp = p.get("score_components") or {}
+        score_str = ""
+        if score is not None:
+            if show_score_breakdown and comp:
+                score_str = (
+                    f" <i>{score}점</i> "
+                    f"(거래대금 {comp.get('volume_momentum', 0)} + "
+                    f"수급 {comp.get('capital_flow', 0)} + "
+                    f"기술 {comp.get('technical', 0)} + "
+                    f"섹터 {comp.get('sector_sync', 0)})"
+                )
+            else:
+                score_str = f" <i>{score}점</i>"
+        lines.append(f"  <b>{rk}. {nm}({tk})</b>  {stars}{score_str}")
         if reason and reason_cut > 0:
             lines.append(f"     {reason[:reason_cut]}")
         range_parts = []
@@ -925,6 +1045,25 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
     headline = brief.get("headline") or ""
     if headline:
         header_lines.append(f"💬 <i>{headline}</i>")
+    # 자동 시장 국면 분류 (2026-05-18)
+    auto_regime = brief.get("_auto_regime") or {}
+    if auto_regime:
+        regime_label = _REGIME_LABEL.get(auto_regime.get("regime"), auto_regime.get("regime", ""))
+        ind = auto_regime.get("indicators") or {}
+        kospi_dev = ind.get("kospi_ma20_dev_pct")
+        vix_val = ind.get("vix")
+        foreign_5d = ind.get("foreign_5d_eok")
+        parts = []
+        if kospi_dev is not None:
+            parts.append(f"KOSPI MA20 {kospi_dev:+.2f}%")
+        if vix_val:
+            parts.append(f"VIX {vix_val:.1f}")
+        if foreign_5d is not None:
+            parts.append(f"외인 5일 {foreign_5d:+,.0f}억")
+        ind_str = " · ".join(parts)
+        header_lines.append(
+            f"🔍 <b>시장 국면</b>: {regime_emoji} {regime_label} <i>({ind_str})</i>"
+        )
     header_lines.append("")
 
     # ── 오버나이트 미국 마감 ────────────────────────
@@ -1054,6 +1193,7 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
     show_themes_steps = [True, True, True, False, False]
     show_risk_steps = [True, True, True, False, False]
     sectors_steps = [True, True, True, True, False]
+    show_score_breakdown_steps = [True, True, True, False, False]
 
     last_step = 0
     msg = ""
@@ -1071,6 +1211,7 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
             reason_cut=pick_reason_cut_steps[step],
             show_themes=show_themes_steps[step],
             show_risk=show_risk_steps[step],
+            show_score_breakdown=show_score_breakdown_steps[step],
         ))
         if deep_steps[step]:
             all_lines.extend(deep_analysis_full)
@@ -1224,7 +1365,23 @@ def run_morning_brief() -> dict:
 
     cumulative     = _aggregate_recent_tickers(recent_top, days=5)
     yesterday_rev  = _fetch_yesterday_review()
-    learnings      = _fetch_active_learnings(limit=20)
+
+    # 시장 국면 자동 분류 (2026-05-18) — Claude 입력 + 최종 결과에 우선 적용
+    auto_regime: dict | None = None
+    if _classify_regime is not None:
+        try:
+            auto_regime = _classify_regime()
+            logger.info(
+                f"[morning_brief] 자동 시장 국면 분류: {auto_regime['regime']} — "
+                f"{auto_regime.get('rationale', '')[:200]}"
+            )
+        except Exception as e:
+            logger.warning(f"[morning_brief] 시장 국면 자동 분류 실패: {e}")
+            auto_regime = None
+
+    # regime별 학습 필터 (자동 분류 결과 우선)
+    learnings_regime = auto_regime["regime"] if auto_regime else None
+    learnings = _fetch_active_learnings(limit=20, regime=learnings_regime)
 
     if not us_snap and not market_row and not recent_top:
         msg = (
@@ -1244,6 +1401,7 @@ def run_morning_brief() -> dict:
         cumulative=cumulative,
         yesterday_rev=yesterday_rev,
         learnings=learnings,
+        auto_regime=auto_regime,
     )
 
     if not brief:
@@ -1259,8 +1417,25 @@ def run_morning_brief() -> dict:
         _save_briefing(today, {}, us_snap, market_row, fallback, sent)
         return {"date": today, "picks_count": 0, "avoids_count": 0, "sent": sent}
 
+    # 시스템 자동 분류 우선 — Claude가 다르게 판단해도 정량 결과로 교체.
+    if auto_regime:
+        claude_regime = brief.get("market_regime") or "sideways"
+        sys_regime = auto_regime["regime"]
+        if claude_regime != sys_regime:
+            logger.info(
+                f"[morning_brief] market_regime 교체: "
+                f"Claude={claude_regime} → 시스템={sys_regime} "
+                f"({auto_regime.get('rationale', '')[:120]})"
+            )
+        brief["market_regime"] = sys_regime
+        brief["_auto_regime"] = auto_regime
+
     # 🔴 자기 검증 — picks의 entry가 DB close_price와 일치하는지
     raw_picks = brief.get("picks") or []
+    # 각 pick에 현재 시장 국면 컨텍스트 주입 (score_pick에서 활용)
+    current_regime = brief.get("market_regime") or "sideways"
+    for p in raw_picks:
+        p["_market_regime"] = current_regime
     validated_picks, warnings = _validate_picks(raw_picks, recent_top)
     brief["picks"] = validated_picks
     if warnings:
