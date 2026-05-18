@@ -326,8 +326,19 @@ def _validate_picks(picks: list[dict], recent_top: list[dict]) -> tuple[list[dic
 
         fixed.append(p)
 
-    # 🎯 손절/익절 검증 + ATR 기반 자동 교체
-    # ticker별 최신 atr_pct + close_price 매핑
+    # 🎯 손절/익절 검증 — 종목별 기술적 분석 기반 (2026-05-18)
+    #
+    # 사용자 비판 수용: "대형/중형/소형 단순 분류 X. 종목 데이터 + 보조지표로 판단"
+    # → technical_analysis.analyze_ticker() 결과로 Claude SL/TP를 무조건 교체.
+    #
+    # 일봉 60일 + 지지선/저항선/볼린저/MA20/ATR/피보나치 → 차트 기반 손절/익절.
+    try:
+        from src.teams.research.technical_analysis import analyze_ticker
+    except Exception as e:
+        logger.warning(f"[morning_brief] technical_analysis 임포트 실패 — 기존 폴백 사용: {e}")
+        analyze_ticker = None  # type: ignore[assignment]
+
+    # ticker별 최신 close_price (현재가 참조점)
     latest_meta: dict[str, dict] = {}
     for r in recent_top:
         tk = r.get("ticker")
@@ -338,52 +349,76 @@ def _validate_picks(picks: list[dict], recent_top: list[dict]) -> tuple[list[dic
                 "chg_pct": r.get("chg_pct"),
             }
 
-    # 모든 손절이 같은 값이면 게으른 디폴트 의심 → 강제 다양화
-    sl_values = [p.get("stop_loss_pct") for p in fixed if p.get("stop_loss_pct") is not None]
-    all_same_sl = len(sl_values) >= 2 and len(set(sl_values)) == 1
-
     for p in fixed:
         tk = p.get("ticker")
         meta = latest_meta.get(tk, {})
-        atr = meta.get("atr_pct")
-        close = meta.get("close_price") or 0
-        chg = abs(meta.get("chg_pct") or 0)
+        current_price = p.get("entry") or meta.get("close_price") or 0
+        if not tk or current_price <= 0:
+            continue
 
-        # ATR 기반 권장 산출
-        if atr and atr > 0:
-            rec_sl = max(-4.0, min(-1.5, round(-1.5 * atr, 1)))
-            rec_tp = max(2.5, min(6.0, round(2.5 * atr, 1)))
-        else:
-            # 폴백: 가격대 + 변동성
-            if close >= 100000:           # 대형주
-                rec_sl, rec_tp = -1.8, 2.8
-            elif close >= 30000:           # 중형주
-                rec_sl, rec_tp = -2.3, 3.5
-            else:                          # 소형주
-                rec_sl, rec_tp = -3.0, 4.5
-            # 어제 변동 큰 종목 보정
-            if chg >= 5:
-                rec_sl, rec_tp = rec_sl - 0.5, rec_tp + 1.0
-
-        # Claude 응답값 vs 권장값
         claude_sl = p.get("stop_loss_pct")
         claude_tp = p.get("take_profit_pct")
 
-        # 게으른 디폴트(전 종목 같은 값)면 무조건 권장값으로 교체
-        if all_same_sl:
-            p["stop_loss_pct"] = rec_sl
-            p["take_profit_pct"] = rec_tp
+        ta_result = None
+        if analyze_ticker is not None:
+            try:
+                ta_result = analyze_ticker(tk, float(current_price))
+            except Exception as e:
+                logger.warning(f"[morning_brief] {tk} 기술적 분석 실패: {e}")
+
+        if ta_result:
+            ta_sl = ta_result["stop_loss"]
+            ta_tp = ta_result["take_profit"]
+            rr = ta_result.get("risk_reward_ratio", 0)
+
+            # Claude SL/TP → 기술적 분석 결과로 무조건 교체
+            p["stop_loss_pct"] = ta_sl["pct"]
+            p["take_profit_pct"] = ta_tp["pct"]
+            p["stop_loss_price"] = int(ta_sl["price"])
+            p["take_profit_price"] = int(ta_tp["price"])
+            p["stop_loss_basis"] = ta_sl["basis"]
+            p["take_profit_basis"] = ta_tp["basis"]
+            p["risk_reward_ratio"] = rr
             p["_sl_tp_corrected"] = True
+            p["_ta_meta"] = {
+                "atr_pct":      ta_result["atr_pct"],
+                "rsi_14":       ta_result["rsi_14"],
+                "ma20":         ta_result["ma"]["ma20"],
+                "bb_upper":     ta_result["bollinger"]["upper"],
+                "bb_lower":     ta_result["bollinger"]["lower"],
+                "n_supports":   len(ta_result["support_levels"]),
+                "n_resistances": len(ta_result["resistance_levels"]),
+            }
             warnings.append(
-                f"{p.get('name', tk)}({tk}): 손절/익절 게으른 디폴트({claude_sl}/{claude_tp}) "
-                f"→ ATR 기반 {rec_sl}/{rec_tp}로 교체"
+                f"{p.get('name', tk)}({tk}): Claude SL/TP({claude_sl}/{claude_tp}) → "
+                f"차트 기반 {ta_sl['pct']:+.2f}%/{ta_tp['pct']:+.2f}% "
+                f"(R:R 1:{rr}) — {ta_sl['basis']} | {ta_tp['basis']}"
             )
         else:
-            # Claude 값 유지하되 극단치 보정
-            if claude_sl is not None and abs(claude_sl) < 1.0:
-                p["stop_loss_pct"] = rec_sl  # 너무 좁은 손절 X
-            if claude_tp is not None and claude_tp < 2.0:
-                p["take_profit_pct"] = rec_tp  # 너무 좁은 익절 X
+            # 기술적 분석 실패 → 기존 ATR 폴백 유지
+            atr = meta.get("atr_pct")
+            close = meta.get("close_price") or current_price
+            chg = abs(meta.get("chg_pct") or 0)
+            if atr and atr > 0:
+                rec_sl = max(-4.0, min(-1.5, round(-1.5 * atr, 1)))
+                rec_tp = max(2.5, min(6.0, round(2.5 * atr, 1)))
+            else:
+                if close >= 100000:
+                    rec_sl, rec_tp = -1.8, 2.8
+                elif close >= 30000:
+                    rec_sl, rec_tp = -2.3, 3.5
+                else:
+                    rec_sl, rec_tp = -3.0, 4.5
+                if chg >= 5:
+                    rec_sl, rec_tp = rec_sl - 0.5, rec_tp + 1.0
+            p["stop_loss_pct"] = rec_sl
+            p["take_profit_pct"] = rec_tp
+            p["stop_loss_basis"] = f"ATR 폴백 (TA 분석 불가)"
+            p["take_profit_basis"] = f"ATR 폴백 (TA 분석 불가)"
+            p["_sl_tp_corrected"] = True
+            warnings.append(
+                f"{p.get('name', tk)}({tk}): TA 분석 실패 → ATR 폴백 {rec_sl}/{rec_tp}"
+            )
 
     return fixed, warnings
 
@@ -815,12 +850,28 @@ def _build_picks_lines(picks: list, low_reason: str, reason_cut: int = 200,
             range_parts.append(entry_str)
         elif pick_note:
             range_parts.append(f"진입 {pick_note}")
+        sl_price = p.get("stop_loss_price")
+        tp_price = p.get("take_profit_price")
+        sl_basis = p.get("stop_loss_basis") or ""
+        tp_basis = p.get("take_profit_basis") or ""
+        rr = p.get("risk_reward_ratio")
         if sl is not None:
-            range_parts.append(f"손절 {sl:+.1f}%")
+            if sl_price:
+                range_parts.append(f"손절 {sl:+.1f}% ({int(sl_price):,}원)")
+            else:
+                range_parts.append(f"손절 {sl:+.1f}%")
         if tp is not None:
-            range_parts.append(f"익절 {tp:+.1f}%")
+            if tp_price:
+                range_parts.append(f"익절 {tp:+.1f}% ({int(tp_price):,}원)")
+            else:
+                range_parts.append(f"익절 {tp:+.1f}%")
+        if rr:
+            range_parts.append(f"R:R 1:{rr}")
         if range_parts:
             lines.append(f"     {' · '.join(range_parts)}")
+        # 산출 근거 — 차트 기반 손절/익절일 때만 표시 (라인 절약)
+        if sl_basis and tp_basis and reason_cut > 0:
+            lines.append(f"     <i>근거: SL={sl_basis} | TP={tp_basis}</i>")
         if show_themes and themes:
             lines.append(f"     테마: {', '.join(themes[:4])}")
         if show_risk and risk:
