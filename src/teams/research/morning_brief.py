@@ -695,9 +695,81 @@ def _format_news_section(news: dict | None) -> list[str]:
     return lines
 
 
+def _build_picks_lines(picks: list, low_reason: str, reason_cut: int = 200,
+                       show_themes: bool = True, show_risk: bool = True) -> list[str]:
+    """추천 종목 섹션 라인 빌더 (재호출 가능 — 동적 컷 조절)."""
+    lines: list[str] = [f"⭐ <b>추천 종목 ({len(picks)})</b>"]
+    if low_reason:
+        lines.append(low_reason)
+    if not picks:
+        lines.append("")
+        return lines
+    for p in picks[:_MAX_PICKS]:
+        rk = p.get("rank") or "?"
+        tk = p.get("ticker") or ""
+        nm = p.get("name") or tk
+        conf = p.get("confidence") or 0
+        stars = "★" * int(conf) + "☆" * (5 - int(conf))
+        entry = p.get("entry")
+        sl = p.get("stop_loss_pct")
+        tp = p.get("take_profit_pct")
+        themes = p.get("themes") or []
+        risk = p.get("risk") or ""
+        reason = (p.get("reason") or "").replace("\n", " ")
+        entry_note = p.get("_entry_note", "")
+        entry_corrected = p.get("_entry_corrected", False)
+        pick_note = p.get("_note", "")
+        lines.append(f"  <b>{rk}. {nm}({tk})</b>  {stars}")
+        if reason and reason_cut > 0:
+            lines.append(f"     {reason[:reason_cut]}")
+        range_parts = []
+        if entry:
+            entry_str = f"진입 {int(entry):,}원"
+            if entry_corrected:
+                entry_str += " ⚠️DB교체"
+            elif entry_note:
+                entry_str += f" {entry_note}"
+            range_parts.append(entry_str)
+        elif pick_note:
+            range_parts.append(f"진입 {pick_note}")
+        if sl is not None:
+            range_parts.append(f"손절 {sl:+.1f}%")
+        if tp is not None:
+            range_parts.append(f"익절 {tp:+.1f}%")
+        if range_parts:
+            lines.append(f"     {' · '.join(range_parts)}")
+        if show_themes and themes:
+            lines.append(f"     테마: {', '.join(themes[:4])}")
+        if show_risk and risk:
+            lines.append(f"     ⚠️ {risk[:120]}")
+    lines.append("")
+    return lines
+
+
+def _build_avoids_lines(avoids: list, reason_cut: int = 120) -> list[str]:
+    lines: list[str] = [f"🚫 <b>회피 종목 ({len(avoids)})</b>"]
+    for a in avoids[:_MAX_AVOIDS]:
+        tk = a.get("ticker") or ""
+        nm = a.get("name") or tk
+        reason = (a.get("reason") or "").replace("\n", " ")
+        if reason_cut > 0:
+            lines.append(f"  • {nm}({tk}) — {reason[:reason_cut]}")
+        else:
+            lines.append(f"  • {nm}({tk})")
+    lines.append("")
+    return lines
+
+
 def _format_message(today: str, brief: dict, us_snap: dict | None,
                     news: dict | None = None) -> str:
-    """텔레그램 HTML 메시지 작성 (4096자 이내)."""
+    """텔레그램 HTML 메시지 작성 (4096자 이내).
+
+    섹션을 우선순위별로 빌드하고, 한도 초과 시 우선순위 낮은 섹션을
+    축약/제거하는 적응형 길이 조절을 수행한다.
+
+    우선순위(높음→낮음): header > overnight > picks > macro > strategy/lessons
+                       > sectors > avoids > news > deep_analysis
+    """
     regime_emoji = {
         "strong":   "📈",
         "sideways": "↔️",
@@ -706,8 +778,8 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
         "volatile": "🌪",
     }.get(brief.get("market_regime", "sideways"), "")
 
-    lines: list[str] = []
-    # 헤더에 요일 포함 (today가 'YYYY-MM-DD' 형식이면 요일 추가)
+    # ── 헤더 ────────────────────────────────────────
+    header_lines: list[str] = []
     header_today = today
     try:
         if len(today) == 10 and today[4] == '-':
@@ -715,29 +787,29 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
             header_today = f"{today} ({_WEEKDAY_KR[t_obj.weekday()]})"
     except Exception:
         pass
-    lines.append(f"🌅 <b>아침 시황 브리핑 — {header_today}</b>")
+    header_lines.append(f"🌅 <b>아침 시황 브리핑 — {header_today}</b>")
     headline = brief.get("headline") or ""
     if headline:
-        lines.append(f"💬 <i>{headline}</i>")
-    lines.append("")
+        header_lines.append(f"💬 <i>{headline}</i>")
+    header_lines.append("")
 
-    # 오버나이트
+    # ── 오버나이트 미국 마감 ────────────────────────
+    overnight_lines: list[str] = []
     if us_snap:
-        lines.append("🌃 <b>오버나이트 미국 마감</b>")
-        lines.append(
+        overnight_lines.append("🌃 <b>오버나이트 미국 마감</b>")
+        overnight_lines.append(
             f"  S&amp;P500 <b>{us_snap.get('sp500_chg_pct', 0):+.2f}%</b> | "
             f"NASDAQ <b>{us_snap.get('nasdaq_chg_pct', 0):+.2f}%</b> | "
             f"Dow {us_snap.get('dow_chg_pct', 0):+.2f}%"
         )
-        lines.append(
+        overnight_lines.append(
             f"  VIX {us_snap.get('vix', 0):.1f} ({us_snap.get('vix_chg', 0):+.1f}pt) | "
             f"US10Y {us_snap.get('us10y_yield', 0):.2f}%"
         )
-        lines.append(
+        overnight_lines.append(
             f"  SOXX {us_snap.get('soxx_chg_pct', 0):+.2f}% | "
             f"LIT {us_snap.get('lit_chg_pct', 0):+.2f}%"
         )
-        # 주요 종목 5개 (한글)
         try:
             ks = json.loads(us_snap.get("key_stocks") or "{}")
         except Exception:
@@ -749,29 +821,53 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
                 for k, v in top5 if isinstance(v, dict)
             )
             if ks_line:
-                lines.append(f"  {ks_line}")
-        lines.append("")
+                overnight_lines.append(f"  {ks_line}")
+        overnight_lines.append("")
 
-    # 매크로/시장 시각
+    # ── 매크로 시각 (시황) ──────────────────────────
     macro_view = brief.get("macro_view") or ""
-    if macro_view:
-        lines.append(f"{regime_emoji} <b>시황 분석</b>")
-        # 텔레그램 4096자 한도 — 시황은 600자로 컷
-        lines.append(f"  {macro_view[:600]}")
-        lines.append("")
+    def _build_macro(cut: int) -> list[str]:
+        if not macro_view:
+            return []
+        return [
+            f"{regime_emoji} <b>시황 분석</b>",
+            f"  {macro_view[:cut]}",
+            "",
+        ]
 
-    # 주요 뉴스 (4분류)
-    news_lines = _format_news_section(news)
-    if news_lines:
-        lines.extend(news_lines)
+    # ── 주요 뉴스 (4분류) ───────────────────────────
+    news_full = _format_news_section(news)
 
-    # 섹터 4분류
+    def _build_news(max_per_cat: int) -> list[str]:
+        """뉴스 라인을 카테고리당 max_per_cat개로 제한."""
+        if not news_full or max_per_cat <= 0 or not news:
+            return []
+        out: list[str] = ["📰 <b>주요 뉴스</b>"]
+        for cat, label in _NEWS_CAT_META:
+            items = news.get(cat) or []
+            if not items:
+                continue
+            out.append(f"  {label}")
+            for n in items[:max_per_cat]:
+                imp = int(n.get("importance") or 3)
+                stars = "★" * imp
+                headline_n = (n.get("headline") or "").replace("\n", " ").strip()
+                if not headline_n:
+                    continue
+                if len(headline_n) > 90:
+                    headline_n = headline_n[:87] + "…"
+                out.append(f"    {stars} {headline_n}")
+        out.append("")
+        return out
+
+    # ── 섹터 4분류 ─────────────────────────────────
     sectors = brief.get("sectors") or {}
     sect_keys = [("hot", "🔥 HOT"), ("watch", "👀 WATCH"),
                  ("cold", "❄️ COLD"), ("avoid", "🚫 AVOID")]
     has_sectors = any(sectors.get(k) for k, _ in sect_keys)
+    sectors_lines: list[str] = []
     if has_sectors:
-        lines.append("📊 <b>섹터 분류</b>")
+        sectors_lines.append("📊 <b>섹터 분류</b>")
         for k, label in sect_keys:
             items = sectors.get(k) or []
             if not items:
@@ -779,106 +875,102 @@ def _format_message(today: str, brief: dict, us_snap: dict | None,
             names = " · ".join(
                 f"{(s.get('sector') or '-')}" for s in items[:5]
             )
-            lines.append(f"  {label}: {names}")
-        lines.append("")
+            sectors_lines.append(f"  {label}: {names}")
+        sectors_lines.append("")
 
-    # 추천 종목 5개 (디테일)
+    # ── 추천 종목 (디테일) ─────────────────────────
     picks = brief.get("picks") or []
-    lines.append(f"⭐ <b>추천 종목 ({len(picks)})</b>")
-    # picks ≤2면 사유 표시
     low_reason = brief.get("_low_picks_reason", "")
-    if low_reason:
-        lines.append(low_reason)
-    if picks:
-        for p in picks[:_MAX_PICKS]:
-            rk = p.get("rank") or "?"
-            tk = p.get("ticker") or ""
-            nm = p.get("name") or tk
-            conf = p.get("confidence") or 0
-            stars = "★" * int(conf) + "☆" * (5 - int(conf))
-            entry = p.get("entry")
-            sl = p.get("stop_loss_pct")
-            tp = p.get("take_profit_pct")
-            themes = p.get("themes") or []
-            risk = p.get("risk") or ""
-            reason = (p.get("reason") or "").replace("\n", " ")
-            entry_note = p.get("_entry_note", "")
-            entry_corrected = p.get("_entry_corrected", False)
-            pick_note = p.get("_note", "")
-            lines.append(f"  <b>{rk}. {nm}({tk})</b>  {stars}")
-            if reason:
-                lines.append(f"     {reason[:200]}")
-            range_parts = []
-            if entry:
-                entry_str = f"진입 {int(entry):,}원"
-                if entry_corrected:
-                    entry_str += " ⚠️DB교체"
-                elif entry_note:
-                    entry_str += f" {entry_note}"
-                range_parts.append(entry_str)
-            elif pick_note:
-                range_parts.append(f"진입 {pick_note}")
-            if sl is not None:
-                range_parts.append(f"손절 {sl:+.1f}%")
-            if tp is not None:
-                range_parts.append(f"익절 {tp:+.1f}%")
-            if range_parts:
-                lines.append(f"     {' · '.join(range_parts)}")
-            if themes:
-                lines.append(f"     테마: {', '.join(themes[:4])}")
-            if risk:
-                lines.append(f"     ⚠️ {risk[:120]}")
-        lines.append("")
 
-    # 종목 심층 분석 (옵션 Q Phase 1)
+    # ── 종목 심층 분석 ─────────────────────────────
+    deep_analysis_full: list[str] = []
     if _format_deep_analysis_lines is not None:
         try:
-            deep_lines = _format_deep_analysis_lines(picks)
-            if deep_lines:
-                lines.extend(deep_lines)
+            d = _format_deep_analysis_lines(picks)
+            if d:
+                deep_analysis_full = list(d)
         except Exception as _e:
             logger.warning(f"[morning_brief] deep_analysis 메시지 포매팅 실패: {_e}")
 
-    # 회피 종목 5개
+    # ── 회피 종목 ──────────────────────────────────
     avoids = brief.get("avoids") or []
-    if avoids:
-        lines.append(f"🚫 <b>회피 종목 ({len(avoids)})</b>")
-        for a in avoids[:_MAX_AVOIDS]:
-            tk = a.get("ticker") or ""
-            nm = a.get("name") or tk
-            reason = (a.get("reason") or "").replace("\n", " ")
-            lines.append(f"  • {nm}({tk}) — {reason[:120]}")
-        lines.append("")
 
-    # 누적 학습 적용
+    # ── 누적 학습 / 전략 톤 ───────────────────────
     applied = brief.get("lessons_applied") or []
-    if applied:
-        lines.append(f"📚 적용 학습: {', '.join('#' + str(i) for i in applied[:10])}")
-
-    # 전략 톤
     tone = brief.get("strategy_tone") or ""
+    footer_lines: list[str] = []
+    if applied:
+        footer_lines.append(
+            f"📚 적용 학습: {', '.join('#' + str(i) for i in applied[:10])}"
+        )
     if tone:
-        lines.append(f"🎯 전략 톤: <b>{tone}</b>")
+        footer_lines.append(f"🎯 전략 톤: <b>{tone}</b>")
 
-    # 데이터 출처 범례 — 한 줄 컴팩트 (2026-05-14 압축). truncate 시에도 보존.
     legend = "\n\n📌 <i>데이터 KIS·yfinance·네이버 / 분석 Claude (추정 X)</i>"
-
-    # 컷 — 한글 후처리 (Claude가 영어 단어 남긴 경우 자동 치환)
-    msg = "\n".join(lines)
-    msg = _kr_postprocess(msg)
-    # legend는 항상 끝에 부착. 한도 초과 시 본문을 잘라 legend 공간 확보.
     body_limit = _TELEGRAM_LIMIT - len(legend) - 20
-    orig_len = len(msg)
-    if orig_len > body_limit:
+
+    # ── 적응형 조립 ─────────────────────────────────
+    # 동적 컷 단계 (Step 0 = 풍부, Step N = 최소).
+    # 우선순위 낮은 순으로 축약: news → deep_analysis → avoids → sectors → picks(테마/리스크) → macro
+    pick_reason_cut_steps = [200, 160, 120, 80, 60]
+    avoid_reason_cut_steps = [120, 80, 60, 0, 0]
+    news_per_cat_steps = [99, 3, 2, 1, 0]
+    macro_cut_steps = [600, 500, 400, 300, 200]
+    deep_steps = [True, True, False, False, False]
+    show_themes_steps = [True, True, True, False, False]
+    show_risk_steps = [True, True, True, False, False]
+    sectors_steps = [True, True, True, True, False]
+
+    last_step = 0
+    msg = ""
+    for step in range(len(pick_reason_cut_steps)):
+        last_step = step
+        all_lines: list[str] = []
+        all_lines.extend(header_lines)
+        all_lines.extend(overnight_lines)
+        all_lines.extend(_build_macro(macro_cut_steps[step]))
+        all_lines.extend(_build_news(news_per_cat_steps[step]))
+        if sectors_steps[step]:
+            all_lines.extend(sectors_lines)
+        all_lines.extend(_build_picks_lines(
+            picks, low_reason,
+            reason_cut=pick_reason_cut_steps[step],
+            show_themes=show_themes_steps[step],
+            show_risk=show_risk_steps[step],
+        ))
+        if deep_steps[step]:
+            all_lines.extend(deep_analysis_full)
+        if avoids:
+            all_lines.extend(_build_avoids_lines(
+                avoids, reason_cut=avoid_reason_cut_steps[step]
+            ))
+        all_lines.extend(footer_lines)
+
+        candidate = "\n".join(all_lines)
+        candidate = _kr_postprocess(candidate)
+        if len(candidate) <= body_limit:
+            msg = candidate
+            if step > 0:
+                logger.info(
+                    f"[morning_brief] 메시지 길이 자동 조절 — step {step} 적용 "
+                    f"({len(candidate)}/{body_limit}자)"
+                )
+            elif len(candidate) > body_limit - 200:
+                logger.info(
+                    f"[morning_brief] 메시지 길이 {len(candidate)}/{body_limit}자 (한도 근접)"
+                )
+            break
+        msg = candidate  # 마지막 시도 결과 보존 (fallback)
+
+    # 마지막 단계까지 가도 초과면 hard truncate (legend 보존)
+    if len(msg) > body_limit:
+        orig_len = len(msg)
         msg = msg[:body_limit] + "\n...[중략]"
         logger.warning(
-            f"[morning_brief] 메시지 truncate — 본문 {orig_len}자 > 한도 {body_limit}자"
+            f"[morning_brief] 메시지 hard truncate — step {last_step}에서도 본문 "
+            f"{orig_len}자 > 한도 {body_limit}자 (예외적 케이스)"
         )
-    elif orig_len > body_limit - 200:
-        # 한도 근접 (200자 이내) — 모니터링 로그
-        logger.info(
-            f"[morning_brief] 메시지 길이 {orig_len}/{body_limit}자 (한도 근접)"
-        )
+
     msg += legend
     return msg
 
